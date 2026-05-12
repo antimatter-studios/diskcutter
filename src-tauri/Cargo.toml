@@ -25,7 +25,12 @@ libc = "0.2"
 rusqlite = { version = "0.32", features = ["bundled"] }
 flate2 = "1"
 xz2 = "0.1"
+bzip2 = "0.6"
+zstd = "0.13"
 am-img-qcow2 = "0.2"
+am-img-vhd = "0.2"
+am-img-vhdx = "0.2"
+am-img-vmdk = "0.2"
 am-fs-core = "0.2"
 
 [dev-dependencies]
