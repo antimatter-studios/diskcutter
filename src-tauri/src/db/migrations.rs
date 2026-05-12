@@ -146,7 +146,11 @@ mod tests {
                 i + 1
             );
             assert!(!m.name.is_empty(), "migration {} has empty name", m.version);
-            assert!(!m.sql.trim().is_empty(), "migration {} has empty sql", m.version);
+            assert!(
+                !m.sql.trim().is_empty(),
+                "migration {} has empty sql",
+                m.version
+            );
         }
     }
 
@@ -159,22 +163,18 @@ mod tests {
         run(&mut conn).expect("migrations apply cleanly");
 
         let applied: u32 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM schema_migrations",
-                [],
-                |r| r.get::<_, i64>(0).map(|v| v as u32),
-            )
+            .query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| {
+                r.get::<_, i64>(0).map(|v| v as u32)
+            })
             .unwrap();
         assert_eq!(applied as usize, MIGRATIONS.len());
 
         // Re-running is a no-op.
         run(&mut conn).expect("re-run is idempotent");
         let applied2: u32 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM schema_migrations",
-                [],
-                |r| r.get::<_, i64>(0).map(|v| v as u32),
-            )
+            .query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| {
+                r.get::<_, i64>(0).map(|v| v as u32)
+            })
             .unwrap();
         assert_eq!(applied2, applied);
     }

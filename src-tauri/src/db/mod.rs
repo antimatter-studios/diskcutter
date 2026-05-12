@@ -106,6 +106,7 @@ pub fn record_burn_started(
     Some(id)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn record_burn_completed(
     db: &Db,
     job_id: &str,
@@ -189,6 +190,7 @@ pub fn record_burn_failed(db: &Db, job_id: &str, code: &str, message: &str) {
     );
 }
 
+#[allow(dead_code)]
 pub fn append_log(db: &Db, job_id: &str, level: &str, message: &str) {
     let conn = match db.0.lock() {
         Ok(c) => c,
@@ -205,11 +207,9 @@ pub fn append_log(db: &Db, job_id: &str, level: &str, message: &str) {
 #[tauri::command]
 pub fn config_get(db: State<'_, Db>, key: String) -> Option<String> {
     let conn = db.0.lock().ok()?;
-    conn.query_row(
-        "SELECT value FROM config WHERE key=?1",
-        params![key],
-        |r| r.get::<_, String>(0),
-    )
+    conn.query_row("SELECT value FROM config WHERE key=?1", params![key], |r| {
+        r.get::<_, String>(0)
+    })
     .ok()
 }
 
@@ -241,10 +241,7 @@ pub fn config_all(db: State<'_, Db>) -> HashMap<String, String> {
 }
 
 #[tauri::command]
-pub fn burn_history_list(
-    db: State<'_, Db>,
-    limit: Option<u32>,
-) -> Result<Vec<BurnRecord>, String> {
+pub fn burn_history_list(db: State<'_, Db>, limit: Option<u32>) -> Result<Vec<BurnRecord>, String> {
     let conn = db.0.lock().map_err(|e| e.to_string())?;
     let lim = limit.unwrap_or(200) as i64;
     let mut stmt = conn
