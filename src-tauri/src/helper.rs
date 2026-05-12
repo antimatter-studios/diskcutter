@@ -8,7 +8,7 @@ use serde::Serialize;
 use crate::pipeline::{self, VerifyMismatch};
 use crate::readers::ImageReaderRegistry;
 #[cfg(unix)]
-use crate::writers::RawDeviceIo;
+use crate::writers::{BlockDeviceIo, PipelinedRawDeviceIo, RawDeviceIo};
 use crate::writers::{DeviceIo, PlainFileDeviceIo};
 
 #[derive(Serialize)]
@@ -49,6 +49,26 @@ pub fn run_helper(args: &[String]) -> i32 {
         Some(v) => v,
         None => return 2,
     };
+    // Writer choice priority: --writer= CLI arg → DISKCUTTER_WRITER env → None (helper default).
+    let writer_choice = arg_value(args, "--writer=")
+        .or_else(|| std::env::var("DISKCUTTER_WRITER").ok())
+        .filter(|s| !s.is_empty());
+
+    // Runtime-tunable perf knobs. Each falls back to a built-in default when
+    // absent or invalid so older callers keep working.
+    let chunk_size: usize = arg_value(args, "--chunk-bytes=")
+        .and_then(|v| v.parse::<u64>().ok())
+        .map(|v| v as usize)
+        .unwrap_or(pipeline::DEFAULT_CHUNK);
+    let workers: usize = arg_value(args, "--workers=")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(4);
+    let queue_depth: usize = arg_value(args, "--queue-depth=")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(15);
+    let skip_verify: bool = arg_value(args, "--skip-verify=")
+        .map(|v| v == "true")
+        .unwrap_or(false);
 
     let file = match File::create(&progress_path) {
         Ok(f) => f,
@@ -87,7 +107,8 @@ pub fn run_helper(args: &[String]) -> i32 {
         }
     };
 
-    let device_io: Box<dyn DeviceIo> = pick_device_io(&target);
+    let device_io: Box<dyn DeviceIo> =
+        pick_device_io(&target, writer_choice.as_deref(), workers, queue_depth);
 
     // Claim the disk through DiskArbitration. This (a) unmounts via DADiskUnmount
     // from our own session, atomic with (b) installing a mount-approval callback
@@ -113,7 +134,9 @@ pub fn run_helper(args: &[String]) -> i32 {
     let dev_writer = match device_io.open_write(Path::new(&target)) {
         Ok(w) => w,
         Err(e) => {
-            let code = if e.raw_os_error() == Some(1) || e.kind() == std::io::ErrorKind::PermissionDenied {
+            let code = if e.raw_os_error() == Some(1)
+                || e.kind() == std::io::ErrorKind::PermissionDenied
+            {
                 "ENEEDS_FDA"
             } else {
                 "ETARGET"
@@ -127,7 +150,7 @@ pub fn run_helper(args: &[String]) -> i32 {
     };
 
     let cancel = AtomicBool::new(false);
-    let burn = match pipeline::burn(&mut *reader, dev_writer, &cancel, |p| {
+    let burn = match pipeline::burn(&mut *reader, dev_writer, chunk_size, &cancel, |p| {
         emit(&HelperMessage::Progress {
             state: "writing".into(),
             bytes_done: p.bytes_done,
@@ -145,6 +168,23 @@ pub fn run_helper(args: &[String]) -> i32 {
         }
     };
 
+    // If the caller asked us to skip verify entirely, finalise here using the
+    // burn-side hash for both source and readback (verified is a no-op).
+    if skip_verify {
+        let elapsed_ms = burn.elapsed.as_millis() as u64;
+        emit(&HelperMessage::Complete {
+            bytes_written: burn.bytes_written,
+            source_sha256: burn.source_sha256.clone(),
+            readback_sha256: burn.source_sha256,
+            verify_match: true,
+            mismatches: vec![],
+            elapsed_ms,
+            avg_write_bps: burn.avg_bytes_per_sec,
+            avg_verify_bps: 0,
+        });
+        return 0;
+    }
+
     let mut dev_reader = match device_io.open_read(Path::new(&target)) {
         Ok(r) => r,
         Err(e) => {
@@ -156,14 +196,20 @@ pub fn run_helper(args: &[String]) -> i32 {
         }
     };
 
-    let fast = match pipeline::verify_hash_only(&mut *dev_reader, burn.bytes_written, &cancel, |p| {
-        emit(&HelperMessage::Progress {
-            state: "verifying".into(),
-            bytes_done: p.bytes_done,
-            bytes_total: p.bytes_total,
-            bytes_per_sec: p.bytes_per_sec,
-        });
-    }) {
+    let fast = match pipeline::verify_hash_only(
+        &mut *dev_reader,
+        burn.bytes_written,
+        chunk_size,
+        &cancel,
+        |p| {
+            emit(&HelperMessage::Progress {
+                state: "verifying".into(),
+                bytes_done: p.bytes_done,
+                bytes_total: p.bytes_total,
+                bytes_per_sec: p.bytes_per_sec,
+            });
+        },
+    ) {
         Ok(v) => v,
         Err(e) => {
             emit(&HelperMessage::Error {
@@ -213,23 +259,24 @@ pub fn run_helper(args: &[String]) -> i32 {
         }
     };
 
-    let verify = match pipeline::verify(&mut *reader2, &mut *dev_reader2, &cancel, |p| {
-        emit(&HelperMessage::Progress {
-            state: "verifying".into(),
-            bytes_done: p.bytes_done,
-            bytes_total: p.bytes_total,
-            bytes_per_sec: p.bytes_per_sec,
-        });
-    }) {
-        Ok(v) => v,
-        Err(e) => {
-            emit(&HelperMessage::Error {
-                error_code: "EIO".into(),
-                error_message: format!("{e:?}"),
+    let verify =
+        match pipeline::verify(&mut *reader2, &mut *dev_reader2, chunk_size, &cancel, |p| {
+            emit(&HelperMessage::Progress {
+                state: "verifying".into(),
+                bytes_done: p.bytes_done,
+                bytes_total: p.bytes_total,
+                bytes_per_sec: p.bytes_per_sec,
             });
-            return 1;
-        }
-    };
+        }) {
+            Ok(v) => v,
+            Err(e) => {
+                emit(&HelperMessage::Error {
+                    error_code: "EIO".into(),
+                    error_message: format!("{e:?}"),
+                });
+                return 1;
+            }
+        };
 
     let elapsed_ms =
         (burn.elapsed.as_millis() + fast.elapsed.as_millis() + verify.elapsed.as_millis()) as u64;
@@ -247,14 +294,43 @@ pub fn run_helper(args: &[String]) -> i32 {
     0
 }
 
-fn pick_device_io(target: &str) -> Box<dyn DeviceIo> {
-    if target.starts_with("/dev/") {
-        #[cfg(unix)]
-        {
-            return Box::new(RawDeviceIo);
+/// Pick the writer impl for the given target. Multiple impls live alongside
+/// each other (see `writers/`) so we can experiment by swapping which one is
+/// active here — no rewriting of working code. Choice is driven by the
+/// caller (typically the helper subprocess); `writer_choice` should already
+/// reflect the resolved priority order (CLI `--writer=` > env var > None).
+///
+///   "raw"        → /dev/rdiskN (char, plain write_all)
+///   "block"      → /dev/diskN  (buffered block)
+///   "pipelined"  → /dev/rdiskN (Etcher-style worker pool, default for /dev/)
+///   "plain"      → PlainFileDeviceIo (only auto-selected when not /dev/)
+fn pick_device_io(
+    target: &str,
+    writer_choice: Option<&str>,
+    workers: usize,
+    queue_depth: usize,
+) -> Box<dyn DeviceIo> {
+    if !target.starts_with("/dev/") {
+        let _ = (workers, queue_depth);
+        return Box::new(PlainFileDeviceIo);
+    }
+    #[cfg(unix)]
+    {
+        match writer_choice {
+            Some("raw") => Box::new(RawDeviceIo),
+            Some("block") => Box::new(BlockDeviceIo),
+            Some("pipelined") | None => Box::new(PipelinedRawDeviceIo::new(workers, queue_depth)),
+            Some(other) => {
+                eprintln!("unknown writer choice {other:?}, falling back to pipelined");
+                Box::new(PipelinedRawDeviceIo::new(workers, queue_depth))
+            }
         }
     }
-    Box::new(PlainFileDeviceIo)
+    #[cfg(not(unix))]
+    {
+        let _ = (writer_choice, workers, queue_depth);
+        Box::new(PlainFileDeviceIo)
+    }
 }
 
 fn arg_value(args: &[String], prefix: &str) -> Option<String> {
@@ -290,18 +366,43 @@ mod tests {
     }
 
     #[test]
-    fn pick_device_io_for_dev_path_is_raw_on_unix() {
-        let io = pick_device_io("/dev/disk5");
-        // helper always picks raw for /dev/ on unix; falls back to plain elsewhere.
+    fn pick_device_io_for_dev_path_is_pipelined_on_unix() {
+        // Default for /dev/ targets is the pipelined raw writer.
+        let io = pick_device_io("/dev/disk5", None, 4, 15);
         #[cfg(unix)]
-        assert_eq!(io.name(), "raw-device");
+        assert_eq!(io.name(), "raw-pipelined");
         #[cfg(not(unix))]
         assert_eq!(io.name(), "plain-file");
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn pick_device_io_honours_explicit_writer_choice() {
+        assert_eq!(
+            pick_device_io("/dev/disk5", Some("raw"), 4, 15).name(),
+            "raw-device"
+        );
+        assert_eq!(
+            pick_device_io("/dev/disk5", Some("block"), 4, 15).name(),
+            "block-device"
+        );
+        assert_eq!(
+            pick_device_io("/dev/disk5", Some("pipelined"), 4, 15).name(),
+            "raw-pipelined"
+        );
+        // Unknown values fall back to the pipelined default.
+        assert_eq!(
+            pick_device_io("/dev/disk5", Some("bogus"), 4, 15).name(),
+            "raw-pipelined"
+        );
+    }
+
     #[test]
     fn pick_device_io_for_file_path_is_plain() {
-        let io = pick_device_io("/tmp/foo.img");
+        // File paths always use the plain writer regardless of writer choice.
+        let io = pick_device_io("/tmp/foo.img", None, 4, 15);
+        assert_eq!(io.name(), "plain-file");
+        let io = pick_device_io("/tmp/foo.img", Some("pipelined"), 4, 15);
         assert_eq!(io.name(), "plain-file");
     }
 

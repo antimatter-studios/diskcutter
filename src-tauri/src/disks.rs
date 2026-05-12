@@ -111,6 +111,79 @@ pub fn app_info() -> AppInfo {
     }
 }
 
+/// Find disk-cutter helper subprocesses still running from a previous session.
+/// These can hold devices open (esp. /dev/diskN) and block new burns. Returns
+/// the PIDs so the frontend can offer to clean them up.
+#[tauri::command]
+pub fn find_orphan_helpers() -> Vec<u32> {
+    let me = std::process::id();
+    let out = match std::process::Command::new("ps")
+        .args(["-A", "-o", "pid=,user=,command="])
+        .output()
+    {
+        Ok(o) => o,
+        Err(_) => return Vec::new(),
+    };
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let mut found = Vec::new();
+    for line in stdout.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if !line.contains("disk-cutter") || !line.contains("--helper-burn") {
+            continue;
+        }
+        let mut parts = line.split_whitespace();
+        let pid: u32 = match parts.next().and_then(|p| p.parse().ok()) {
+            Some(p) => p,
+            None => continue,
+        };
+        if pid == me {
+            continue;
+        }
+        let user = match parts.next() {
+            Some(u) => u,
+            None => continue,
+        };
+        if user != "root" {
+            continue;
+        }
+        found.push(pid);
+    }
+    found
+}
+
+/// Kill orphan helper PIDs via osascript admin (they're root-owned).
+#[tauri::command]
+pub fn kill_orphan_helpers(pids: Vec<u32>) -> Result<(), String> {
+    if pids.is_empty() {
+        return Ok(());
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let args = pids
+            .iter()
+            .map(|p| p.to_string())
+            .collect::<Vec<_>>()
+            .join(" ");
+        let script = format!(
+            "do shell script \"/bin/kill -9 {}\" with prompt \"Disk Cutter needs administrator access to clean up an orphaned helper process from a previous session.\" with administrator privileges",
+            args
+        );
+        std::process::Command::new("osascript")
+            .args(["-e", &script])
+            .output()
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = pids;
+        Err("not implemented on this platform".to_string())
+    }
+}
+
 #[tauri::command]
 pub fn open_fda_settings() -> Result<(), String> {
     #[cfg(target_os = "macos")]
@@ -155,7 +228,10 @@ pub fn list_disks() -> Vec<Disk> {
 fn enumerate_macos() -> Option<Vec<Disk>> {
     use std::process::Command;
 
-    let list = Command::new("diskutil").args(["list", "-plist"]).output().ok()?;
+    let list = Command::new("diskutil")
+        .args(["list", "-plist"])
+        .output()
+        .ok()?;
     if !list.status.success() {
         return None;
     }
@@ -207,13 +283,25 @@ fn parse_disk_info_plist(bytes: &[u8], device_path: String) -> Option<Disk> {
     let val: plist::Value = plist::from_bytes(bytes).ok()?;
     let dict = val.as_dictionary()?;
 
-    let s = |k: &str| dict.get(k).and_then(|v| v.as_string()).map(|s| s.to_string());
-    let u = |k: &str| dict.get(k).and_then(|v| v.as_unsigned_integer()).unwrap_or(0);
+    let s = |k: &str| {
+        dict.get(k)
+            .and_then(|v| v.as_string())
+            .map(|s| s.to_string())
+    };
+    let u = |k: &str| {
+        dict.get(k)
+            .and_then(|v| v.as_unsigned_integer())
+            .unwrap_or(0)
+    };
     let b = |k: &str| dict.get(k).and_then(|v| v.as_boolean()).unwrap_or(false);
 
-    let model = s("MediaName").or_else(|| s("IORegistryEntryName")).unwrap_or_else(|| "UNKNOWN".to_string());
+    let model = s("MediaName")
+        .or_else(|| s("IORegistryEntryName"))
+        .unwrap_or_else(|| "UNKNOWN".to_string());
     let bytes_total = u("TotalSize");
-    let bus = s("BusProtocol").unwrap_or_else(|| "UNKNOWN".to_string()).to_uppercase();
+    let bus = s("BusProtocol")
+        .unwrap_or_else(|| "UNKNOWN".to_string())
+        .to_uppercase();
     let internal = b("Internal");
     let removable = b("Removable") || b("RemovableMedia") || b("RemovableMediaOrExternalDevice");
 
@@ -255,10 +343,7 @@ fn derive_partitions(dict: &plist::Dictionary) -> String {
     let fs = dict
         .get("FilesystemType")
         .and_then(|v| v.as_string())
-        .or_else(|| {
-            dict.get("Content")
-                .and_then(|v| v.as_string())
-        })
+        .or_else(|| dict.get("Content").and_then(|v| v.as_string()))
         .unwrap_or("")
         .to_uppercase();
     let name = dict
@@ -369,12 +454,42 @@ fn spawn_elevated_burn(
     let progress_path = format!("/tmp/disk-cutter-progress-{job_id}.jsonl");
     let _ = std::fs::remove_file(&progress_path);
 
+    // Look up the configured writer impl + perf tunables, if any. The DB may
+    // not have been initialised (see lib.rs "continuing without persistence");
+    // fall through silently in that case and let the helper apply its own
+    // defaults.
+    let read_config = |key: &str| -> Option<String> {
+        app.try_state::<Db>().and_then(|db| {
+            let conn = db.0.lock().ok()?;
+            conn.query_row("SELECT value FROM config WHERE key = ?1", [key], |r| {
+                r.get::<_, String>(0)
+            })
+            .ok()
+        })
+    };
+    let writer_impl = read_config("writer.impl");
+    // Validate numerics by round-tripping through parse(); drop anything we
+    // can't interpret so the helper applies its built-in default.
+    let chunk_bytes = read_config("chunk.bytes").and_then(|v| v.parse::<u64>().ok());
+    let workers_count = read_config("workers.count").and_then(|v| v.parse::<usize>().ok());
+    let queue_depth = read_config("queue.depth").and_then(|v| v.parse::<usize>().ok());
+    // Bool: only the literal "true" enables skip; everything else (incl.
+    // missing) keeps verify on.
+    let skip_verify = read_config("verify.skip")
+        .map(|v| v == "true")
+        .unwrap_or(false);
+
     let helper_cmd = build_helper_command(
         &exe.to_string_lossy(),
         &image_path,
         &target,
         &job_id,
         &progress_path,
+        writer_impl.as_deref(),
+        chunk_bytes,
+        workers_count,
+        queue_depth,
+        skip_verify,
     );
     let prompt = "Disk Cutter needs administrator access to write the disk image directly to the device you selected.";
     let script = build_osascript_script(&helper_cmd, prompt);
@@ -405,21 +520,43 @@ fn sq(s: &str) -> String {
     s.replace('\'', "'\\''")
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_helper_command(
     exe: &str,
     image: &str,
     target: &str,
     job_id: &str,
     progress: &str,
+    writer_impl: Option<&str>,
+    chunk_bytes: Option<u64>,
+    workers: Option<usize>,
+    queue_depth: Option<usize>,
+    skip_verify: bool,
 ) -> String {
-    format!(
+    let mut cmd = format!(
         "'{}' --helper-burn --image='{}' --target='{}' --job='{}' --progress='{}'",
         sq(exe),
         sq(image),
         sq(target),
         sq(job_id),
         sq(progress),
-    )
+    );
+    if let Some(w) = writer_impl {
+        cmd.push_str(&format!(" --writer='{}'", sq(w)));
+    }
+    if let Some(n) = chunk_bytes {
+        cmd.push_str(&format!(" --chunk-bytes={n}"));
+    }
+    if let Some(n) = workers {
+        cmd.push_str(&format!(" --workers={n}"));
+    }
+    if let Some(n) = queue_depth {
+        cmd.push_str(&format!(" --queue-depth={n}"));
+    }
+    if skip_verify {
+        cmd.push_str(" --skip-verify=true");
+    }
+    cmd
 }
 
 fn build_osascript_script(helper_cmd: &str, prompt: &str) -> String {
@@ -513,32 +650,73 @@ fn parse_helper_line(job_id: &str, line: &str) -> Option<HelperEvent> {
         "progress" => {
             let bytes_done = val.get("bytes_done").and_then(|v| v.as_u64()).unwrap_or(0);
             let bytes_total = val.get("bytes_total").and_then(|v| v.as_u64()).unwrap_or(0);
-            let bps = val.get("bytes_per_sec").and_then(|v| v.as_u64()).unwrap_or(0);
-            let state = val.get("state").and_then(|v| v.as_str()).unwrap_or("writing");
+            let bps = val
+                .get("bytes_per_sec")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            let state = val
+                .get("state")
+                .and_then(|v| v.as_str())
+                .unwrap_or("writing");
             Some(HelperEvent::Progress(make_job_update(
-                job_id, state, bytes_done, bytes_total, bps,
+                job_id,
+                state,
+                bytes_done,
+                bytes_total,
+                bps,
             )))
         }
         "complete" => {
-            let mismatches: Vec<crate::pipeline::VerifyMismatch> =
-                serde_json::from_value(val.get("mismatches").cloned().unwrap_or(serde_json::Value::Array(vec![])))
-                    .unwrap_or_default();
+            let mismatches: Vec<crate::pipeline::VerifyMismatch> = serde_json::from_value(
+                val.get("mismatches")
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Array(vec![])),
+            )
+            .unwrap_or_default();
             Some(HelperEvent::Complete(JobComplete {
                 job_id: job_id.to_string(),
-                bytes_written: val.get("bytes_written").and_then(|v| v.as_u64()).unwrap_or(0),
-                source_sha256: val.get("source_sha256").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                readback_sha256: val.get("readback_sha256").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                verify_match: val.get("verify_match").and_then(|v| v.as_bool()).unwrap_or(false),
+                bytes_written: val
+                    .get("bytes_written")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0),
+                source_sha256: val
+                    .get("source_sha256")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                readback_sha256: val
+                    .get("readback_sha256")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                verify_match: val
+                    .get("verify_match")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false),
                 mismatches,
                 elapsed_ms: val.get("elapsed_ms").and_then(|v| v.as_u64()).unwrap_or(0),
-                avg_write_bps: val.get("avg_write_bps").and_then(|v| v.as_u64()).unwrap_or(0),
-                avg_verify_bps: val.get("avg_verify_bps").and_then(|v| v.as_u64()).unwrap_or(0),
+                avg_write_bps: val
+                    .get("avg_write_bps")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0),
+                avg_verify_bps: val
+                    .get("avg_verify_bps")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0),
             }))
         }
         "error" => Some(HelperEvent::Failure(JobFailure {
             job_id: job_id.to_string(),
-            error_code: val.get("error_code").and_then(|v| v.as_str()).unwrap_or("EUNKNOWN").to_string(),
-            error_message: val.get("error_message").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            error_code: val
+                .get("error_code")
+                .and_then(|v| v.as_str())
+                .unwrap_or("EUNKNOWN")
+                .to_string(),
+            error_message: val
+                .get("error_message")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
         })),
         _ => None,
     }
@@ -638,10 +816,16 @@ fn run_job(
 
     let burn_id = job_id.to_string();
     let burn_app = app.clone();
-    let burn = pipeline::burn(&mut *reader, writer, cancel, |p| {
+    let burn = pipeline::burn(&mut *reader, writer, pipeline::DEFAULT_CHUNK, cancel, |p| {
         let _ = burn_app.emit(
             "disk-cutter://job-update",
-            make_job_update(&burn_id, "writing", p.bytes_done, p.bytes_total, p.bytes_per_sec),
+            make_job_update(
+                &burn_id,
+                "writing",
+                p.bytes_done,
+                p.bytes_total,
+                p.bytes_per_sec,
+            ),
         );
     })
     .map_err(|e| fail_for_burn_error(job_id, &e))?;
@@ -655,12 +839,24 @@ fn run_job(
 
     let verify_id = job_id.to_string();
     let verify_app = app.clone();
-    let verify = pipeline::verify(&mut *reader2, &mut *device_reader, cancel, |p| {
-        let _ = verify_app.emit(
-            "disk-cutter://job-update",
-            make_job_update(&verify_id, "verifying", p.bytes_done, p.bytes_total, p.bytes_per_sec),
-        );
-    })
+    let verify = pipeline::verify(
+        &mut *reader2,
+        &mut *device_reader,
+        pipeline::DEFAULT_CHUNK,
+        cancel,
+        |p| {
+            let _ = verify_app.emit(
+                "disk-cutter://job-update",
+                make_job_update(
+                    &verify_id,
+                    "verifying",
+                    p.bytes_done,
+                    p.bytes_total,
+                    p.bytes_per_sec,
+                ),
+            );
+        },
+    )
     .map_err(|e| fail_for_burn_error(job_id, &e))?;
 
     Ok(summarize_burn_complete(job_id, burn, verify))
@@ -840,10 +1036,7 @@ mod tests {
             }),
             "ESIZEMISMATCH"
         );
-        assert_eq!(
-            code_for(&BurnError::Io(io::Error::new(io::ErrorKind::Other, "x"))),
-            "EIO"
-        );
+        assert_eq!(code_for(&BurnError::Io(io::Error::other("x"))), "EIO");
     }
 
     #[test]
@@ -851,13 +1044,17 @@ mod tests {
         let f = fail_for_burn_error("job-1", &BurnError::Cancelled);
         assert_eq!(f.job_id, "job-1");
         assert_eq!(f.error_code, "ECANCELLED");
-        assert!(f.error_message.contains("Cancelled"), "got {}", f.error_message);
+        assert!(
+            f.error_message.contains("Cancelled"),
+            "got {}",
+            f.error_message
+        );
     }
 
     #[test]
     fn fail_for_burn_error_maps_io_variant() {
         use std::io;
-        let e = BurnError::Io(io::Error::new(io::ErrorKind::Other, "x"));
+        let e = BurnError::Io(io::Error::other("x"));
         let f = fail_for_burn_error("j", &e);
         assert_eq!(f.error_code, "EIO");
     }
@@ -866,7 +1063,10 @@ mod tests {
     fn fail_for_burn_error_maps_size_mismatch_variant() {
         let f = fail_for_burn_error(
             "j",
-            &BurnError::SizeMismatch { expected: 1, actual: 2 },
+            &BurnError::SizeMismatch {
+                expected: 1,
+                actual: 2,
+            },
         );
         assert_eq!(f.error_code, "ESIZEMISMATCH");
     }
@@ -1102,6 +1302,11 @@ mod tests {
             "/dev/disk5",
             "job-7",
             "/tmp/p.jsonl",
+            None,
+            None,
+            None,
+            None,
+            false,
         );
         assert_eq!(
             s,
@@ -1120,8 +1325,54 @@ mod tests {
             "/dev/disk5",
             "job-1",
             "/tmp/p.jsonl",
+            None,
+            None,
+            None,
+            None,
+            false,
         );
         assert!(s.contains("--image='/tmp/it'\\''s a test.iso'"), "got {s}");
+    }
+
+    #[test]
+    fn build_helper_command_appends_perf_tunables_when_provided() {
+        let s = build_helper_command(
+            "/exe",
+            "/tmp/x.iso",
+            "/dev/disk5",
+            "j",
+            "/tmp/p",
+            Some("pipelined"),
+            Some(2_097_152),
+            Some(8),
+            Some(31),
+            true,
+        );
+        assert!(s.contains("--writer='pipelined'"), "got {s}");
+        assert!(s.contains("--chunk-bytes=2097152"), "got {s}");
+        assert!(s.contains("--workers=8"), "got {s}");
+        assert!(s.contains("--queue-depth=31"), "got {s}");
+        assert!(s.contains("--skip-verify=true"), "got {s}");
+    }
+
+    #[test]
+    fn build_helper_command_omits_unset_perf_tunables() {
+        let s = build_helper_command(
+            "/exe",
+            "/tmp/x.iso",
+            "/dev/disk5",
+            "j",
+            "/tmp/p",
+            None,
+            None,
+            None,
+            None,
+            false,
+        );
+        assert!(!s.contains("--chunk-bytes="), "got {s}");
+        assert!(!s.contains("--workers="), "got {s}");
+        assert!(!s.contains("--queue-depth="), "got {s}");
+        assert!(!s.contains("--skip-verify="), "got {s}");
     }
 
     #[test]
@@ -1354,16 +1605,18 @@ mod tests {
 
     #[test]
     fn parse_disk_info_plist_marks_internal_when_internal_flag_set() {
-        let xml = info_plist(&[
-            ("Internal", "true", ""),
-        ]);
+        let xml = info_plist(&[("Internal", "true", "")]);
         let d = parse_disk_info_plist(&xml, "/dev/disk1".into()).unwrap();
         assert!(d.flags.contains(&"INTERNAL".to_string()));
     }
 
     #[test]
     fn parse_disk_info_plist_treats_any_removable_alias_as_removable() {
-        for key in ["Removable", "RemovableMedia", "RemovableMediaOrExternalDevice"] {
+        for key in [
+            "Removable",
+            "RemovableMedia",
+            "RemovableMediaOrExternalDevice",
+        ] {
             let xml = info_plist(&[(key, "true", "")]);
             let d = parse_disk_info_plist(&xml, "/dev/diskZ".into()).unwrap();
             assert!(
