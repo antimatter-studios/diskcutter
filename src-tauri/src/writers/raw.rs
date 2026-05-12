@@ -2,6 +2,8 @@
 use std::fs::{File, OpenOptions};
 #[cfg(unix)]
 use std::io::{Read, Result, Write};
+#[cfg(target_os = "macos")]
+use std::os::fd::AsRawFd;
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 #[cfg(unix)]
@@ -34,7 +36,15 @@ impl DeviceIo for RawDeviceIo {
             opts.custom_flags(libc::O_SYNC | libc::O_DIRECT);
         }
         match opts.open(&target) {
-            Ok(f) => Ok(Box::new(RawWriter { file: f })),
+            Ok(f) => {
+                #[cfg(target_os = "macos")]
+                unsafe {
+                    // Skip the unified buffer cache — writes go straight to
+                    // device. Matches what Etcher does explicitly.
+                    libc::fcntl(f.as_raw_fd(), libc::F_NOCACHE, 1);
+                }
+                Ok(Box::new(RawWriter { file: f }))
+            }
             Err(e) => {
                 let detail = describe_busy(device);
                 Err(std::io::Error::new(
@@ -48,26 +58,25 @@ impl DeviceIo for RawDeviceIo {
     fn open_read(&self, device: &Path) -> Result<Box<dyn DeviceReader>> {
         let target = translate_to_raw(device);
         let file = File::open(&target)?;
+        #[cfg(target_os = "macos")]
+        unsafe {
+            libc::fcntl(file.as_raw_fd(), libc::F_NOCACHE, 1);
+        }
         Ok(Box::new(RawReader { file }))
     }
 }
 
 #[cfg(unix)]
 fn translate_to_raw(device: &Path) -> PathBuf {
-    // macOS: stay on /dev/diskN (buffered block device). Conventional wisdom says
-    // /dev/rdiskN (raw char) is faster, but on modern macOS the raw path
-    // serializes every write through USB with no pipelining — measured 10-15
-    // MB/s vs 80+ MB/s through /dev/diskN. The block device goes through the
-    // kernel buffer cache which coalesces and pipelines writes; we fsync at end
-    // of write (see RawWriter::finish) to force commit before close.
-    //
-    // If the caller passed `/dev/rdiskN` explicitly, normalize back to
-    // `/dev/diskN` for consistency.
+    // macOS: /dev/diskN -> /dev/rdiskN (unbuffered char device). Empirically
+    // faster than the buffered block path for bulk burns on this hardware.
     #[cfg(target_os = "macos")]
     {
         if let Some(name) = device.file_name().and_then(|s| s.to_str()) {
-            if let Some(rest) = name.strip_prefix("rdisk") {
-                return PathBuf::from(format!("/dev/disk{rest}"));
+            if let Some(rest) = name.strip_prefix("disk") {
+                if !rest.starts_with('r') {
+                    return PathBuf::from(format!("/dev/r{name}"));
+                }
             }
         }
     }
@@ -75,6 +84,7 @@ fn translate_to_raw(device: &Path) -> PathBuf {
 }
 
 #[cfg(target_os = "macos")]
+#[allow(dead_code)]
 fn unmount_macos(device: &Path) -> std::result::Result<(), String> {
     let name = device.file_name().and_then(|s| s.to_str()).unwrap_or("");
     if !name.starts_with("disk") {
@@ -112,7 +122,11 @@ fn describe_busy(device: &Path) -> String {
             let s = String::from_utf8_lossy(&o.stdout).to_string();
             // First line is the header; useful detail is the rest.
             let lines: Vec<&str> = s.lines().skip(1).collect();
-            if lines.is_empty() { String::new() } else { lines.join(" | ") }
+            if lines.is_empty() {
+                String::new()
+            } else {
+                lines.join(" | ")
+            }
         }
         Err(_) => String::new(),
     };
@@ -173,25 +187,23 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn translate_to_raw_keeps_buffered_block_device() {
+    fn translate_to_raw_inserts_r_prefix() {
         assert_eq!(
             translate_to_raw(&PathBuf::from("/dev/disk5")),
-            PathBuf::from("/dev/disk5")
+            PathBuf::from("/dev/rdisk5")
         );
         assert_eq!(
             translate_to_raw(&PathBuf::from("/dev/disk0")),
-            PathBuf::from("/dev/disk0")
+            PathBuf::from("/dev/rdisk0")
         );
     }
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn translate_to_raw_normalizes_rdisk_to_disk() {
-        // Caller passed the raw char device path; normalize back to the
-        // buffered block device.
+    fn translate_to_raw_preserves_already_raw_device() {
         assert_eq!(
             translate_to_raw(&PathBuf::from("/dev/rdisk5")),
-            PathBuf::from("/dev/disk5")
+            PathBuf::from("/dev/rdisk5")
         );
     }
 
