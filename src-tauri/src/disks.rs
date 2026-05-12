@@ -217,9 +217,16 @@ pub fn list_disks() -> Vec<Disk> {
     {
         enumerate_macos().unwrap_or_default()
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
     {
-        // TODO: real enumeration for Linux (/sys/block) and Windows (SetupDi).
+        enumerate_linux().unwrap_or_default()
+    }
+    #[cfg(target_os = "windows")]
+    {
+        enumerate_windows().unwrap_or_default()
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    {
         Vec::new()
     }
 }
@@ -320,6 +327,209 @@ fn parse_disk_info_plist(bytes: &[u8], device_path: String) -> Option<Disk> {
         bytes: bytes_total,
         bus,
         partitions: derive_partitions(dict),
+        flags,
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn enumerate_linux() -> Option<Vec<Disk>> {
+    let entries = std::fs::read_dir("/sys/block").ok()?;
+    let mut out = Vec::new();
+    for e in entries.flatten() {
+        let name = e.file_name().to_string_lossy().to_string();
+        if !is_linux_block_disk(&name) {
+            continue;
+        }
+        let dir = e.path();
+        if let Some(d) = build_linux_disk(&name, &dir) {
+            out.push(d);
+        }
+    }
+    Some(out)
+}
+
+/// Reject virtual / non-disk block devices that show up in /sys/block but
+/// we never want to burn to: loopbacks, ramdisks, device-mapper, CD-ROMs,
+/// floppies, MD/zram. Keep ATA/USB/NVMe/MMC/virtio.
+#[cfg(any(target_os = "linux", test))]
+fn is_linux_block_disk(name: &str) -> bool {
+    if name.is_empty() {
+        return false;
+    }
+    const SKIP: &[&str] = &["loop", "ram", "dm-", "sr", "fd", "md", "zram"];
+    !SKIP.iter().any(|p| name.starts_with(p))
+}
+
+#[cfg(target_os = "linux")]
+fn build_linux_disk(name: &str, sys_dir: &Path) -> Option<Disk> {
+    let read = |rel: &str| -> Option<String> {
+        std::fs::read_to_string(sys_dir.join(rel))
+            .ok()
+            .map(|s| s.trim().to_string())
+    };
+    let size_sectors: u64 = read("size").and_then(|s| s.parse().ok()).unwrap_or(0);
+    let bytes = size_sectors.saturating_mul(512);
+    let removable = read("removable").as_deref() == Some("1");
+    let vendor = read("device/vendor").unwrap_or_default();
+    let model = read("device/model").unwrap_or_default();
+    let combined = format!("{vendor} {model}").trim().to_string();
+    let model_str = if combined.is_empty() {
+        "UNKNOWN".to_string()
+    } else {
+        combined
+    };
+    let bus = read_linux_bus(sys_dir).unwrap_or_else(|| "UNKNOWN".to_string());
+    let partitions = list_linux_partitions(sys_dir);
+    let mut flags = Vec::new();
+    if removable {
+        flags.push("REMOVABLE".to_string());
+    } else {
+        flags.push("INTERNAL".to_string());
+    }
+    Some(Disk {
+        device: format!("/dev/{name}"),
+        model: model_str.to_uppercase(),
+        capacity: format_capacity(bytes),
+        bytes,
+        bus: bus.to_uppercase(),
+        partitions,
+        flags,
+    })
+}
+
+/// Walk the canonical `device/` symlink to figure out the host bus —
+/// `/sys/block/sda/device` resolves through `…/ata1/host0/…` for SATA,
+/// `…/usb1/1-1/…` for USB, `…/nvme0/…` for NVMe, etc. Matching on the
+/// path segments is more reliable than parsing uevent files because
+/// uevent shapes vary across kernel versions.
+#[cfg(target_os = "linux")]
+fn read_linux_bus(sys_dir: &Path) -> Option<String> {
+    let target = std::fs::canonicalize(sys_dir.join("device")).ok()?;
+    let s = target.to_string_lossy();
+    if s.contains("/usb") {
+        Some("USB".to_string())
+    } else if s.contains("/nvme") {
+        Some("NVME".to_string())
+    } else if s.contains("/mmc") {
+        Some("MMC".to_string())
+    } else if s.contains("/virtio") {
+        Some("VIRTIO".to_string())
+    } else if s.contains("/ata") || s.contains("/sata") {
+        Some("SATA".to_string())
+    } else if s.contains("/scsi") {
+        Some("SCSI".to_string())
+    } else {
+        None
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn list_linux_partitions(sys_dir: &Path) -> String {
+    let Ok(entries) = std::fs::read_dir(sys_dir) else {
+        return "UNFORMATTED".to_string();
+    };
+    let mut parts: Vec<String> = entries
+        .flatten()
+        .filter(|e| e.path().is_dir())
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .filter(|n| {
+            // Partition subdir name starts with the parent name; e.g.
+            // `/sys/block/sda/sda1`. Reject `holders`, `slaves`, etc.
+            let parent = sys_dir
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or_default();
+            n.starts_with(parent) && n.len() > parent.len()
+        })
+        .collect();
+    parts.sort();
+    if parts.is_empty() {
+        "UNFORMATTED".to_string()
+    } else if parts.len() == 1 {
+        "1 PARTITION".to_string()
+    } else {
+        format!("{} PARTITIONS", parts.len())
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn enumerate_windows() -> Option<Vec<Disk>> {
+    use std::process::Command;
+    let out = Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-Command",
+            "Get-CimInstance Win32_DiskDrive | Select-Object DeviceID,Model,Size,InterfaceType,MediaType | ConvertTo-Json -Depth 2 -Compress",
+        ])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    parse_windows_diskdrive_json(&out.stdout)
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn parse_windows_diskdrive_json(bytes: &[u8]) -> Option<Vec<Disk>> {
+    let text = std::str::from_utf8(bytes).ok()?.trim();
+    if text.is_empty() {
+        return Some(Vec::new());
+    }
+    let value: serde_json::Value = serde_json::from_str(text).ok()?;
+    // ConvertTo-Json emits a bare object when there's one result, an array
+    // otherwise. Normalize.
+    let array = match value {
+        serde_json::Value::Array(a) => a,
+        single => vec![single],
+    };
+    let mut out = Vec::new();
+    for entry in array {
+        if let Some(d) = windows_disk_from_json(&entry) {
+            out.push(d);
+        }
+    }
+    Some(out)
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn windows_disk_from_json(v: &serde_json::Value) -> Option<Disk> {
+    let device = v.get("DeviceID").and_then(|x| x.as_str())?.to_string();
+    let model = v
+        .get("Model")
+        .and_then(|x| x.as_str())
+        .unwrap_or("UNKNOWN")
+        .trim()
+        .to_string();
+    let bytes = v
+        .get("Size")
+        .and_then(|x| {
+            x.as_u64()
+                .or_else(|| x.as_str().and_then(|s| s.parse().ok()))
+        })
+        .unwrap_or(0);
+    let bus = v
+        .get("InterfaceType")
+        .and_then(|x| x.as_str())
+        .unwrap_or("UNKNOWN")
+        .to_string();
+    let media_type = v
+        .get("MediaType")
+        .and_then(|x| x.as_str())
+        .unwrap_or_default();
+    let mut flags = Vec::new();
+    let removable = media_type.to_ascii_lowercase().contains("removable");
+    if removable {
+        flags.push("REMOVABLE".to_string());
+    } else {
+        flags.push("INTERNAL".to_string());
+    }
+    Some(Disk {
+        device,
+        model: model.to_uppercase(),
+        capacity: format_capacity(bytes),
+        bytes,
+        bus: bus.to_uppercase(),
+        partitions: "UNKNOWN".to_string(),
         flags,
     })
 }
@@ -1629,5 +1839,140 @@ mod tests {
     #[test]
     fn parse_disk_info_plist_returns_none_for_invalid_bytes() {
         assert!(parse_disk_info_plist(b"garbage", "/dev/x".into()).is_none());
+    }
+
+    #[test]
+    fn is_linux_block_disk_accepts_real_devices() {
+        assert!(is_linux_block_disk("sda"));
+        assert!(is_linux_block_disk("nvme0n1"));
+        assert!(is_linux_block_disk("vda"));
+        assert!(is_linux_block_disk("mmcblk0"));
+    }
+
+    #[test]
+    fn is_linux_block_disk_rejects_virtual_kinds() {
+        assert!(!is_linux_block_disk("loop0"));
+        assert!(!is_linux_block_disk("ram0"));
+        assert!(!is_linux_block_disk("dm-0"));
+        assert!(!is_linux_block_disk("sr0"));
+        assert!(!is_linux_block_disk("fd0"));
+        assert!(!is_linux_block_disk("md0"));
+        assert!(!is_linux_block_disk("zram0"));
+        assert!(!is_linux_block_disk(""));
+    }
+
+    #[test]
+    fn parse_windows_diskdrive_json_handles_single_object() {
+        let json = br#"{"DeviceID":"\\\\.\\PHYSICALDRIVE0","Model":"Samsung SSD 980","Size":500107862016,"InterfaceType":"SCSI","MediaType":"Fixed hard disk media"}"#;
+        let disks = parse_windows_diskdrive_json(json).unwrap();
+        assert_eq!(disks.len(), 1);
+        let d = &disks[0];
+        assert_eq!(d.device, r"\\.\PHYSICALDRIVE0");
+        assert_eq!(d.model, "SAMSUNG SSD 980");
+        assert_eq!(d.bytes, 500_107_862_016);
+        assert_eq!(d.bus, "SCSI");
+        assert!(d.flags.contains(&"INTERNAL".to_string()));
+    }
+
+    #[test]
+    fn parse_windows_diskdrive_json_handles_array_with_removable() {
+        let json = br#"[
+            {"DeviceID":"\\\\.\\PHYSICALDRIVE0","Model":"NVMe","Size":1000204886016,"InterfaceType":"SCSI","MediaType":"Fixed hard disk media"},
+            {"DeviceID":"\\\\.\\PHYSICALDRIVE1","Model":"USB Flash","Size":16000000000,"InterfaceType":"USB","MediaType":"Removable Media"}
+        ]"#;
+        let disks = parse_windows_diskdrive_json(json).unwrap();
+        assert_eq!(disks.len(), 2);
+        assert!(disks[1].flags.contains(&"REMOVABLE".to_string()));
+        assert_eq!(disks[1].bus, "USB");
+    }
+
+    #[test]
+    fn parse_windows_diskdrive_json_accepts_size_as_string() {
+        // PowerShell sometimes serialises u64 Size as a string when it
+        // exceeds the JavaScript-safe integer range.
+        let json = br#"{"DeviceID":"\\\\.\\PHYSICALDRIVE0","Model":"X","Size":"4000787030016","InterfaceType":"SCSI","MediaType":"Fixed hard disk media"}"#;
+        let disks = parse_windows_diskdrive_json(json).unwrap();
+        assert_eq!(disks[0].bytes, 4_000_787_030_016);
+    }
+
+    #[test]
+    fn parse_windows_diskdrive_json_returns_empty_on_blank_input() {
+        let disks = parse_windows_diskdrive_json(b"").unwrap();
+        assert!(disks.is_empty());
+    }
+
+    #[test]
+    fn parse_windows_diskdrive_json_returns_none_for_invalid_json() {
+        assert!(parse_windows_diskdrive_json(b"not json").is_none());
+    }
+
+    #[test]
+    fn windows_disk_from_json_defaults_unknown_when_fields_missing() {
+        let v: serde_json::Value =
+            serde_json::from_str(r#"{"DeviceID":"\\\\.\\PHYSICALDRIVE9"}"#).unwrap();
+        let d = windows_disk_from_json(&v).unwrap();
+        assert_eq!(d.device, r"\\.\PHYSICALDRIVE9");
+        assert_eq!(d.model, "UNKNOWN");
+        assert_eq!(d.bus, "UNKNOWN");
+        assert_eq!(d.bytes, 0);
+        assert_eq!(d.capacity, "—");
+        assert!(d.flags.contains(&"INTERNAL".to_string()));
+    }
+
+    #[test]
+    fn windows_disk_from_json_returns_none_without_device_id() {
+        let v: serde_json::Value = serde_json::from_str(r#"{"Model":"X"}"#).unwrap();
+        assert!(windows_disk_from_json(&v).is_none());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn build_linux_disk_reads_sysfs_layout() {
+        use std::fs;
+        let dir = tempfile::tempdir().unwrap();
+        let block = dir.path().join("sda");
+        let dev = block.join("device");
+        fs::create_dir_all(&dev).unwrap();
+        fs::write(block.join("size"), "1024\n").unwrap();
+        fs::write(block.join("removable"), "0\n").unwrap();
+        fs::write(dev.join("vendor"), "SAMSUNG\n").unwrap();
+        fs::write(dev.join("model"), "SSD 980 EVO\n").unwrap();
+        fs::create_dir(block.join("sda1")).unwrap();
+        fs::create_dir(block.join("sda2")).unwrap();
+        // Sibling dirs that should be ignored.
+        fs::create_dir(block.join("holders")).unwrap();
+        fs::create_dir(block.join("slaves")).unwrap();
+        let d = build_linux_disk("sda", &block).unwrap();
+        assert_eq!(d.device, "/dev/sda");
+        assert_eq!(d.bytes, 1024 * 512);
+        assert_eq!(d.partitions, "2 PARTITIONS");
+        assert!(d.model.contains("SAMSUNG"));
+        assert!(d.flags.contains(&"INTERNAL".to_string()));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn build_linux_disk_marks_removable_when_flag_set() {
+        use std::fs;
+        let dir = tempfile::tempdir().unwrap();
+        let block = dir.path().join("sdb");
+        let dev = block.join("device");
+        fs::create_dir_all(&dev).unwrap();
+        fs::write(block.join("size"), "0").unwrap();
+        fs::write(block.join("removable"), "1").unwrap();
+        let d = build_linux_disk("sdb", &block).unwrap();
+        assert!(d.flags.contains(&"REMOVABLE".to_string()));
+        assert!(!d.flags.contains(&"INTERNAL".to_string()));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn list_linux_partitions_reports_unformatted_when_no_partition_dirs() {
+        use std::fs;
+        let dir = tempfile::tempdir().unwrap();
+        let block = dir.path().join("sdc");
+        fs::create_dir_all(&block).unwrap();
+        fs::create_dir(block.join("holders")).unwrap();
+        assert_eq!(list_linux_partitions(&block), "UNFORMATTED");
     }
 }
