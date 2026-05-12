@@ -7,11 +7,14 @@ use sha2::{Digest, Sha256};
 use crate::readers::ImageReader;
 use crate::writers::{DeviceReader, DeviceWriter};
 
-const CHUNK: usize = 16 * 1024 * 1024;
+// 1 MiB matches typical USB-MSC max transfer length on macOS, avoiding
+// kernel-side splitting of bigger writes. Etcher uses the same.
+pub const DEFAULT_CHUNK: usize = 1024 * 1024;
 const MAX_MISMATCHES: usize = 256;
 const SECTOR_BYTES: u64 = 512;
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub enum BurnError {
     Io(std::io::Error),
     Cancelled,
@@ -25,6 +28,7 @@ impl From<std::io::Error> for BurnError {
 }
 
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 pub struct BurnProgress {
     pub bytes_done: u64,
     pub bytes_total: u64,
@@ -42,13 +46,14 @@ pub struct BurnResult {
 pub fn burn(
     reader: &mut dyn ImageReader,
     writer: Box<dyn DeviceWriter>,
+    chunk_size: usize,
     cancel: &AtomicBool,
     mut on_progress: impl FnMut(BurnProgress),
 ) -> Result<BurnResult, BurnError> {
     let total = reader.info().uncompressed_bytes;
     let mut writer = writer;
     let mut hasher = Sha256::new();
-    let mut buf = vec![0u8; CHUNK];
+    let mut buf = vec![0u8; chunk_size];
     let mut done: u64 = 0;
     let started = Instant::now();
     let mut last_emit = Instant::now();
@@ -94,7 +99,7 @@ pub fn burn(
     });
     Ok(BurnResult {
         bytes_written: done,
-        source_sha256: hex(&hasher.finalize()),
+        source_sha256: hex(hasher.finalize()),
         elapsed,
         avg_bytes_per_sec: avg,
     })
@@ -109,6 +114,7 @@ pub struct VerifyMismatch {
 }
 
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 pub struct VerifyProgress {
     pub bytes_done: u64,
     pub bytes_total: u64,
@@ -116,6 +122,7 @@ pub struct VerifyProgress {
     pub elapsed: Duration,
 }
 
+#[allow(dead_code)]
 pub struct VerifyResult {
     pub source_sha256: String,
     pub readback_sha256: String,
@@ -127,6 +134,7 @@ pub struct VerifyResult {
     pub avg_bytes_per_sec: u64,
 }
 
+#[allow(dead_code)]
 pub struct HashOnlyResult {
     pub readback_sha256: String,
     pub bytes_checked: u64,
@@ -138,11 +146,12 @@ pub struct HashOnlyResult {
 pub fn verify_hash_only(
     device: &mut dyn DeviceReader,
     expected_bytes: u64,
+    chunk_size: usize,
     cancel: &AtomicBool,
     mut on_progress: impl FnMut(VerifyProgress),
 ) -> Result<HashOnlyResult, BurnError> {
     let mut hasher = Sha256::new();
-    let mut buf = vec![0u8; CHUNK];
+    let mut buf = vec![0u8; chunk_size];
     let mut done: u64 = 0;
     let started = Instant::now();
     let mut last_emit = Instant::now();
@@ -187,7 +196,7 @@ pub fn verify_hash_only(
         elapsed,
     });
     Ok(HashOnlyResult {
-        readback_sha256: hex(&hasher.finalize()),
+        readback_sha256: hex(hasher.finalize()),
         bytes_checked: done,
         bytes_total: expected_bytes.max(done),
         elapsed,
@@ -198,14 +207,15 @@ pub fn verify_hash_only(
 pub fn verify(
     source: &mut dyn ImageReader,
     device: &mut dyn DeviceReader,
+    chunk_size: usize,
     cancel: &AtomicBool,
     mut on_progress: impl FnMut(VerifyProgress),
 ) -> Result<VerifyResult, BurnError> {
     let total = source.info().uncompressed_bytes;
     let mut src_hasher = Sha256::new();
     let mut dev_hasher = Sha256::new();
-    let mut src_buf = vec![0u8; CHUNK];
-    let mut dev_buf = vec![0u8; CHUNK];
+    let mut src_buf = vec![0u8; chunk_size];
+    let mut dev_buf = vec![0u8; chunk_size];
     let mut mismatches: Vec<VerifyMismatch> = Vec::new();
     let mut done: u64 = 0;
     let started = Instant::now();
@@ -259,8 +269,8 @@ pub fn verify(
 
     let elapsed = started.elapsed();
     let avg = (done as f64 / elapsed.as_secs_f64().max(0.001)) as u64;
-    let src_hash = hex(&src_hasher.finalize());
-    let dev_hash = hex(&dev_hasher.finalize());
+    let src_hash = hex(src_hasher.finalize());
+    let dev_hash = hex(dev_hasher.finalize());
     Ok(VerifyResult {
         match_: src_hash == dev_hash && mismatches.is_empty(),
         source_sha256: src_hash,
@@ -411,9 +421,10 @@ mod tests {
     fn sha256_of(bytes: &[u8]) -> String {
         let mut h = Sha256::new();
         h.update(bytes);
-        hex(&h.finalize())
+        hex(h.finalize())
     }
 
+    #[allow(clippy::type_complexity)]
     fn make_writer() -> (Box<dyn DeviceWriter>, Arc<Mutex<Vec<u8>>>, Arc<AtomicBool>) {
         let sink = Arc::new(Mutex::new(Vec::new()));
         let finished = Arc::new(AtomicBool::new(false));
@@ -431,7 +442,7 @@ mod tests {
         let (writer, sink, finished) = make_writer();
         let cancel = AtomicBool::new(false);
 
-        let result = burn(&mut reader, writer, &cancel, |_| {}).expect("burn ok");
+        let result = burn(&mut reader, writer, DEFAULT_CHUNK, &cancel, |_| {}).expect("burn ok");
 
         assert_eq!(result.bytes_written, data.len() as u64);
         assert_eq!(result.source_sha256, sha256_of(&data));
@@ -441,12 +452,12 @@ mod tests {
 
     #[test]
     fn burn_handles_data_larger_than_one_chunk() {
-        let data: Vec<u8> = vec![0xAB; CHUNK + 1_000];
+        let data: Vec<u8> = vec![0xAB; DEFAULT_CHUNK + 1_000];
         let mut reader = MockImageReader::new(data.clone());
         let (writer, sink, _) = make_writer();
         let cancel = AtomicBool::new(false);
 
-        let result = burn(&mut reader, writer, &cancel, |_| {}).unwrap();
+        let result = burn(&mut reader, writer, DEFAULT_CHUNK, &cancel, |_| {}).unwrap();
 
         assert_eq!(result.bytes_written, data.len() as u64);
         assert_eq!(*sink.lock().unwrap(), data);
@@ -458,7 +469,7 @@ mod tests {
         let (writer, _, _) = make_writer();
         let cancel = AtomicBool::new(true);
 
-        match burn(&mut reader, writer, &cancel, |_| {}) {
+        match burn(&mut reader, writer, DEFAULT_CHUNK, &cancel, |_| {}) {
             Err(BurnError::Cancelled) => {}
             Err(e) => panic!("expected Cancelled, got {e:?}"),
             Ok(_) => panic!("expected Err, got Ok"),
@@ -472,7 +483,10 @@ mod tests {
         let cancel = AtomicBool::new(false);
         let progress = RefCell::new(Vec::<BurnProgress>::new());
 
-        burn(&mut reader, writer, &cancel, |p| progress.borrow_mut().push(p)).unwrap();
+        burn(&mut reader, writer, DEFAULT_CHUNK, &cancel, |p| {
+            progress.borrow_mut().push(p)
+        })
+        .unwrap();
 
         let last = progress.borrow().last().cloned().expect("progress");
         assert_eq!(last.bytes_done, 64);
@@ -488,7 +502,7 @@ mod tests {
         };
         let cancel = AtomicBool::new(false);
 
-        let result = verify(&mut src, &mut dev, &cancel, |_| {}).unwrap();
+        let result = verify(&mut src, &mut dev, DEFAULT_CHUNK, &cancel, |_| {}).unwrap();
 
         assert!(result.match_);
         assert!(result.mismatches.is_empty());
@@ -508,7 +522,7 @@ mod tests {
         };
         let cancel = AtomicBool::new(false);
 
-        let result = verify(&mut src, &mut dev, &cancel, |_| {}).unwrap();
+        let result = verify(&mut src, &mut dev, DEFAULT_CHUNK, &cancel, |_| {}).unwrap();
 
         assert!(!result.match_);
         assert!(!result.mismatches.is_empty());
@@ -525,7 +539,7 @@ mod tests {
         };
         let cancel = AtomicBool::new(false);
 
-        let result = verify(&mut src, &mut dev, &cancel, |_| {}).unwrap();
+        let result = verify(&mut src, &mut dev, DEFAULT_CHUNK, &cancel, |_| {}).unwrap();
 
         assert!(!result.match_);
         assert!(!result.mismatches.is_empty());
@@ -541,7 +555,7 @@ mod tests {
         };
         let cancel = AtomicBool::new(false);
 
-        let result = verify(&mut src, &mut dev, &cancel, |_| {}).unwrap();
+        let result = verify(&mut src, &mut dev, DEFAULT_CHUNK, &cancel, |_| {}).unwrap();
 
         assert!(result.mismatches.len() <= MAX_MISMATCHES);
     }
@@ -554,7 +568,7 @@ mod tests {
         };
         let cancel = AtomicBool::new(true);
 
-        match verify(&mut src, &mut dev, &cancel, |_| {}) {
+        match verify(&mut src, &mut dev, DEFAULT_CHUNK, &cancel, |_| {}) {
             Err(BurnError::Cancelled) => {}
             Err(e) => panic!("expected Cancelled, got {e:?}"),
             Ok(_) => panic!("expected Err, got Ok"),
