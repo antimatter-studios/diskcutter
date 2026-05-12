@@ -15,7 +15,10 @@ describe('DangerBanner', () => {
       <DangerBanner
         confirmed={false}
         onConfirm={() => {}}
-        jobs={[{ target: { device: '/dev/disk5' } }, { target: { device: '/dev/disk6' } }]}
+        jobs={[
+          { state: 'idle', target: { device: '/dev/disk5' } },
+          { state: 'idle', target: { device: '/dev/disk6' } },
+        ]}
         accent="#f00"
       />,
     );
@@ -28,7 +31,7 @@ describe('DangerBanner', () => {
       <DangerBanner
         confirmed={false}
         onConfirm={onConfirm}
-        jobs={[{ target: { device: '/dev/disk5' } }]}
+        jobs={[{ state: 'idle', target: { device: '/dev/disk5' } }]}
         accent="#f00"
       />,
     );
@@ -41,7 +44,7 @@ describe('DangerBanner', () => {
       <DangerBanner
         confirmed
         onConfirm={() => {}}
-        jobs={[{ target: { device: '/dev/disk5' } }]}
+        jobs={[{ state: 'idle', target: { device: '/dev/disk5' } }]}
         accent="#f00"
       />,
     );

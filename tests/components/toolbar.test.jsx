@@ -10,8 +10,6 @@ const base = {
   jobs: [],
   accent: '#f00',
   busy: false,
-  density: 'comfy',
-  onDensity: () => {},
 };
 
 describe('Toolbar', () => {
@@ -66,13 +64,5 @@ describe('Toolbar', () => {
     render(<Toolbar {...base} onAdd={onAdd} />);
     fireEvent.click(screen.getByText(/ADD IMAGE/i));
     expect(onAdd).toHaveBeenCalled();
-  });
-
-  it('density toggle invokes onDensity with the selected mode', () => {
-    const onDensity = vi.fn();
-    const { container } = render(<Toolbar {...base} onDensity={onDensity} />);
-    const compactBtn = container.querySelector('.density-toggle button');
-    fireEvent.click(compactBtn);
-    expect(onDensity).toHaveBeenCalledWith('compact');
   });
 });
