@@ -22,6 +22,7 @@ import {
 import {
   computeScene, sceneToTitleKey, computeSessionStats, planStart,
 } from './app-derive.js';
+import { matchShortcut, isEditableTarget, queueReady } from './keymap.js';
 
 // Theme palette is sourced from CSS :root vars (--accent-1..4), so theme switching is just a CSS swap.
 function readThemeAccent(n, fallback) {
@@ -63,6 +64,7 @@ function App() {
   // string from the DB means "never set" → use the default from
   // PREFS_DEFAULTS so the UI never renders an empty <select>.
   const [prefs, setPrefs] = useState(() => ({ ...PREFS_DEFAULTS }));
+  const [dragActive, setDragActive] = useState(false);
   const sessionStartRef = useRef(Date.now());
   const [, forceTick] = useState(0);
 
@@ -213,11 +215,19 @@ function App() {
     addImageFromPath(path);
   }, [addImageFromPath]);
 
-  // Drag-and-drop disk images onto the window.
+  // Drag-and-drop disk images onto the window. Track enter/over/leave so we
+  // can show a full-window overlay while a drag is in flight — `drop` and
+  // `leave` both clear it.
   useEffect(() => {
     let cleanup = null;
     getCurrentWindow().onDragDropEvent((event) => {
-      if (event.payload.type === 'drop') {
+      const kind = event.payload?.type;
+      if (kind === 'enter' || kind === 'over') {
+        setDragActive(true);
+      } else if (kind === 'leave') {
+        setDragActive(false);
+      } else if (kind === 'drop') {
+        setDragActive(false);
         for (const path of event.payload.paths) {
           addImageFromPath(path);
         }
@@ -252,6 +262,38 @@ function App() {
       }
     }
   }, [jobs]);
+
+  // Global keyboard shortcuts. Skip when focus is in a text-entry surface so
+  // we don't eat keystrokes the user expects to land in a form field. Cmd+Q
+  // is intentionally NOT bound — let the OS handle quit.
+  useEffect(() => {
+    const onKey = (e) => {
+      if (isEditableTarget(e.target)) return;
+      if (matchShortcut(e, { key: 'o', mod: true })) {
+        e.preventDefault();
+        addImage();
+        return;
+      }
+      if (matchShortcut(e, { key: 'Enter', mod: true })) {
+        if (queueReady(jobs, confirmed)) {
+          e.preventDefault();
+          startQueue();
+        }
+        return;
+      }
+      if (matchShortcut(e, { key: ',', mod: true })) {
+        e.preventDefault();
+        setActiveNav('prefs');
+        return;
+      }
+      if (matchShortcut(e, { key: 'l', mod: true })) {
+        e.preventDefault();
+        setActiveNav('logs');
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [addImage, startQueue, jobs, confirmed]);
 
   const cancelJob = useCallback(async (jobId) => {
     try {
@@ -373,6 +415,8 @@ function App() {
         onRefresh={refreshDisks}
         accent={accent}
       />
+
+      {dragActive && <DragOverlay />}
 
       <TweaksPanel>
         <TweakSection label="TAURI">
@@ -563,6 +607,19 @@ function AppBody({
           </div>
         </footer>
       </main>
+    </div>
+  );
+}
+
+function DragOverlay() {
+  const { t } = useTranslation();
+  return (
+    <div className="drag-overlay" role="presentation" aria-hidden="true">
+      <div className="drag-overlay-box mono">
+        <span className="drag-overlay-bracket">[</span>
+        <span className="drag-overlay-label">{t('drag.drop_here')}</span>
+        <span className="drag-overlay-bracket">]</span>
+      </div>
     </div>
   );
 }

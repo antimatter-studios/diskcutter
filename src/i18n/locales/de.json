@@ -189,6 +189,9 @@
     "cancel": "[ ESC ] ABBRECHEN",
     "refreshed": "VOR {{seconds}}s AKTUALISIERT"
   },
+  "drag": {
+    "drop_here": "ABBILD HIER ABLEGEN"
+  },
   "empty": {
     "default_label": "ABBILD WÄHLEN, UM ZU BEGINNEN",
     "no_done": "NOCH KEINE ABGESCHLOSSENEN AUFGABEN.",

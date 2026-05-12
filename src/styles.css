@@ -787,3 +787,34 @@ input,select{font:inherit;color:inherit}
 .log-state-badge--success{background:var(--ink);color:var(--bone);border-color:var(--ink)}
 .log-state-badge--cancelled{background:var(--bone);color:var(--mute);border-color:var(--mute)}
 .log-state-badge--running{background:var(--bone);color:var(--ink)}
+
+/* ─────────── Drag-drop overlay ─────────── */
+
+.drag-overlay{
+  position:fixed;inset:0;z-index:9000;
+  display:flex;align-items:center;justify-content:center;
+  background:rgba(241,237,226,.92); /* semi-opaque --bone */
+  pointer-events:none;
+  animation:drag-overlay-in 120ms ease-out;
+}
+.drag-overlay-box{
+  display:flex;align-items:center;gap:18px;
+  padding:28px 44px;
+  background:var(--paper);
+  border:2.5px dashed var(--ink);
+  box-shadow:8px 8px 0 0 var(--ink);
+  font-size:22px;letter-spacing:.14em;font-weight:700;
+  color:var(--ink);
+  text-transform:uppercase;
+}
+.drag-overlay-bracket{
+  font-size:32px;font-weight:700;color:var(--ink);
+  line-height:1;
+}
+.drag-overlay-label{
+  white-space:nowrap;
+}
+@keyframes drag-overlay-in{
+  from{opacity:0}
+  to{opacity:1}
+}

@@ -189,6 +189,9 @@
     "cancel": "[ ESC ] CANCELAR",
     "refreshed": "ACTUALIZADO HACE {{seconds}}s"
   },
+  "drag": {
+    "drop_here": "SUELTA LA IMAGEN AQUÍ"
+  },
   "empty": {
     "default_label": "ELIGE UNA IMAGEN DE DISCO PARA EMPEZAR",
     "no_done": "AÚN NO HAY TRABAJOS COMPLETADOS.",
