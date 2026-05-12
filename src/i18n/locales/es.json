@@ -63,7 +63,7 @@
     },
     "logs": {
       "title": "REGISTROS DE GRABACIÓN.",
-      "sub": "HISTORIAL Y LÍNEAS DE LOG POR GRABACIÓN, ALMACENADO LOCALMENTE.",
+      "sub": "CADA GRABACIÓN, ALMACENADA LOCALMENTE.",
       "name": "LOGS"
     }
   },
@@ -301,34 +301,60 @@
     }
   },
   "logs": {
+    "title": "REGISTROS DE GRABACIÓN.",
+    "sub": "CADA GRABACIÓN, ALMACENADA LOCALMENTE.",
     "loading": "CARGANDO…",
     "refresh": "[ R ] ACTUALIZAR",
-    "clear_history": "BORRAR HISTORIAL",
-    "confirm_clear": "¿Borrar todo el historial de grabaciones? No se puede deshacer.",
-    "history": {
-      "heading": "HISTORIAL",
-      "empty": "AÚN NO HAY GRABACIONES."
+    "refresh_label": "ACTUALIZAR",
+    "empty": "AÚN NO HAY HISTORIAL. GRABA UN DISCO PARA EMPEZAR.",
+    "empty_hint": "INICIA UNA ESCRITURA DESDE LA COLA — APARECERÁ AQUÍ.",
+    "no_match": "NINGUNA FILA COINCIDE CON EL FILTRO.",
+    "filter": {
+      "all": "TODO",
+      "done": "OK",
+      "failed": "FALLIDO"
+    },
+    "col": {
+      "when": "CUÁNDO",
+      "image": "IMAGEN",
+      "target": "DESTINO",
+      "state": "ESTADO",
+      "duration": "DURACIÓN",
+      "throughput": "MB/S"
     },
     "detail": {
-      "pick": "ELIGE UNA GRABACIÓN A LA IZQUIERDA PARA VER LOS LOGS.",
-      "empty": "INICIA UNA GRABACIÓN PARA VER SU LOG AQUÍ.",
-      "no_lines": "NO HAY LÍNEAS DE LOG PARA ESTA GRABACIÓN.",
-      "write_avg": "ESCRITURA PROM."
+      "image": "IMAGEN",
+      "target": "DESTINO",
+      "verification": "VERIFICACIÓN",
+      "error": "ERROR"
+    },
+    "kv": {
+      "path": "RUTA",
+      "name": "NOMBRE",
+      "size": "TAMAÑO",
+      "bytes_written": "BYTES ESCRITOS",
+      "device": "DISPOSITIVO",
+      "started": "INICIO",
+      "finished": "FIN",
+      "duration": "DURACIÓN",
+      "sha_source": "SHA-256 ORIGEN",
+      "sha_readback": "SHA-256 LECTURA",
+      "verify_match": "COINCIDENCIA",
+      "mismatches": "DESAJUSTES",
+      "avg_write": "ESCRITURA PROM.",
+      "avg_verify": "VERIFICACIÓN PROM.",
+      "error_code": "CÓDIGO DE ERROR",
+      "error_message": "MENSAJE"
+    },
+    "match": {
+      "ok": "✓ COINCIDE",
+      "mismatch": "✕ DESAJUSTE"
     },
     "state": {
       "running": "EN CURSO",
       "success": "OK",
       "error": "ERROR",
       "cancelled": "CANCELADO"
-    },
-    "relative": {
-      "just_now": "AHORA",
-      "minutes_one": "HACE {{count}} MIN",
-      "minutes_other": "HACE {{count}} MIN",
-      "hours_one": "HACE {{count}} HORA",
-      "hours_other": "HACE {{count}} HORAS",
-      "days_one": "HACE {{count}} DÍA",
-      "days_other": "HACE {{count}} DÍAS"
     }
   }
 }

@@ -6,7 +6,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { open } from '@tauri-apps/plugin-dialog';
 import {
   WindowChrome, Sidebar, DangerBanner, Toolbar,
-  JobRow, DiskPickerSheet, PrefsView, PREFS_DEFAULTS,
+  JobRow, DiskPickerSheet, LogsView, PrefsView, PREFS_DEFAULTS,
 } from './components.jsx';
 import i18n from './i18n/index.js';
 import {

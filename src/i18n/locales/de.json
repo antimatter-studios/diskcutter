@@ -63,7 +63,7 @@
     },
     "logs": {
       "title": "BRENN-LOGS.",
-      "sub": "VERLAUF UND LOG-ZEILEN PRO BRENNVORGANG, LOKAL GESPEICHERT.",
+      "sub": "JEDER BRENNVORGANG, LOKAL GESPEICHERT.",
       "name": "LOGS"
     }
   },
@@ -301,34 +301,60 @@
     }
   },
   "logs": {
+    "title": "BRENN-LOGS.",
+    "sub": "JEDER BRENNVORGANG, LOKAL GESPEICHERT.",
     "loading": "LÄDT…",
     "refresh": "[ R ] AKTUALISIEREN",
-    "clear_history": "VERLAUF LÖSCHEN",
-    "confirm_clear": "Gesamten Brenn-Verlauf löschen? Kann nicht rückgängig gemacht werden.",
-    "history": {
-      "heading": "BRENN-VERLAUF",
-      "empty": "NOCH KEINE BRENNVORGÄNGE."
+    "refresh_label": "AKTUALISIEREN",
+    "empty": "NOCH KEIN VERLAUF. BRENNE EINE DISK, UM ZU BEGINNEN.",
+    "empty_hint": "STARTE EINEN SCHREIBVORGANG AUS DER WARTESCHLANGE — DANN ERSCHEINT ER HIER.",
+    "no_match": "KEINE EINTRÄGE PASSEN ZUM FILTER.",
+    "filter": {
+      "all": "ALLE",
+      "done": "FERTIG",
+      "failed": "FEHLER"
+    },
+    "col": {
+      "when": "WANN",
+      "image": "IMAGE",
+      "target": "ZIEL",
+      "state": "STATUS",
+      "duration": "DAUER",
+      "throughput": "MB/S"
     },
     "detail": {
-      "pick": "WÄHLE LINKS EINEN BRENNVORGANG AUS.",
-      "empty": "STARTE EINEN BRENNVORGANG, UM HIER LOGS ZU SEHEN.",
-      "no_lines": "KEINE LOG-ZEILEN FÜR DIESEN BRENNVORGANG.",
-      "write_avg": "DURCHSCHN. SCHREIB"
+      "image": "IMAGE",
+      "target": "ZIEL",
+      "verification": "VERIFIKATION",
+      "error": "FEHLER"
+    },
+    "kv": {
+      "path": "PFAD",
+      "name": "NAME",
+      "size": "GRÖSSE",
+      "bytes_written": "BYTES GESCHRIEBEN",
+      "device": "GERÄT",
+      "started": "GESTARTET",
+      "finished": "BEENDET",
+      "duration": "DAUER",
+      "sha_source": "SHA-256 QUELLE",
+      "sha_readback": "SHA-256 RÜCKLESEN",
+      "verify_match": "VERIFIKATION",
+      "mismatches": "ABWEICHUNGEN",
+      "avg_write": "DURCHSCHN. SCHREIB",
+      "avg_verify": "DURCHSCHN. VERIFY",
+      "error_code": "FEHLERCODE",
+      "error_message": "NACHRICHT"
+    },
+    "match": {
+      "ok": "✓ ÜBEREINSTIMMUNG",
+      "mismatch": "✕ ABWEICHUNG"
     },
     "state": {
       "running": "LÄUFT",
       "success": "OK",
       "error": "FEHLER",
       "cancelled": "ABGEBROCHEN"
-    },
-    "relative": {
-      "just_now": "GERADE EBEN",
-      "minutes_one": "VOR {{count}} MIN",
-      "minutes_other": "VOR {{count}} MIN",
-      "hours_one": "VOR {{count}} STD",
-      "hours_other": "VOR {{count}} STD",
-      "days_one": "VOR {{count}} TAG",
-      "days_other": "VOR {{count}} TAGEN"
     }
   }
 }

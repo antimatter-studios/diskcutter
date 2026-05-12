@@ -63,7 +63,7 @@
     },
     "logs": {
       "title": "BURN LOGS.",
-      "sub": "PER-BURN HISTORY AND LOG LINES, PERSISTED IN THE LOCAL DB.",
+      "sub": "EVERY BURN, PERSISTED IN THE LOCAL DB.",
       "name": "LOGS"
     }
   },
@@ -301,34 +301,60 @@
     }
   },
   "logs": {
+    "title": "BURN LOGS.",
+    "sub": "EVERY BURN, PERSISTED IN THE LOCAL DB.",
     "loading": "LOADING…",
     "refresh": "[ R ] REFRESH",
-    "clear_history": "CLEAR HISTORY",
-    "confirm_clear": "Clear all burn history? This cannot be undone.",
-    "history": {
-      "heading": "BURN HISTORY",
-      "empty": "NO BURNS RECORDED YET."
+    "refresh_label": "REFRESH",
+    "empty": "NO HISTORY YET. BURN A DISK TO POPULATE.",
+    "empty_hint": "START A WRITE FROM THE QUEUE — IT WILL SHOW UP HERE.",
+    "no_match": "NO ROWS MATCH THIS FILTER.",
+    "filter": {
+      "all": "ALL",
+      "done": "DONE",
+      "failed": "FAILED"
+    },
+    "col": {
+      "when": "WHEN",
+      "image": "IMAGE",
+      "target": "TARGET",
+      "state": "STATE",
+      "duration": "DURATION",
+      "throughput": "MB/S"
     },
     "detail": {
-      "pick": "PICK A BURN ON THE LEFT TO VIEW LOGS.",
-      "empty": "RUN A BURN TO SEE ITS LOG HERE.",
-      "no_lines": "NO LOG LINES FOR THIS BURN.",
-      "write_avg": "AVG WRITE"
+      "image": "IMAGE",
+      "target": "TARGET",
+      "verification": "VERIFICATION",
+      "error": "ERROR"
+    },
+    "kv": {
+      "path": "PATH",
+      "name": "NAME",
+      "size": "SIZE",
+      "bytes_written": "BYTES WRITTEN",
+      "device": "DEVICE",
+      "started": "STARTED",
+      "finished": "FINISHED",
+      "duration": "DURATION",
+      "sha_source": "SHA-256 SOURCE",
+      "sha_readback": "SHA-256 READBACK",
+      "verify_match": "VERIFY MATCH",
+      "mismatches": "MISMATCHES",
+      "avg_write": "AVG WRITE",
+      "avg_verify": "AVG VERIFY",
+      "error_code": "ERROR CODE",
+      "error_message": "MESSAGE"
+    },
+    "match": {
+      "ok": "✓ MATCH",
+      "mismatch": "✕ MISMATCH"
     },
     "state": {
       "running": "RUNNING",
       "success": "OK",
       "error": "ERROR",
       "cancelled": "CANCELLED"
-    },
-    "relative": {
-      "just_now": "JUST NOW",
-      "minutes_one": "{{count}} MIN AGO",
-      "minutes_other": "{{count}} MIN AGO",
-      "hours_one": "{{count}} HOUR AGO",
-      "hours_other": "{{count}} HOURS AGO",
-      "days_one": "{{count}} DAY AGO",
-      "days_other": "{{count}} DAYS AGO"
     }
   }
 }

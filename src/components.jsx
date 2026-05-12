@@ -741,24 +741,25 @@ function PrefsControl({ field, value, onChange }) {
 
 /* ─────────── Logs view ─────────── */
 
-function formatLogTimestamp(ms) {
+// Field shape from `burn_history_list` (Rust → JSON, serde defaults so the
+// keys arrive snake_cased): id, job_id, image_path, image_name, image_bytes,
+// target_device, source_sha256, readback_sha256, verify_match, bytes_written,
+// elapsed_ms, avg_write_bps, avg_verify_bps, state, error_code, error_message,
+// started_at, finished_at.
+
+function formatLogTimestampShort(ms) {
   if (!ms) return '—';
   const d = new Date(ms);
   const pad = (n) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-function formatRelative(ms, t) {
-  if (!ms) return '—';
-  const diff = Math.max(0, Date.now() - ms);
-  const sec = Math.floor(diff / 1000);
-  if (sec < 60) return t('logs.relative.just_now');
-  const min = Math.floor(sec / 60);
-  if (min < 60) return t('logs.relative.minutes', { count: min });
-  const hr = Math.floor(min / 60);
-  if (hr < 24) return t('logs.relative.hours', { count: hr });
-  const day = Math.floor(hr / 24);
-  return t('logs.relative.days', { count: day });
+function formatMMSS(ms) {
+  if (ms == null) return '—';
+  const total = Math.floor(ms / 1000);
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
 }
 
 function shortDevice(device) {
@@ -766,27 +767,27 @@ function shortDevice(device) {
   return device.replace(/^\/dev\//, '');
 }
 
+function truncateMid(s, n) {
+  if (!s) return '—';
+  if (s.length <= n) return s;
+  const half = Math.floor((n - 1) / 2);
+  return `${s.slice(0, half)}…${s.slice(-half)}`;
+}
+
 function LogsView({ accent }) {
   const { t } = useTranslation();
   const [burns, setBurns] = React.useState([]);
-  const [selectedId, setSelectedId] = React.useState(null);
-  const [logs, setLogs] = React.useState([]);
   const [loading, setLoading] = React.useState(true);
-  const [logsLoading, setLogsLoading] = React.useState(false);
   const [error, setError] = React.useState(null);
-  const tailRef = React.useRef(null);
-  const selectedRef = React.useRef(null);
-
-  React.useEffect(() => { selectedRef.current = selectedId; }, [selectedId]);
+  const [filter, setFilter] = React.useState('all'); // 'all' | 'done' | 'failed'
+  const [expanded, setExpanded] = React.useState({}); // { [id]: bool }
 
   const refresh = React.useCallback(async () => {
+    setLoading(true);
     try {
       const rows = await invoke('burn_history_list', { limit: 500 });
-      setBurns(rows);
+      setBurns(Array.isArray(rows) ? rows : []);
       setError(null);
-      if (selectedRef.current == null && rows.length) {
-        setSelectedId(rows[0].id);
-      }
     } catch (e) {
       setError(String(e));
     } finally {
@@ -794,161 +795,182 @@ function LogsView({ accent }) {
     }
   }, []);
 
-  const loadLogs = React.useCallback(async (id) => {
-    if (id == null) { setLogs([]); return; }
-    setLogsLoading(true);
-    try {
-      const rows = await invoke('burn_logs_list', { burnId: id });
-      setLogs(rows);
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setLogsLoading(false);
-    }
-  }, []);
-
   React.useEffect(() => { refresh(); }, [refresh]);
-  React.useEffect(() => { loadLogs(selectedId); }, [selectedId, loadLogs]);
 
-  // Burn-job lifecycle events fire when a row in burn_history is created or
-  // updated, so refresh both the list and the visible log lines.
+  // Re-load when a new burn lands so the view stays current without manual refresh.
   React.useEffect(() => {
     let mounted = true;
     const subs = [];
-    const onActivity = () => {
-      if (!mounted) return;
-      refresh();
-      const id = selectedRef.current;
-      if (id != null) loadLogs(id);
-    };
-    listen('disk-cutter://job-update', onActivity).then((u) => subs.push(u));
+    const onActivity = () => { if (mounted) refresh(); };
     listen('disk-cutter://job-complete', onActivity).then((u) => subs.push(u));
     listen('disk-cutter://job-error', onActivity).then((u) => subs.push(u));
     return () => { mounted = false; subs.forEach((u) => u()); };
-  }, [refresh, loadLogs]);
+  }, [refresh]);
 
-  React.useEffect(() => {
-    if (tailRef.current) tailRef.current.scrollTop = tailRef.current.scrollHeight;
-  }, [logs]);
+  // Rows arrive newest-first from the backend (ORDER BY started_at DESC).
+  // Filter client-side per spec.
+  const filtered = React.useMemo(() => {
+    if (filter === 'done') return burns.filter((b) => b.state === 'success');
+    if (filter === 'failed') return burns.filter((b) => b.state === 'error' || b.state === 'cancelled');
+    return burns;
+  }, [burns, filter]);
 
-  const selected = burns.find((b) => b.id === selectedId) || null;
-
-  const onClear = async () => {
-    if (!burns.length) return;
-    if (!window.confirm(t('logs.confirm_clear'))) return;
-    try {
-      await invoke('burn_history_clear');
-      setSelectedId(null);
-      setLogs([]);
-      await refresh();
-    } catch (e) {
-      setError(String(e));
-    }
-  };
+  const toggle = (id) => setExpanded((e) => ({ ...e, [id]: !e[id] }));
 
   return (
-    <div className="logs-view">
-      <div className="log-history">
-        <div className="log-history-head mono small">
-          <span>{t('logs.history.heading')}</span>
-          <button className="picker-link" onClick={() => refresh()}>
-            {t('logs.refresh')}
-          </button>
+    <div className="logs">
+      <div className="logs-bar">
+        <div className="logs-filters" role="tablist">
+          <LogsFilterBtn k="all"    label={t('logs.filter.all')}    active={filter === 'all'}    onClick={setFilter} />
+          <LogsFilterBtn k="done"   label={t('logs.filter.done')}   active={filter === 'done'}   onClick={setFilter} />
+          <LogsFilterBtn k="failed" label={t('logs.filter.failed')} active={filter === 'failed'} onClick={setFilter} />
         </div>
-        {loading ? (
-          <div className="log-empty mono small">{t('logs.loading')}</div>
-        ) : burns.length === 0 ? (
-          <div className="log-empty mono small">{t('logs.history.empty')}</div>
-        ) : (
-          <div className="log-history-list">
-            {burns.map((b) => (
-              <button
-                key={b.id}
-                className={"log-history-row" + (b.id === selectedId ? " is-active" : "")}
-                onClick={() => setSelectedId(b.id)}
-              >
-                <div className="log-history-row1">
-                  <span className="log-history-name">{b.image_name || '—'}</span>
-                  <BurnStateBadge state={b.state} accent={accent} />
-                </div>
-                <div className="log-history-row2 mono small">
-                  <span>→ {shortDevice(b.target_device)}</span>
-                  <span className="dot">·</span>
-                  <span>{formatBytes(b.image_bytes)}</span>
-                  <span className="dot">·</span>
-                  <span>{formatRelative(b.started_at, t)}</span>
-                </div>
-              </button>
-            ))}
-          </div>
-        )}
-        <div className="log-history-foot">
-          <button
-            className={"btn btn-ghost" + (burns.length ? "" : " is-disabled")}
-            onClick={burns.length ? onClear : null}
-          >
-            [ {t('logs.clear_history')} ]
-          </button>
-        </div>
+        <button className="btn btn-ghost logs-refresh" onClick={refresh}>
+          <span className="btn-bracket">[</span> R <span className="btn-bracket">]</span> {t('logs.refresh_label')}
+        </button>
       </div>
 
-      <div className="log-detail">
-        {error && (
-          <div className="log-error mono small" style={{ background: accent }}>
-            {error}
-          </div>
-        )}
-        {!selected ? (
-          <div className="log-empty log-empty--big mono">
-            {burns.length ? t('logs.detail.pick') : t('logs.detail.empty')}
-          </div>
-        ) : (
-          <>
-            <div className="log-detail-head">
-              <div className="log-detail-title">{selected.image_name || '—'}</div>
-              <div className="log-detail-sub mono small">
-                <span>→ {selected.target_device}</span>
-                <span className="dot">·</span>
-                <span>{formatBytes(selected.image_bytes)}</span>
-                <span className="dot">·</span>
-                <span>{formatLogTimestamp(selected.started_at)}</span>
-                {selected.elapsed_ms != null && (
-                  <>
-                    <span className="dot">·</span>
-                    <span>{formatDuration(selected.elapsed_ms)}</span>
-                  </>
-                )}
-                {selected.avg_write_bps != null && (
-                  <>
-                    <span className="dot">·</span>
-                    <span>{formatBps(selected.avg_write_bps)} {t('logs.detail.write_avg')}</span>
-                  </>
-                )}
-              </div>
-              {selected.error_code && (
-                <div className="log-detail-err mono small" style={{ borderColor: accent, color: accent }}>
-                  {selected.error_code}{selected.error_message ? `: ${selected.error_message}` : ''}
-                </div>
-              )}
-            </div>
+      {error && (
+        <div className="logs-error mono small" style={{ background: accent, color: 'var(--on-accent)' }}>
+          {error}
+        </div>
+      )}
 
-            <div className="log-lines mono" ref={tailRef}>
-              {logsLoading && logs.length === 0 ? (
-                <div className="log-empty small">{t('logs.loading')}</div>
-              ) : logs.length === 0 ? (
-                <div className="log-empty small">{t('logs.detail.no_lines')}</div>
-              ) : (
-                logs.map((l) => (
-                  <div key={l.id} className={"log-line log-line--" + l.level}>
-                    <span className="log-line-ts">{formatLogTimestamp(l.ts)}</span>
-                    <span className="log-line-level">{l.level.toUpperCase()}</span>
-                    <span className="log-line-msg">{l.message}</span>
-                  </div>
-                ))
-              )}
+      {loading ? (
+        <div className="logs-loading mono small">{t('logs.loading')}</div>
+      ) : burns.length === 0 ? (
+        <LogsEmpty accent={accent} />
+      ) : filtered.length === 0 ? (
+        <div className="logs-loading mono small">{t('logs.no_match')}</div>
+      ) : (
+        <div className="logs-list">
+          <div className="logs-head mono small">
+            <span>{t('logs.col.when')}</span>
+            <span>{t('logs.col.image')}</span>
+            <span>{t('logs.col.target')}</span>
+            <span>{t('logs.col.state')}</span>
+            <span>{t('logs.col.duration')}</span>
+            <span>{t('logs.col.throughput')}</span>
+            <span />
+          </div>
+          {filtered.map((b) => (
+            <LogsRow
+              key={b.id}
+              row={b}
+              accent={accent}
+              expanded={!!expanded[b.id]}
+              onToggle={() => toggle(b.id)}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function LogsFilterBtn({ k, label, active, onClick }) {
+  return (
+    <button
+      type="button"
+      className={"logs-filter" + (active ? " is-active" : "")}
+      onClick={() => onClick(k)}
+      role="tab"
+      aria-selected={active}
+    >
+      {label}
+    </button>
+  );
+}
+
+function LogsRow({ row, accent, expanded, onToggle }) {
+  const { t } = useTranslation();
+  const isErr = row.state === 'error' || row.state === 'cancelled';
+  return (
+    <div className={"logs-row-wrap" + (expanded ? " is-open" : "") + (isErr ? " is-err" : "")}>
+      <button className="logs-row" onClick={onToggle}>
+        <span className="logs-when mono small">{formatLogTimestampShort(row.started_at)}</span>
+        <span className="logs-image" title={row.image_name || row.image_path}>
+          {truncateMid(row.image_name || row.image_path, 36)}
+        </span>
+        <span className="logs-target mono small">{shortDevice(row.target_device)}</span>
+        <span className="logs-badge">
+          <BurnStateBadge state={row.state} accent={accent} />
+        </span>
+        <span className="logs-dur mono small">{formatMMSS(row.elapsed_ms)}</span>
+        <span className="logs-thru mono small">{formatBps(row.avg_write_bps)}</span>
+        <span className="logs-chev">{expanded ? '▼' : '▶'}</span>
+      </button>
+      {expanded && <LogsRowDetail row={row} accent={accent} />}
+    </div>
+  );
+}
+
+function LogsRowDetail({ row, accent }) {
+  const { t } = useTranslation();
+  const mismatchCount = row.verify_match === false ? 1 : 0;
+  return (
+    <div className="logs-detail">
+      <div className="detail-grid">
+        <div className="detail-block">
+          <div className="detail-label">▌ {t('logs.detail.image')}</div>
+          <div className="detail-body">
+            <KV k={t('logs.kv.path')} v={row.image_path || '—'} mono wrap />
+            <KV k={t('logs.kv.name')} v={row.image_name || '—'} mono />
+            <KV k={t('logs.kv.size')} v={formatBytes(row.image_bytes)} mono />
+            <KV k={t('logs.kv.bytes_written')} v={row.bytes_written != null ? row.bytes_written.toLocaleString() : '—'} mono />
+          </div>
+        </div>
+
+        <div className="detail-block">
+          <div className="detail-label">▌ {t('logs.detail.target')}</div>
+          <div className="detail-body">
+            <KV k={t('logs.kv.device')} v={row.target_device || '—'} mono />
+            <KV k={t('logs.kv.started')} v={formatLogTimestampShort(row.started_at)} mono />
+            <KV k={t('logs.kv.finished')} v={row.finished_at ? formatLogTimestampShort(row.finished_at) : '—'} mono />
+            <KV k={t('logs.kv.duration')} v={formatDuration(row.elapsed_ms || 0)} mono />
+          </div>
+        </div>
+
+        <div className="detail-block detail-block--full">
+          <div className="detail-label">▌ {t('logs.detail.verification')}</div>
+          <div className="detail-body">
+            <KV k={t('logs.kv.sha_source')} v={row.source_sha256 || '—'} mono wrap />
+            <KV k={t('logs.kv.sha_readback')} v={row.readback_sha256 || '—'} mono wrap />
+            <KV
+              k={t('logs.kv.verify_match')}
+              v={row.verify_match == null ? '—' : row.verify_match ? t('logs.match.ok') : t('logs.match.mismatch')}
+              mono
+            />
+            <KV k={t('logs.kv.mismatches')} v={String(mismatchCount).padStart(3, '0')} mono />
+            <KV k={t('logs.kv.avg_write')} v={formatBps(row.avg_write_bps)} mono />
+            <KV k={t('logs.kv.avg_verify')} v={formatBps(row.avg_verify_bps)} mono />
+          </div>
+        </div>
+
+        {(row.error_code || row.error_message) && (
+          <div className="detail-block detail-block--full">
+            <div className="detail-label" style={{ color: accent }}>▌ {t('logs.detail.error')}</div>
+            <div className="detail-body">
+              <KV k={t('logs.kv.error_code')} v={row.error_code || '—'} mono />
+              <KV k={t('logs.kv.error_message')} v={row.error_message || '—'} mono wrap />
             </div>
-          </>
+          </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+function LogsEmpty({ accent }) {
+  const { t } = useTranslation();
+  return (
+    <div className="empty-state">
+      <div className="empty-glyph" style={{ borderColor: 'var(--ink)' }}>
+        <div className="empty-stripes" />
+        <div className="empty-label mono">{t('logs.empty')}</div>
+      </div>
+      <div className="empty-help mono">
+        <span style={{ color: accent }}>▶</span> {t('logs.empty_hint')}
       </div>
     </div>
   );
@@ -957,8 +979,13 @@ function LogsView({ accent }) {
 function BurnStateBadge({ state, accent }) {
   const { t } = useTranslation();
   const s = state || 'unknown';
-  const label = t(`logs.state.${s}`, { defaultValue: s.toUpperCase() });
-  const isErr = s === 'error';
+  const isOk = s === 'success';
+  const isErr = s === 'error' || s === 'cancelled';
+  const label = isOk
+    ? `✓ ${t('logs.state.success')}`
+    : isErr
+      ? `✕ ${t(`logs.state.${s}`, { defaultValue: t('logs.state.error') })}`
+      : t(`logs.state.${s}`, { defaultValue: s.toUpperCase() });
   const style = isErr ? { background: accent, color: 'var(--on-accent)', borderColor: accent } : {};
   return (
     <span className={"log-state-badge log-state-badge--" + s} style={style}>{label}</span>
