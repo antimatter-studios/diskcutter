@@ -26,6 +26,9 @@ import {
   addToast, reapExpired, dismissToast, defaultTtlMs,
 } from './toast.js';
 import { useFda } from './hooks/useFda.js';
+import {
+  playUnlock, playWriteStart, playVerifyStart, playSuccess, playError, playCancel,
+} from './audio.js';
 
 // Theme palette is sourced from CSS :root vars (--accent-1..4), so theme switching is just a CSS swap.
 function readThemeAccent(n, fallback) {
@@ -239,6 +242,13 @@ function App() {
     }
   }, [orphanPids, pushToast, t]);
 
+  // Audio cues: prefs change, but listeners are subscribed once. Refs let
+  // the listener bodies read the latest pref + per-job phase tracking
+  // without re-subscribing every render.
+  const prefsRef = useRef(prefs);
+  useEffect(() => { prefsRef.current = prefs; }, [prefs]);
+  const phaseRef = useRef(new Map()); // jobId → 'writing' | 'verifying'
+
   useEffect(() => {
     let mounted = true;
     const subs = [];
@@ -292,6 +302,43 @@ function App() {
           console.error('eject_disk failed', err);
           pushToast('warn', `Eject failed: ${err}`);
         });
+    }).then((u) => subs.push(u));
+
+    // Audio cues — sibling listeners that do only the WebAudio side-effects.
+    // The store's own listeners (inside attachQueueListeners above) handle
+    // queue-state mutation; these read prefs via ref so a toggle doesn't
+    // require re-subscribing, and use phaseRef to chime once per
+    // (job, phase) transition rather than on every progress tick.
+    listen('disk-cutter://job-update', (e) => {
+      if (!mounted) return;
+      const p = e.payload;
+      const prior = phaseRef.current.get(p.job_id);
+      if (p.state === 'writing' && prior !== 'writing') {
+        playWriteStart(prefsRef.current);
+        phaseRef.current.set(p.job_id, 'writing');
+      } else if (p.state === 'verifying' && prior !== 'verifying') {
+        playVerifyStart(prefsRef.current);
+        phaseRef.current.set(p.job_id, 'verifying');
+      }
+    }).then((u) => subs.push(u));
+
+    listen('disk-cutter://job-complete', (e) => {
+      if (!mounted) return;
+      phaseRef.current.delete(e.payload.job_id);
+      // Only chime when verify actually matched — silent failure on mismatch
+      // gets the error sting via job-error.
+      if (e.payload.verify_match) playSuccess(prefsRef.current);
+    }).then((u) => subs.push(u));
+
+    listen('disk-cutter://job-error', (e) => {
+      if (!mounted) return;
+      const f = e.payload;
+      phaseRef.current.delete(f.job_id);
+      if (f.error_code === 'ECANCELLED') {
+        playCancel(prefsRef.current);
+      } else {
+        playError(prefsRef.current);
+      }
     }).then((u) => subs.push(u));
 
     // URL fetch: progress as a transient toast every ~250ms; on
@@ -354,6 +401,18 @@ function App() {
       subs.forEach((u) => u());
     };
   }, [pushToast, t, fda.handleFdaError]);
+
+  // Unlock the audio context on the first user interaction so subsequent
+  // cues actually play. Browsers refuse to start a context without one.
+  useEffect(() => {
+    const unlock = () => playUnlock();
+    window.addEventListener('pointerdown', unlock, { once: true });
+    window.addEventListener('keydown', unlock, { once: true });
+    return () => {
+      window.removeEventListener('pointerdown', unlock);
+      window.removeEventListener('keydown', unlock);
+    };
+  }, []);
 
   const addImageFromPath = useCallback(async (path, copies) => {
     try {

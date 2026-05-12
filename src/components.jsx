@@ -1269,6 +1269,7 @@ const PREFS_SECTIONS = [
     key: 'behavior',
     fields: [
       { key: 'auto.eject', type: 'toggle' },
+      { key: 'sound.enabled', type: 'toggle' },
       { key: 'auto.clear_done.seconds', type: 'select',
         options: [
           { value: '0',   labelKey: 'prefs.auto_clear_done.off' },
@@ -1332,6 +1333,7 @@ const PREFS_DEFAULTS = {
   'update.channel': 'stable',
   'update.dev_endpoint': 'https://localhost:17780/updates.json',
   'debug.logging': 'false',
+  'sound.enabled': 'false',
 };
 
 function prefsLabelKey(configKey) {

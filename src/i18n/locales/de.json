@@ -388,6 +388,7 @@
       "theme": "DESIGN",
       "density": "DICHTE",
       "auto_eject": "AUTO-AUSWURF",
+      "sound_enabled": "AUDIO-SIGNALE",
       "auto_clear_done_seconds": "AUTO. FERTIGE LÖSCHEN",
       "catalog_url": "KATALOG-URL",
       "catalog_refresh_hours": "KATALOG-AKTUALISIERUNG",

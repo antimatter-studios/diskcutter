@@ -388,6 +388,7 @@
       "theme": "TEMA",
       "density": "DENSIDAD",
       "auto_eject": "AUTO EXPULSAR",
+      "sound_enabled": "SEÑALES DE AUDIO",
       "auto_clear_done_seconds": "AUTO LIMPIAR HECHO",
       "catalog_url": "URL DEL CATÁLOGO",
       "catalog_refresh_hours": "ACTUALIZAR CATÁLOGO",
