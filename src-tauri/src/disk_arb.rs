@@ -42,11 +42,8 @@ mod ffi {
     pub type DADiskMountApprovalCallback =
         unsafe extern "C" fn(disk: DADiskRef, context: *mut c_void) -> DADissenterRef;
 
-    pub type DADiskUnmountCallback = unsafe extern "C" fn(
-        disk: DADiskRef,
-        dissenter: DADissenterRef,
-        context: *mut c_void,
-    );
+    pub type DADiskUnmountCallback =
+        unsafe extern "C" fn(disk: DADiskRef, dissenter: DADissenterRef, context: *mut c_void);
 
     pub const K_CF_STRING_ENCODING_UTF8: u32 = 0x08000100;
     pub const K_DA_RETURN_NOT_PERMITTED: DAReturn = 0xF8DA_0002_u32 as i32;
@@ -150,7 +147,11 @@ unsafe extern "C" fn mount_approval_cb(disk: DADiskRef, ctx: *mut c_void) -> DAD
 
 type UnmountReply = Mutex<Option<mpsc::Sender<Result<(), String>>>>;
 
-unsafe extern "C" fn unmount_done_cb(_disk: DADiskRef, dissenter: DADissenterRef, ctx: *mut c_void) {
+unsafe extern "C" fn unmount_done_cb(
+    _disk: DADiskRef,
+    dissenter: DADissenterRef,
+    ctx: *mut c_void,
+) {
     if ctx.is_null() {
         return;
     }
@@ -239,11 +240,7 @@ impl DiskClaim {
 
             CFRunLoopRun();
 
-            DAUnregisterApprovalCallback(
-                session,
-                mount_approval_cb as *const c_void,
-                approval_ctx,
-            );
+            DAUnregisterApprovalCallback(session, mount_approval_cb as *const c_void, approval_ctx);
             DASessionUnscheduleFromRunLoop(session, runloop, kCFRunLoopDefaultMode);
             CFRelease(disk);
             CFRelease(session);
