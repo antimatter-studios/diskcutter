@@ -1,3 +1,4 @@
+pub mod backup;
 mod db;
 #[cfg(target_os = "macos")]
 mod disk_arb;
