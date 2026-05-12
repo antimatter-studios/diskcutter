@@ -1,7 +1,10 @@
 import React from 'react';
 import { Trans, useTranslation } from 'react-i18next';
+import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { availableLanguages } from './i18n/index.js';
+import i18n, { availableLanguages } from './i18n/index.js';
+import { formatBytes, formatBps, formatDuration } from './format.js';
 
 const winCtl = {
   minimize: () => getCurrentWindow().minimize(),
@@ -73,7 +76,7 @@ function LinBar({ title }) {
 /* ─────────── Sidebar ─────────── */
 
 function Sidebar({ active, onSelect, jobs, accent, sessionStats }) {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
   const failedCount = jobs.filter(j => j.state === 'error').length;
   const counts = {
     queue: jobs.length,
@@ -94,25 +97,13 @@ function Sidebar({ active, onSelect, jobs, accent, sessionStats }) {
       <nav className="nav">
         <SideItem k="queue" label={t('sidebar.nav.queue')} count={counts.queue} active={active==='queue'} onClick={onSelect} accent={accent} hazard={failedCount > 0} />
         <SideItem k="logs"  label={t('sidebar.nav.logs')}  active={active==='logs'} onClick={onSelect} />
+        <SideItem k="prefs" label={t('sidebar.nav.prefs')} active={active==='prefs'} onClick={onSelect} />
       </nav>
 
       <div className="side-foot">
         <div className="side-foot-row"><span>{t('sidebar.foot.session')}</span><b>{stats.session}</b></div>
         <div className="side-foot-row"><span>{t('sidebar.foot.written')}</span><b>{stats.written}</b></div>
         <div className="side-foot-row"><span>{t('sidebar.foot.avg')}</span><b>{stats.avg}</b></div>
-        <div className="side-lang-row">
-          <span>{t('language.label')}</span>
-          <select
-            className="side-lang-select"
-            value={i18n.language}
-            onChange={(e) => i18n.changeLanguage(e.target.value)}
-            aria-label={t('language.label')}
-          >
-            {availableLanguages.map((l) => (
-              <option key={l.code} value={l.code}>{l.name}</option>
-            ))}
-          </select>
-        </div>
       </div>
     </aside>
   );
@@ -136,8 +127,11 @@ function SideItem({ k, label, count, active, onClick, accent, hazard }) {
 
 function DangerBanner({ confirmed, onConfirm, jobs, accent }) {
   const { t } = useTranslation();
-  const targets = jobs.filter(j => j.target).length;
-  if (targets === 0) return null;
+  // Banner is purely a pre-flight warning + confirmation gate. Once the user
+  // has clicked START there are no `idle` jobs left to confirm — hide it.
+  const idleWithTarget = jobs.filter(j => j.state === 'idle' && j.target).length;
+  if (idleWithTarget === 0) return null;
+  const targets = idleWithTarget;
   return (
     <div className="banner" style={{ '--hazard': accent }}>
       <div className="banner-stripes" />
@@ -166,7 +160,7 @@ function DangerBanner({ confirmed, onConfirm, jobs, accent }) {
 
 /* ─────────── Toolbar ─────────── */
 
-function Toolbar({ onAdd, onStart, onClearDone, confirmed, jobs, accent, busy, density, onDensity }) {
+function Toolbar({ onAdd, onStart, onClearDone, confirmed, jobs, accent, busy }) {
   const { t } = useTranslation();
   const ready = confirmed && jobs.some(j => j.state === 'idle' && j.target);
   const hasDone = jobs.some(j => j.state === 'success');
@@ -180,10 +174,6 @@ function Toolbar({ onAdd, onStart, onClearDone, confirmed, jobs, accent, busy, d
         <button className={"btn btn-ghost" + (hasDone ? "" : " is-disabled")} onClick={hasDone ? onClearDone : null}>[ {t('toolbar.clear_done')} ]</button>
       </div>
       <div className="toolbar-right">
-        <div className="density-toggle">
-          <button data-on={density==='compact'} onClick={() => onDensity('compact')}>·</button>
-          <button data-on={density==='comfy'} onClick={() => onDensity('comfy')}>≡</button>
-        </div>
         <button
           className={"btn btn-primary" + (ready ? "" : " is-disabled")}
           style={{ background: ready ? accent : 'var(--disabled)' }}
@@ -572,7 +562,411 @@ function DiskPickerSheet({ open, disks, jobImage, onPick, onClose, onRefresh, ac
   );
 }
 
+/* ─────────── Prefs view ─────────── */
+
+// Schema for every config key the UI manages. The order here drives render
+// order within each section.
+const PREFS_SECTIONS = [
+  {
+    key: 'performance',
+    fields: [
+      { key: 'writer.impl', type: 'select',
+        options: [
+          { value: 'raw', labelKey: 'prefs.writer_impl.raw' },
+          { value: 'block', labelKey: 'prefs.writer_impl.block' },
+          { value: 'pipelined', labelKey: 'prefs.writer_impl.pipelined' },
+        ] },
+      { key: 'chunk.bytes', type: 'select',
+        options: [
+          { value: '262144',   label: '256 KiB' },
+          { value: '524288',   label: '512 KiB' },
+          { value: '1048576',  label: '1 MiB' },
+          { value: '2097152',  label: '2 MiB' },
+          { value: '4194304',  label: '4 MiB' },
+          { value: '8388608',  label: '8 MiB' },
+          { value: '16777216', label: '16 MiB' },
+        ] },
+      { key: 'workers.count', type: 'select',
+        options: ['1','2','4','8','16'].map((v) => ({ value: v, label: v })) },
+      { key: 'queue.depth', type: 'select',
+        options: ['4','8','15','32','64'].map((v) => ({ value: v, label: v })) },
+      { key: 'verify.skip', type: 'toggle' },
+      { key: 'hash.algo', type: 'select',
+        options: [
+          { value: 'sha256', label: 'sha256' },
+          { value: 'xxhash', label: 'xxhash' },
+        ] },
+      { key: 'max.mismatches', type: 'select',
+        options: ['16','64','256','1024'].map((v) => ({ value: v, label: v })) },
+    ],
+  },
+  {
+    key: 'display',
+    fields: [
+      { key: 'language', type: 'language' },
+      { key: 'theme', type: 'select',
+        options: [
+          { value: 'light', labelKey: 'prefs.theme.light' },
+          { value: 'dark',  labelKey: 'prefs.theme.dark' },
+        ] },
+      { key: 'density', type: 'select',
+        options: [
+          { value: 'compact', labelKey: 'prefs.density.compact' },
+          { value: 'comfy',   labelKey: 'prefs.density.comfy' },
+        ] },
+    ],
+  },
+  {
+    key: 'behavior',
+    fields: [
+      { key: 'auto.eject', type: 'toggle' },
+      { key: 'auto.clear_done.seconds', type: 'select',
+        options: [
+          { value: '0',   labelKey: 'prefs.auto_clear_done.off' },
+          { value: '30',  labelKey: 'prefs.auto_clear_done.30s' },
+          { value: '60',  labelKey: 'prefs.auto_clear_done.60s' },
+          { value: '300', labelKey: 'prefs.auto_clear_done.5m' },
+          { value: '600', labelKey: 'prefs.auto_clear_done.10m' },
+        ] },
+    ],
+  },
+];
+
+// Keep this in sync with App.jsx — both consult the same defaults when
+// hydrating from a half-populated config table.
+const PREFS_DEFAULTS = {
+  'writer.impl': 'pipelined',
+  'chunk.bytes': '1048576',
+  'workers.count': '4',
+  'queue.depth': '15',
+  'verify.skip': 'false',
+  'hash.algo': 'sha256',
+  'max.mismatches': '256',
+  'language': '',
+  'theme': 'light',
+  'density': 'comfy',
+  'auto.eject': 'false',
+  'auto.clear_done.seconds': '0',
+};
+
+function prefsLabelKey(configKey) {
+  // "writer.impl" → "prefs.label.writer_impl"
+  return 'prefs.label.' + configKey.replaceAll('.', '_');
+}
+
+function PrefsView({ values, onChange }) {
+  const { t } = useTranslation();
+  return (
+    <div className="prefs">
+      {PREFS_SECTIONS.map((sect) => (
+        <div key={sect.key} className="detail-block prefs-block">
+          <div className="detail-label">▌ {t('prefs.section.' + sect.key)}</div>
+          <div className="prefs-rows">
+            {sect.fields.map((f) => (
+              <PrefsRow
+                key={f.key}
+                field={f}
+                value={values[f.key] ?? PREFS_DEFAULTS[f.key] ?? ''}
+                onChange={(v) => onChange(f.key, v)}
+              />
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function PrefsRow({ field, value, onChange }) {
+  const { t } = useTranslation();
+  const label = t(prefsLabelKey(field.key));
+  return (
+    <div className="prefs-row">
+      <div className="prefs-row-k mono">{label}</div>
+      <div className="prefs-row-v">
+        <PrefsControl field={field} value={value} onChange={onChange} />
+      </div>
+    </div>
+  );
+}
+
+function PrefsControl({ field, value, onChange }) {
+  const { t } = useTranslation();
+  if (field.type === 'toggle') {
+    const on = value === 'true';
+    return (
+      <button
+        type="button"
+        className={"prefs-toggle" + (on ? " is-on" : "")}
+        role="switch"
+        aria-checked={on}
+        onClick={() => onChange(on ? 'false' : 'true')}
+      >
+        <span className="prefs-toggle-track">
+          <span className="prefs-toggle-thumb" />
+        </span>
+        <span className="prefs-toggle-label mono">
+          {on ? t('prefs.toggle.on') : t('prefs.toggle.off')}
+        </span>
+      </button>
+    );
+  }
+  if (field.type === 'language') {
+    return (
+      <select
+        className="prefs-select mono"
+        value={value || i18n.language}
+        onChange={(e) => onChange(e.target.value)}
+      >
+        {availableLanguages.map((l) => (
+          <option key={l.code} value={l.code}>{l.name}</option>
+        ))}
+      </select>
+    );
+  }
+  return (
+    <select
+      className="prefs-select mono"
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+    >
+      {field.options.map((o) => (
+        <option key={o.value} value={o.value}>
+          {o.labelKey ? t(o.labelKey) : o.label}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+/* ─────────── Logs view ─────────── */
+
+function formatLogTimestamp(ms) {
+  if (!ms) return '—';
+  const d = new Date(ms);
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+function formatRelative(ms, t) {
+  if (!ms) return '—';
+  const diff = Math.max(0, Date.now() - ms);
+  const sec = Math.floor(diff / 1000);
+  if (sec < 60) return t('logs.relative.just_now');
+  const min = Math.floor(sec / 60);
+  if (min < 60) return t('logs.relative.minutes', { count: min });
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return t('logs.relative.hours', { count: hr });
+  const day = Math.floor(hr / 24);
+  return t('logs.relative.days', { count: day });
+}
+
+function shortDevice(device) {
+  if (!device) return '—';
+  return device.replace(/^\/dev\//, '');
+}
+
+function LogsView({ accent }) {
+  const { t } = useTranslation();
+  const [burns, setBurns] = React.useState([]);
+  const [selectedId, setSelectedId] = React.useState(null);
+  const [logs, setLogs] = React.useState([]);
+  const [loading, setLoading] = React.useState(true);
+  const [logsLoading, setLogsLoading] = React.useState(false);
+  const [error, setError] = React.useState(null);
+  const tailRef = React.useRef(null);
+  const selectedRef = React.useRef(null);
+
+  React.useEffect(() => { selectedRef.current = selectedId; }, [selectedId]);
+
+  const refresh = React.useCallback(async () => {
+    try {
+      const rows = await invoke('burn_history_list', { limit: 500 });
+      setBurns(rows);
+      setError(null);
+      if (selectedRef.current == null && rows.length) {
+        setSelectedId(rows[0].id);
+      }
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const loadLogs = React.useCallback(async (id) => {
+    if (id == null) { setLogs([]); return; }
+    setLogsLoading(true);
+    try {
+      const rows = await invoke('burn_logs_list', { burnId: id });
+      setLogs(rows);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setLogsLoading(false);
+    }
+  }, []);
+
+  React.useEffect(() => { refresh(); }, [refresh]);
+  React.useEffect(() => { loadLogs(selectedId); }, [selectedId, loadLogs]);
+
+  // Burn-job lifecycle events fire when a row in burn_history is created or
+  // updated, so refresh both the list and the visible log lines.
+  React.useEffect(() => {
+    let mounted = true;
+    const subs = [];
+    const onActivity = () => {
+      if (!mounted) return;
+      refresh();
+      const id = selectedRef.current;
+      if (id != null) loadLogs(id);
+    };
+    listen('disk-cutter://job-update', onActivity).then((u) => subs.push(u));
+    listen('disk-cutter://job-complete', onActivity).then((u) => subs.push(u));
+    listen('disk-cutter://job-error', onActivity).then((u) => subs.push(u));
+    return () => { mounted = false; subs.forEach((u) => u()); };
+  }, [refresh, loadLogs]);
+
+  React.useEffect(() => {
+    if (tailRef.current) tailRef.current.scrollTop = tailRef.current.scrollHeight;
+  }, [logs]);
+
+  const selected = burns.find((b) => b.id === selectedId) || null;
+
+  const onClear = async () => {
+    if (!burns.length) return;
+    if (!window.confirm(t('logs.confirm_clear'))) return;
+    try {
+      await invoke('burn_history_clear');
+      setSelectedId(null);
+      setLogs([]);
+      await refresh();
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
+  return (
+    <div className="logs-view">
+      <div className="log-history">
+        <div className="log-history-head mono small">
+          <span>{t('logs.history.heading')}</span>
+          <button className="picker-link" onClick={() => refresh()}>
+            {t('logs.refresh')}
+          </button>
+        </div>
+        {loading ? (
+          <div className="log-empty mono small">{t('logs.loading')}</div>
+        ) : burns.length === 0 ? (
+          <div className="log-empty mono small">{t('logs.history.empty')}</div>
+        ) : (
+          <div className="log-history-list">
+            {burns.map((b) => (
+              <button
+                key={b.id}
+                className={"log-history-row" + (b.id === selectedId ? " is-active" : "")}
+                onClick={() => setSelectedId(b.id)}
+              >
+                <div className="log-history-row1">
+                  <span className="log-history-name">{b.image_name || '—'}</span>
+                  <BurnStateBadge state={b.state} accent={accent} />
+                </div>
+                <div className="log-history-row2 mono small">
+                  <span>→ {shortDevice(b.target_device)}</span>
+                  <span className="dot">·</span>
+                  <span>{formatBytes(b.image_bytes)}</span>
+                  <span className="dot">·</span>
+                  <span>{formatRelative(b.started_at, t)}</span>
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
+        <div className="log-history-foot">
+          <button
+            className={"btn btn-ghost" + (burns.length ? "" : " is-disabled")}
+            onClick={burns.length ? onClear : null}
+          >
+            [ {t('logs.clear_history')} ]
+          </button>
+        </div>
+      </div>
+
+      <div className="log-detail">
+        {error && (
+          <div className="log-error mono small" style={{ background: accent }}>
+            {error}
+          </div>
+        )}
+        {!selected ? (
+          <div className="log-empty log-empty--big mono">
+            {burns.length ? t('logs.detail.pick') : t('logs.detail.empty')}
+          </div>
+        ) : (
+          <>
+            <div className="log-detail-head">
+              <div className="log-detail-title">{selected.image_name || '—'}</div>
+              <div className="log-detail-sub mono small">
+                <span>→ {selected.target_device}</span>
+                <span className="dot">·</span>
+                <span>{formatBytes(selected.image_bytes)}</span>
+                <span className="dot">·</span>
+                <span>{formatLogTimestamp(selected.started_at)}</span>
+                {selected.elapsed_ms != null && (
+                  <>
+                    <span className="dot">·</span>
+                    <span>{formatDuration(selected.elapsed_ms)}</span>
+                  </>
+                )}
+                {selected.avg_write_bps != null && (
+                  <>
+                    <span className="dot">·</span>
+                    <span>{formatBps(selected.avg_write_bps)} {t('logs.detail.write_avg')}</span>
+                  </>
+                )}
+              </div>
+              {selected.error_code && (
+                <div className="log-detail-err mono small" style={{ borderColor: accent, color: accent }}>
+                  {selected.error_code}{selected.error_message ? `: ${selected.error_message}` : ''}
+                </div>
+              )}
+            </div>
+
+            <div className="log-lines mono" ref={tailRef}>
+              {logsLoading && logs.length === 0 ? (
+                <div className="log-empty small">{t('logs.loading')}</div>
+              ) : logs.length === 0 ? (
+                <div className="log-empty small">{t('logs.detail.no_lines')}</div>
+              ) : (
+                logs.map((l) => (
+                  <div key={l.id} className={"log-line log-line--" + l.level}>
+                    <span className="log-line-ts">{formatLogTimestamp(l.ts)}</span>
+                    <span className="log-line-level">{l.level.toUpperCase()}</span>
+                    <span className="log-line-msg">{l.message}</span>
+                  </div>
+                ))
+              )}
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function BurnStateBadge({ state, accent }) {
+  const { t } = useTranslation();
+  const s = state || 'unknown';
+  const label = t(`logs.state.${s}`, { defaultValue: s.toUpperCase() });
+  const isErr = s === 'error';
+  const style = isErr ? { background: accent, color: 'var(--on-accent)', borderColor: accent } : {};
+  return (
+    <span className={"log-state-badge log-state-badge--" + s} style={style}>{label}</span>
+  );
+}
+
 export {
   WindowChrome, Sidebar, DangerBanner, Toolbar,
-  JobRow, DiskPickerSheet,
+  JobRow, DiskPickerSheet, LogsView,
+  PrefsView, PREFS_DEFAULTS,
 };
