@@ -1,8 +1,14 @@
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
+mod gzip;
+mod qcow2;
 mod raw;
+mod xz;
+pub use gzip::GzipReaderFactory;
+pub use qcow2::Qcow2ReaderFactory;
 pub use raw::RawReaderFactory;
+pub use xz::XzReaderFactory;
 
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct ImageInfo {
@@ -17,6 +23,7 @@ pub trait ImageReader: Read + Send {
 }
 
 pub trait ImageReaderFactory: Send + Sync {
+    #[allow(dead_code)]
     fn name(&self) -> &'static str;
     fn probe(&self, path: &Path) -> Option<ImageInfo>;
     fn open(&self, path: &Path) -> std::io::Result<Box<dyn ImageReader>>;
@@ -29,7 +36,12 @@ pub struct ImageReaderRegistry {
 impl ImageReaderRegistry {
     pub fn with_defaults() -> Self {
         Self {
-            factories: vec![Box::new(RawReaderFactory)],
+            factories: vec![
+                Box::new(Qcow2ReaderFactory),
+                Box::new(GzipReaderFactory),
+                Box::new(XzReaderFactory),
+                Box::new(RawReaderFactory),
+            ],
         }
     }
 
