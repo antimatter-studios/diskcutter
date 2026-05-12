@@ -90,6 +90,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "am-partitions"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "58b64e59d23e749e640cebe0f6855b52c9dc62f62907ace12f236ba02690e93d"
+dependencies = [
+ "am-fs-core",
+ "crc32fast",
+]
+
+[[package]]
 name = "android_system_properties"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -656,6 +666,7 @@ dependencies = [
  "am-img-vhd",
  "am-img-vhdx",
  "am-img-vmdk",
+ "am-partitions",
  "bzip2",
  "flate2",
  "libc",

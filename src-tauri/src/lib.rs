@@ -4,6 +4,7 @@ mod db;
 mod disk_arb;
 mod disks;
 mod helper;
+pub mod inspect;
 pub mod pipeline;
 pub mod readers;
 pub mod writers;
