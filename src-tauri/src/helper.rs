@@ -429,4 +429,75 @@ mod tests {
         assert!(s.contains("\"kind\":\"error\""));
         assert!(s.contains("\"error_code\":\"EIO\""));
     }
+
+    #[test]
+    fn arg_value_returns_first_match_when_key_repeats() {
+        // arg_value uses iter().find_map — the first occurrence wins.
+        let a = args(&["--image=/tmp/first.iso", "--image=/tmp/second.iso"]);
+        assert_eq!(arg_value(&a, "--image="), Some("/tmp/first.iso".into()));
+    }
+
+    #[test]
+    fn arg_value_preserves_equals_in_value() {
+        // strip_prefix only strips the leading prefix; any remaining '=' is part of the value.
+        let a = args(&["--foo=bar=baz"]);
+        assert_eq!(arg_value(&a, "--foo="), Some("bar=baz".into()));
+    }
+
+    #[test]
+    fn arg_value_preserves_multiple_equals_in_value() {
+        let a = args(&["--query=a=b=c=d"]);
+        assert_eq!(arg_value(&a, "--query="), Some("a=b=c=d".into()));
+    }
+
+    #[test]
+    fn arg_value_does_not_match_partial_prefix() {
+        // --imagex= shouldn't match a search for --image=
+        let a = args(&["--imagex=/tmp/x"]);
+        assert_eq!(arg_value(&a, "--image="), None);
+    }
+
+    #[test]
+    fn arg_value_returns_none_for_empty_args() {
+        let a: Vec<String> = Vec::new();
+        assert_eq!(arg_value(&a, "--image="), None);
+    }
+
+    #[test]
+    fn arg_value_skips_unrelated_args_to_find_match() {
+        let a = args(&["--foo=1", "--bar=2", "--target=/dev/disk7"]);
+        assert_eq!(arg_value(&a, "--target="), Some("/dev/disk7".into()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pick_device_io_unknown_writer_choice_falls_back_to_pipelined() {
+        // Already covered above for "bogus"; assert other shapes too to lock the contract.
+        for unknown in &["", "x", "weird", "RAW", "Block", "pipelined-2"] {
+            let io = pick_device_io("/dev/disk5", Some(unknown), 4, 15);
+            assert_eq!(io.name(), "raw-pipelined", "input {unknown:?}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pick_device_io_file_path_ignores_writer_choice() {
+        for choice in &[
+            None,
+            Some("raw"),
+            Some("block"),
+            Some("pipelined"),
+            Some("bogus"),
+        ] {
+            let io = pick_device_io("/tmp/foo.img", *choice, 4, 15);
+            assert_eq!(io.name(), "plain-file", "choice {choice:?}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pick_device_io_dev_path_with_none_picks_pipelined() {
+        let io = pick_device_io("/dev/disk0", None, 4, 15);
+        assert_eq!(io.name(), "raw-pipelined");
+    }
 }

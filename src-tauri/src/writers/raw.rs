@@ -217,4 +217,56 @@ mod tests {
     fn raw_device_io_name() {
         assert_eq!(RawDeviceIo.name(), "raw-device");
     }
+
+    #[test]
+    fn translate_to_raw_handles_empty_path() {
+        let p = PathBuf::from("");
+        // Empty path has no file_name, so it should pass through unchanged.
+        assert_eq!(translate_to_raw(&p), p);
+    }
+
+    #[test]
+    fn translate_to_raw_handles_dev_root_with_no_disk() {
+        let p = PathBuf::from("/dev/");
+        // "/dev/" has no file_name component to translate.
+        assert_eq!(translate_to_raw(&p), p);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn translate_to_raw_handles_disk_without_number() {
+        // "disk" with no number still matches the strip_prefix branch
+        // (rest = "") and should be prefixed with r.
+        assert_eq!(
+            translate_to_raw(&PathBuf::from("/dev/disk")),
+            PathBuf::from("/dev/rdisk")
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn translate_to_raw_handles_large_disk_number() {
+        assert_eq!(
+            translate_to_raw(&PathBuf::from("/dev/disk999")),
+            PathBuf::from("/dev/rdisk999")
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn translate_to_raw_handles_disk_with_partition_suffix() {
+        // diskNsM-style names also get the r prefix.
+        assert_eq!(
+            translate_to_raw(&PathBuf::from("/dev/disk5s1")),
+            PathBuf::from("/dev/rdisk5s1")
+        );
+    }
+
+    #[test]
+    fn translate_to_raw_leaves_unrelated_dev_paths_untouched() {
+        let p = PathBuf::from("/dev/null");
+        assert_eq!(translate_to_raw(&p), p);
+        let p2 = PathBuf::from("/dev/zero");
+        assert_eq!(translate_to_raw(&p2), p2);
+    }
 }

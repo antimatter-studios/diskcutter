@@ -198,3 +198,57 @@ impl Read for SimpleReader {
 }
 
 impl DeviceReader for SimpleReader {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pipelined_device_io_name() {
+        assert_eq!(PipelinedRawDeviceIo::new(4, 15).name(), "raw-pipelined");
+    }
+
+    #[test]
+    fn pipelined_default_uses_4_workers_and_15_queue_depth() {
+        let io = PipelinedRawDeviceIo::default();
+        assert_eq!(io.worker_threads, 4);
+        assert_eq!(io.queue_depth, 15);
+    }
+
+    #[test]
+    fn pipelined_new_stores_supplied_values() {
+        let io = PipelinedRawDeviceIo::new(8, 64);
+        assert_eq!(io.worker_threads, 8);
+        assert_eq!(io.queue_depth, 64);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn translate_to_raw_inserts_r_prefix() {
+        assert_eq!(
+            translate_to_raw(&PathBuf::from("/dev/disk5")),
+            PathBuf::from("/dev/rdisk5")
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn translate_to_raw_preserves_already_raw_device() {
+        assert_eq!(
+            translate_to_raw(&PathBuf::from("/dev/rdisk5")),
+            PathBuf::from("/dev/rdisk5")
+        );
+    }
+
+    #[test]
+    fn translate_to_raw_passes_non_disk_paths_through() {
+        let p = PathBuf::from("/tmp/some-file.img");
+        assert_eq!(translate_to_raw(&p), p);
+    }
+
+    #[test]
+    fn translate_to_raw_handles_empty_path() {
+        let p = PathBuf::from("");
+        assert_eq!(translate_to_raw(&p), p);
+    }
+}

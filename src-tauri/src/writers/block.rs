@@ -93,3 +93,109 @@ impl Read for BlockReader {
 
 #[cfg(unix)]
 impl DeviceReader for BlockReader {}
+
+#[cfg(all(unix, test))]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn block_device_io_name() {
+        assert_eq!(BlockDeviceIo.name(), "block-device");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn to_block_path_strips_r_prefix_for_rdisk() {
+        assert_eq!(
+            to_block_path(&PathBuf::from("/dev/rdisk5")),
+            PathBuf::from("/dev/disk5")
+        );
+        assert_eq!(
+            to_block_path(&PathBuf::from("/dev/rdisk0")),
+            PathBuf::from("/dev/disk0")
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn to_block_path_preserves_already_block_device() {
+        // /dev/diskN doesn't start with "rdisk" so it should pass through unchanged.
+        assert_eq!(
+            to_block_path(&PathBuf::from("/dev/disk5")),
+            PathBuf::from("/dev/disk5")
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn to_block_path_handles_rdisk_with_partition_suffix() {
+        assert_eq!(
+            to_block_path(&PathBuf::from("/dev/rdisk5s1")),
+            PathBuf::from("/dev/disk5s1")
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn to_block_path_handles_large_rdisk_number() {
+        assert_eq!(
+            to_block_path(&PathBuf::from("/dev/rdisk999")),
+            PathBuf::from("/dev/disk999")
+        );
+    }
+
+    #[test]
+    fn to_block_path_passes_non_disk_paths_through() {
+        let p = PathBuf::from("/tmp/some-file.img");
+        assert_eq!(to_block_path(&p), p);
+    }
+
+    #[test]
+    fn to_block_path_handles_empty_path() {
+        let p = PathBuf::from("");
+        assert_eq!(to_block_path(&p), p);
+    }
+
+    #[test]
+    fn to_block_path_handles_dev_root() {
+        let p = PathBuf::from("/dev/");
+        assert_eq!(to_block_path(&p), p);
+    }
+
+    #[test]
+    fn to_block_path_leaves_unrelated_dev_paths_untouched() {
+        let p = PathBuf::from("/dev/null");
+        assert_eq!(to_block_path(&p), p);
+    }
+
+    // Round-trip via tmpfile: BlockDeviceIo on a regular file path doesn't
+    // translate the path (no "rdisk" prefix) and opens it directly. This
+    // mirrors plain.rs's round-trip test but exercises the BlockWriter /
+    // BlockReader I/O glue (write, flush, finish, sync_all, read_to_end).
+    #[test]
+    fn round_trip_write_then_read_on_regular_file() {
+        let dir = tempdir().unwrap();
+        let p = dir.path().join("blk.img");
+        // Pre-create so the OpenOptions read+write doesn't fail (no `create`).
+        std::fs::write(&p, b"").unwrap();
+        let io = BlockDeviceIo;
+
+        let mut writer = io.open_write(&p).unwrap();
+        writer.write_all(b"block-round-trip").unwrap();
+        writer.finish().unwrap();
+
+        let mut reader = io.open_read(&p).unwrap();
+        let mut out = Vec::new();
+        Read::read_to_end(&mut reader, &mut out).unwrap();
+        assert_eq!(out, b"block-round-trip");
+    }
+
+    #[test]
+    fn open_read_errors_on_missing_file() {
+        let dir = tempdir().unwrap();
+        let p = dir.path().join("ghost.img");
+        let io = BlockDeviceIo;
+        assert!(io.open_read(&p).is_err());
+    }
+}

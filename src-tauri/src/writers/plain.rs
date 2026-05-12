@@ -106,4 +106,60 @@ mod tests {
         let io = PlainFileDeviceIo;
         assert!(io.open_read(&p).is_err());
     }
+
+    #[test]
+    fn open_write_creates_missing_file() {
+        let dir = tempdir().unwrap();
+        let p = dir.path().join("fresh.img");
+        assert!(!p.exists());
+        let io = PlainFileDeviceIo;
+
+        let mut writer = io.open_write(&p).unwrap();
+        writer.write_all(b"x").unwrap();
+        writer.finish().unwrap();
+
+        assert!(p.exists());
+        assert_eq!(std::fs::read(&p).unwrap(), b"x");
+    }
+
+    #[test]
+    fn round_trip_empty_payload() {
+        // Truncate to zero, finish without writing — readback must be empty.
+        let dir = tempdir().unwrap();
+        let p = dir.path().join("empty.img");
+        std::fs::write(&p, b"prev").unwrap();
+        let io = PlainFileDeviceIo;
+
+        let writer = io.open_write(&p).unwrap();
+        writer.finish().unwrap();
+
+        let mut reader = io.open_read(&p).unwrap();
+        let mut out = Vec::new();
+        Read::read_to_end(&mut reader, &mut out).unwrap();
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn multiple_writes_concat_in_order() {
+        let dir = tempdir().unwrap();
+        let p = dir.path().join("multi.img");
+        let io = PlainFileDeviceIo;
+
+        let mut writer = io.open_write(&p).unwrap();
+        writer.write_all(b"foo").unwrap();
+        writer.write_all(b"bar").unwrap();
+        writer.write_all(b"baz").unwrap();
+        writer.finish().unwrap();
+
+        assert_eq!(std::fs::read(&p).unwrap(), b"foobarbaz");
+    }
+
+    #[test]
+    fn open_write_errors_on_unwritable_directory() {
+        // Path under a nonexistent directory — open should fail.
+        let dir = tempdir().unwrap();
+        let p = dir.path().join("no/such/dir/file.img");
+        let io = PlainFileDeviceIo;
+        assert!(io.open_write(&p).is_err());
+    }
 }

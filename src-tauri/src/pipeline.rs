@@ -651,4 +651,171 @@ mod tests {
         assert_eq!(hex_bytes(&[]), "—");
         assert_eq!(hex_bytes(&[0x0A, 0xFF]), "0A FF");
     }
+
+    #[test]
+    fn hex_zero_byte_round_trips_as_00() {
+        assert_eq!(hex([0x00u8]), "00");
+    }
+
+    #[test]
+    fn hex_full_byte_round_trips_as_ff() {
+        assert_eq!(hex([0xFFu8]), "ff");
+    }
+
+    #[test]
+    fn hex_multi_byte_preserves_ordering() {
+        assert_eq!(
+            hex([0x01, 0x02, 0x03, 0xDE, 0xAD, 0xBE, 0xEF]),
+            "010203deadbeef"
+        );
+    }
+
+    #[test]
+    fn hex_bytes_single_byte_has_no_separator() {
+        assert_eq!(hex_bytes(&[0x7F]), "7F");
+    }
+
+    #[test]
+    fn hex_bytes_zero_and_ff_render_uppercase_padded() {
+        assert_eq!(hex_bytes(&[0x00]), "00");
+        assert_eq!(hex_bytes(&[0xFF]), "FF");
+    }
+
+    #[test]
+    fn scan_mismatches_finds_nothing_for_identical_buffers() {
+        let buf = vec![0xAB; 4096];
+        let mut out = Vec::new();
+        scan_mismatches(&buf, &buf, 0, &mut out);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn scan_mismatches_records_base_offset() {
+        // One differing byte at index 3 inside a chunk whose base offset is 1024
+        // should produce an LBA derived from byte_pos = 1024 + 3 = 1027.
+        let src = vec![0u8; 16];
+        let mut dev = src.clone();
+        dev[3] = 0x99;
+        let mut out = Vec::new();
+        scan_mismatches(&src, &dev, 1024, &mut out);
+        assert_eq!(out.len(), 1);
+        // 1027 / 512 = 2; 1027 % 512 = 3
+        assert_eq!(out[0].lba, "0x00000002");
+        assert_eq!(out[0].byte_offset, "+0x0003");
+    }
+
+    #[test]
+    fn scan_mismatches_respects_max_cap() {
+        // Pre-fill out near the cap; verify the function stops adding past MAX_MISMATCHES.
+        let src = vec![0u8; 16 * 1024];
+        let dev = vec![0xFFu8; 16 * 1024];
+        let mut out: Vec<VerifyMismatch> = (0..MAX_MISMATCHES - 1)
+            .map(|i| VerifyMismatch {
+                lba: format!("{i}"),
+                byte_offset: "".into(),
+                expected: "".into(),
+                actual: "".into(),
+            })
+            .collect();
+        scan_mismatches(&src, &dev, 0, &mut out);
+        assert_eq!(out.len(), MAX_MISMATCHES);
+    }
+
+    #[test]
+    fn scan_mismatches_takes_shorter_of_two_buffers() {
+        // src longer than dev — only `dev.len()` bytes get compared.
+        let src = vec![0u8; 100];
+        let dev = vec![0xFFu8; 16];
+        let mut out = Vec::new();
+        scan_mismatches(&src, &dev, 0, &mut out);
+        // 16 bytes compared, all differ, formed into one 16-byte chunk.
+        assert_eq!(out.len(), 1);
+    }
+
+    #[test]
+    fn push_mismatch_at_zero_byte_pos_renders_zero_lba_and_offset() {
+        let mut out = Vec::new();
+        push_mismatch(&mut out, 0, b"\xAA", b"\xBB");
+        assert_eq!(out[0].lba, "0x00000000");
+        assert_eq!(out[0].byte_offset, "+0x0000");
+        assert_eq!(out[0].expected, "AA");
+        assert_eq!(out[0].actual, "BB");
+    }
+
+    #[test]
+    fn push_mismatch_empty_actual_renders_dash() {
+        let mut out = Vec::new();
+        push_mismatch(&mut out, 0, b"\x01", b"");
+        assert_eq!(out[0].actual, "—");
+    }
+
+    #[test]
+    fn push_mismatch_does_nothing_when_already_at_cap() {
+        let mut out: Vec<VerifyMismatch> = (0..MAX_MISMATCHES)
+            .map(|_| VerifyMismatch {
+                lba: "x".into(),
+                byte_offset: "y".into(),
+                expected: "".into(),
+                actual: "".into(),
+            })
+            .collect();
+        let snapshot_first = out[0].clone();
+        push_mismatch(&mut out, 0, b"\x01", b"\x02");
+        assert_eq!(out.len(), MAX_MISMATCHES);
+        // First entry untouched (we don't mutate existing entries).
+        assert_eq!(out[0].lba, snapshot_first.lba);
+    }
+
+    #[test]
+    fn read_full_returns_zero_at_eof() {
+        let data: &[u8] = b"";
+        let mut cur = Cursor::new(data);
+        let mut out = [0u8; 8];
+        let n = read_full(&mut cur, &mut out).unwrap();
+        assert_eq!(n, 0);
+    }
+
+    struct ShortReader {
+        chunks: Vec<Vec<u8>>,
+    }
+
+    impl IoRead for ShortReader {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            if self.chunks.is_empty() {
+                return Ok(0);
+            }
+            let next = self.chunks.remove(0);
+            let n = next.len().min(buf.len());
+            buf[..n].copy_from_slice(&next[..n]);
+            Ok(n)
+        }
+    }
+
+    #[test]
+    fn read_full_loops_over_short_reads_until_filled() {
+        // Reader emits 3+3+2 bytes for an 8-byte buffer.
+        let mut r = ShortReader {
+            chunks: vec![vec![1, 2, 3], vec![4, 5, 6], vec![7, 8]],
+        };
+        let mut out = [0u8; 8];
+        let n = read_full(&mut r, &mut out).unwrap();
+        assert_eq!(n, 8);
+        assert_eq!(&out, &[1, 2, 3, 4, 5, 6, 7, 8]);
+    }
+
+    struct FailingReader;
+
+    impl IoRead for FailingReader {
+        fn read(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::other("boom"))
+        }
+    }
+
+    #[test]
+    fn read_full_propagates_io_error() {
+        let mut r = FailingReader;
+        let mut out = [0u8; 4];
+        let err = read_full(&mut r, &mut out).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::Other);
+    }
 }
