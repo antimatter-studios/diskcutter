@@ -18,7 +18,9 @@ impl ImageReaderFactory for VmdkReaderFactory {
             .extension()
             .and_then(|e| e.to_str())
             .map(|s| s.to_ascii_lowercase());
-        if ext.as_deref() != Some("vmdk") {
+        let by_ext = ext.as_deref() == Some("vmdk");
+        let by_magic = super::magic::is_vmdk(&super::magic::read_head(path, 4));
+        if !by_ext && !by_magic {
             return None;
         }
         let source = std::fs::metadata(path).ok()?.len();

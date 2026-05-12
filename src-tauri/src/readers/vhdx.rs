@@ -18,7 +18,9 @@ impl ImageReaderFactory for VhdxReaderFactory {
             .extension()
             .and_then(|e| e.to_str())
             .map(|s| s.to_ascii_lowercase());
-        if ext.as_deref() != Some("vhdx") {
+        let by_ext = ext.as_deref() == Some("vhdx");
+        let by_magic = super::magic::is_vhdx(&super::magic::read_head(path, 8));
+        if !by_ext && !by_magic {
             return None;
         }
         let source = std::fs::metadata(path).ok()?.len();

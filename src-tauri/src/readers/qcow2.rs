@@ -21,7 +21,9 @@ impl ImageReaderFactory for Qcow2ReaderFactory {
             .extension()
             .and_then(|e| e.to_str())
             .map(|s| s.to_ascii_lowercase());
-        if !matches!(ext.as_deref(), Some("qcow2") | Some("qcow")) {
+        let by_ext = matches!(ext.as_deref(), Some("qcow2") | Some("qcow"));
+        let by_magic = super::magic::is_qcow2(&super::magic::read_head(path, 4));
+        if !by_ext && !by_magic {
             return None;
         }
         let source = std::fs::metadata(path).ok()?.len();

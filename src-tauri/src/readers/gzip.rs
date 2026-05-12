@@ -49,7 +49,9 @@ impl ImageReaderFactory for GzipReaderFactory {
             .extension()
             .and_then(|e| e.to_str())
             .map(|s| s.to_ascii_lowercase());
-        if ext.as_deref() != Some("gz") {
+        let by_ext = ext.as_deref() == Some("gz");
+        let by_magic = super::magic::is_gzip(&super::magic::read_head(path, 4));
+        if !by_ext && !by_magic {
             return None;
         }
         let meta = std::fs::metadata(path).ok()?;
@@ -135,10 +137,22 @@ mod tests {
     }
 
     #[test]
-    fn probe_rejects_non_gz_extension() {
+    fn probe_accepts_renamed_file_via_magic() {
+        // User renamed ubuntu.iso.gz → ubuntu.iso but it's still gzip
+        // inside. Magic-byte sniff catches it; the .iso extension would
+        // otherwise route to the RAW factory and produce garbage.
+        let dir = tempdir().unwrap();
+        let p = dir.path().join("renamed.iso");
+        std::fs::write(&p, gz_bytes(b"xyz")).unwrap();
+        let info = GzipReaderFactory.probe(&p).expect("magic should match");
+        assert!(info.format_label.contains("GZIP"));
+    }
+
+    #[test]
+    fn probe_rejects_when_neither_extension_nor_magic_match() {
         let dir = tempdir().unwrap();
         let p = dir.path().join("file.iso");
-        std::fs::write(&p, gz_bytes(b"xyz")).unwrap();
+        std::fs::write(&p, b"plain bytes, not gzip").unwrap();
         assert!(GzipReaderFactory.probe(&p).is_none());
     }
 

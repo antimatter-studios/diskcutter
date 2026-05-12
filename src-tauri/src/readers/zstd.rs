@@ -82,7 +82,9 @@ impl ImageReaderFactory for ZstdReaderFactory {
             .extension()
             .and_then(|e| e.to_str())
             .map(|s| s.to_ascii_lowercase());
-        if !matches!(ext.as_deref(), Some("zst") | Some("zstd")) {
+        let by_ext = matches!(ext.as_deref(), Some("zst") | Some("zstd"));
+        let by_magic = super::magic::is_zstd(&super::magic::read_head(path, 4));
+        if !by_ext && !by_magic {
             return None;
         }
         let meta = std::fs::metadata(path).ok()?;
@@ -202,10 +204,19 @@ mod tests {
     }
 
     #[test]
-    fn probe_rejects_non_zst_extension() {
+    fn probe_accepts_renamed_file_via_magic() {
+        let dir = tempdir().unwrap();
+        let p = dir.path().join("renamed.iso");
+        std::fs::write(&p, zst_bytes(b"xyz")).unwrap();
+        let info = ZstdReaderFactory.probe(&p).expect("magic should match");
+        assert!(info.format_label.contains("ZSTD"));
+    }
+
+    #[test]
+    fn probe_rejects_when_neither_extension_nor_magic_match() {
         let dir = tempdir().unwrap();
         let p = dir.path().join("file.iso");
-        std::fs::write(&p, zst_bytes(b"xyz")).unwrap();
+        std::fs::write(&p, b"plain bytes").unwrap();
         assert!(ZstdReaderFactory.probe(&p).is_none());
     }
 

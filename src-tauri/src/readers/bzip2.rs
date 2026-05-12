@@ -37,7 +37,9 @@ impl ImageReaderFactory for Bzip2ReaderFactory {
             .extension()
             .and_then(|e| e.to_str())
             .map(|s| s.to_ascii_lowercase());
-        if !matches!(ext.as_deref(), Some("bz2") | Some("bzip2")) {
+        let by_ext = matches!(ext.as_deref(), Some("bz2") | Some("bzip2"));
+        let by_magic = super::magic::is_bzip2(&super::magic::read_head(path, 3));
+        if !by_ext && !by_magic {
             return None;
         }
         let meta = std::fs::metadata(path).ok()?;
@@ -120,10 +122,19 @@ mod tests {
     }
 
     #[test]
-    fn probe_rejects_non_bz2_extension() {
+    fn probe_accepts_renamed_file_via_magic() {
+        let dir = tempdir().unwrap();
+        let p = dir.path().join("renamed.iso");
+        std::fs::write(&p, bz_bytes(b"xyz")).unwrap();
+        let info = Bzip2ReaderFactory.probe(&p).expect("magic should match");
+        assert!(info.format_label.contains("BZIP2"));
+    }
+
+    #[test]
+    fn probe_rejects_when_neither_extension_nor_magic_match() {
         let dir = tempdir().unwrap();
         let p = dir.path().join("file.iso");
-        std::fs::write(&p, bz_bytes(b"xyz")).unwrap();
+        std::fs::write(&p, b"plain bytes").unwrap();
         assert!(Bzip2ReaderFactory.probe(&p).is_none());
     }
 
