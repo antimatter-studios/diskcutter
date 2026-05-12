@@ -3,9 +3,9 @@ mod db;
 mod disk_arb;
 mod disks;
 mod helper;
-mod pipeline;
-mod readers;
-mod writers;
+pub mod pipeline;
+pub mod readers;
+pub mod writers;
 
 pub use helper::run_helper;
 
