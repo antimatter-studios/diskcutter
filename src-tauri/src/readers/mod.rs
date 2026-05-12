@@ -1,6 +1,7 @@
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
+mod bzip2;
 mod gzip;
 mod qcow2;
 mod raw;
@@ -8,6 +9,8 @@ mod vhd;
 mod vhdx;
 mod vmdk;
 mod xz;
+mod zstd;
+pub use bzip2::Bzip2ReaderFactory;
 pub use gzip::GzipReaderFactory;
 pub use qcow2::Qcow2ReaderFactory;
 pub use raw::RawReaderFactory;
@@ -15,6 +18,7 @@ pub use vhd::VhdReaderFactory;
 pub use vhdx::VhdxReaderFactory;
 pub use vmdk::VmdkReaderFactory;
 pub use xz::XzReaderFactory;
+pub use zstd::ZstdReaderFactory;
 
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct ImageInfo {
@@ -49,6 +53,8 @@ impl ImageReaderRegistry {
                 Box::new(VmdkReaderFactory),
                 Box::new(GzipReaderFactory),
                 Box::new(XzReaderFactory),
+                Box::new(Bzip2ReaderFactory),
+                Box::new(ZstdReaderFactory),
                 Box::new(RawReaderFactory),
             ],
         }
