@@ -55,6 +55,16 @@
       "title": "NOTHING QUEUED.",
       "sub": "HIT [ ADD IMAGE ] BELOW TO PICK A DISK IMAGE.",
       "name": "EMPTY"
+    },
+    "prefs": {
+      "title": "PREFERENCES.",
+      "sub": "EVERY KNOB. PERSISTED TO THE LOCAL CONFIG ON CHANGE.",
+      "name": "PREFS"
+    },
+    "logs": {
+      "title": "BURN LOGS.",
+      "sub": "PER-BURN HISTORY AND LOG LINES, PERSISTED IN THE LOCAL DB.",
+      "name": "LOGS"
     }
   },
   "sidebar": {
@@ -62,7 +72,8 @@
       "queue": "QUEUE",
       "done": "DONE",
       "failed": "FAILED",
-      "logs": "LOGS"
+      "logs": "LOGS",
+      "prefs": "PREFS"
     },
     "foot": {
       "session": "SESSION",
@@ -237,6 +248,87 @@
     "ENEEDS_FDA": {
       "title": "FULL DISK ACCESS REQUIRED",
       "detail": "MACOS BLOCKS RAW DEVICE WRITES UNTIL DISK CUTTER IS ADDED TO FULL DISK ACCESS. CLICK + IN SYSTEM SETTINGS AND ADD DISK CUTTER, THEN RETRY THE BURN."
+    }
+  },
+  "orphan": {
+    "label_one": "ORPHANED HELPER PROCESS FROM A PREVIOUS SESSION — PID {{pids}} — STILL HOLDING DISKS.",
+    "label_other": "{{count}} ORPHANED HELPER PROCESSES FROM A PREVIOUS SESSION — PIDS {{pids}} — STILL HOLDING DISKS.",
+    "cleanup": "[ CLEAN UP ]"
+  },
+  "prefs": {
+    "section": {
+      "performance": "PERFORMANCE",
+      "display": "DISPLAY",
+      "behavior": "BEHAVIOR"
+    },
+    "label": {
+      "writer_impl": "WRITER IMPL",
+      "chunk_bytes": "CHUNK SIZE",
+      "workers_count": "WORKERS",
+      "queue_depth": "QUEUE DEPTH",
+      "verify_skip": "SKIP VERIFY",
+      "hash_algo": "HASH ALGO",
+      "max_mismatches": "MAX MISMATCHES",
+      "language": "LANGUAGE",
+      "theme": "THEME",
+      "density": "DENSITY",
+      "auto_eject": "AUTO EJECT",
+      "auto_clear_done_seconds": "AUTO CLEAR DONE"
+    },
+    "writer_impl": {
+      "raw": "RAW",
+      "block": "BLOCK",
+      "pipelined": "PIPELINED"
+    },
+    "theme": {
+      "light": "LIGHT",
+      "dark": "DARK"
+    },
+    "density": {
+      "compact": "COMPACT",
+      "comfy": "COMFY"
+    },
+    "auto_clear_done": {
+      "off": "OFF",
+      "30s": "30 SEC",
+      "60s": "60 SEC",
+      "5m": "5 MIN",
+      "10m": "10 MIN"
+    },
+    "toggle": {
+      "on": "ON",
+      "off": "OFF"
+    }
+  },
+  "logs": {
+    "loading": "LOADING…",
+    "refresh": "[ R ] REFRESH",
+    "clear_history": "CLEAR HISTORY",
+    "confirm_clear": "Clear all burn history? This cannot be undone.",
+    "history": {
+      "heading": "BURN HISTORY",
+      "empty": "NO BURNS RECORDED YET."
+    },
+    "detail": {
+      "pick": "PICK A BURN ON THE LEFT TO VIEW LOGS.",
+      "empty": "RUN A BURN TO SEE ITS LOG HERE.",
+      "no_lines": "NO LOG LINES FOR THIS BURN.",
+      "write_avg": "AVG WRITE"
+    },
+    "state": {
+      "running": "RUNNING",
+      "success": "OK",
+      "error": "ERROR",
+      "cancelled": "CANCELLED"
+    },
+    "relative": {
+      "just_now": "JUST NOW",
+      "minutes_one": "{{count}} MIN AGO",
+      "minutes_other": "{{count}} MIN AGO",
+      "hours_one": "{{count}} HOUR AGO",
+      "hours_other": "{{count}} HOURS AGO",
+      "days_one": "{{count}} DAY AGO",
+      "days_other": "{{count}} DAYS AGO"
     }
   }
 }

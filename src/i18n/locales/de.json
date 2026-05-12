@@ -55,6 +55,16 @@
       "title": "NICHTS IN DER WARTESCHLANGE.",
       "sub": "DRÜCKE [ ABBILD HINZUFÜGEN ] UNTEN, UM EIN ABBILD ZU WÄHLEN.",
       "name": "LEER"
+    },
+    "prefs": {
+      "title": "EINSTELLUNGEN.",
+      "sub": "ALLE STELLSCHRAUBEN. ÄNDERUNGEN WERDEN SOFORT LOKAL GESPEICHERT.",
+      "name": "EINSTELL."
+    },
+    "logs": {
+      "title": "BRENN-LOGS.",
+      "sub": "VERLAUF UND LOG-ZEILEN PRO BRENNVORGANG, LOKAL GESPEICHERT.",
+      "name": "LOGS"
     }
   },
   "sidebar": {
@@ -62,7 +72,8 @@
       "queue": "WARTESCHLANGE",
       "done": "FERTIG",
       "failed": "FEHLER",
-      "logs": "LOGS"
+      "logs": "LOGS",
+      "prefs": "EINSTELL."
     },
     "foot": {
       "session": "SITZUNG",
@@ -237,6 +248,87 @@
     "ENEEDS_FDA": {
       "title": "VOLLZUGRIFF AUF FESTPLATTE ERFORDERLICH",
       "detail": "MACOS BLOCKIERT ROHE GERÄTESCHREIBVORGÄNGE, BIS DISK CUTTER UNTER VOLLZUGRIFF AUF FESTPLATTE HINZUGEFÜGT WIRD. KLICKE + IN DEN SYSTEMEINSTELLUNGEN UND FÜGE DISK CUTTER HINZU, DANN ERNEUT VERSUCHEN."
+    }
+  },
+  "orphan": {
+    "label_one": "VERWAISTER HELFERPROZESS AUS VORIGER SITZUNG — PID {{pids}} — HÄLT NOCH DATENTRÄGER FEST.",
+    "label_other": "{{count}} VERWAISTE HELFERPROZESSE AUS VORIGER SITZUNG — PIDS {{pids}} — HALTEN NOCH DATENTRÄGER FEST.",
+    "cleanup": "[ AUFRÄUMEN ]"
+  },
+  "prefs": {
+    "section": {
+      "performance": "LEISTUNG",
+      "display": "ANZEIGE",
+      "behavior": "VERHALTEN"
+    },
+    "label": {
+      "writer_impl": "SCHREIBER",
+      "chunk_bytes": "BLOCKGRÖSSE",
+      "workers_count": "ARBEITER",
+      "queue_depth": "WARTESCHLANGENTIEFE",
+      "verify_skip": "PRÜFUNG ÜBERSPRINGEN",
+      "hash_algo": "HASH-ALGO",
+      "max_mismatches": "MAX. ABWEICHUNGEN",
+      "language": "SPRACHE",
+      "theme": "DESIGN",
+      "density": "DICHTE",
+      "auto_eject": "AUTO-AUSWURF",
+      "auto_clear_done_seconds": "AUTO. FERTIGE LÖSCHEN"
+    },
+    "writer_impl": {
+      "raw": "ROH",
+      "block": "BLOCK",
+      "pipelined": "PIPELINE"
+    },
+    "theme": {
+      "light": "HELL",
+      "dark": "DUNKEL"
+    },
+    "density": {
+      "compact": "KOMPAKT",
+      "comfy": "LOCKER"
+    },
+    "auto_clear_done": {
+      "off": "AUS",
+      "30s": "30 SEK",
+      "60s": "60 SEK",
+      "5m": "5 MIN",
+      "10m": "10 MIN"
+    },
+    "toggle": {
+      "on": "AN",
+      "off": "AUS"
+    }
+  },
+  "logs": {
+    "loading": "LÄDT…",
+    "refresh": "[ R ] AKTUALISIEREN",
+    "clear_history": "VERLAUF LÖSCHEN",
+    "confirm_clear": "Gesamten Brenn-Verlauf löschen? Kann nicht rückgängig gemacht werden.",
+    "history": {
+      "heading": "BRENN-VERLAUF",
+      "empty": "NOCH KEINE BRENNVORGÄNGE."
+    },
+    "detail": {
+      "pick": "WÄHLE LINKS EINEN BRENNVORGANG AUS.",
+      "empty": "STARTE EINEN BRENNVORGANG, UM HIER LOGS ZU SEHEN.",
+      "no_lines": "KEINE LOG-ZEILEN FÜR DIESEN BRENNVORGANG.",
+      "write_avg": "DURCHSCHN. SCHREIB"
+    },
+    "state": {
+      "running": "LÄUFT",
+      "success": "OK",
+      "error": "FEHLER",
+      "cancelled": "ABGEBROCHEN"
+    },
+    "relative": {
+      "just_now": "GERADE EBEN",
+      "minutes_one": "VOR {{count}} MIN",
+      "minutes_other": "VOR {{count}} MIN",
+      "hours_one": "VOR {{count}} STD",
+      "hours_other": "VOR {{count}} STD",
+      "days_one": "VOR {{count}} TAG",
+      "days_other": "VOR {{count}} TAGEN"
     }
   }
 }

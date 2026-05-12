@@ -55,6 +55,16 @@
       "title": "NADA EN COLA.",
       "sub": "PULSA [ AÑADIR IMAGEN ] ABAJO PARA ELEGIR UNA IMAGEN DE DISCO.",
       "name": "VACÍO"
+    },
+    "prefs": {
+      "title": "PREFERENCIAS.",
+      "sub": "TODOS LOS AJUSTES. SE GUARDAN AL CAMBIAR EN LA CONFIG LOCAL.",
+      "name": "PREFS"
+    },
+    "logs": {
+      "title": "REGISTROS DE GRABACIÓN.",
+      "sub": "HISTORIAL Y LÍNEAS DE LOG POR GRABACIÓN, ALMACENADO LOCALMENTE.",
+      "name": "LOGS"
     }
   },
   "sidebar": {
@@ -62,7 +72,8 @@
       "queue": "COLA",
       "done": "HECHO",
       "failed": "FALLOS",
-      "logs": "LOGS"
+      "logs": "LOGS",
+      "prefs": "PREFS"
     },
     "foot": {
       "session": "SESIÓN",
@@ -237,6 +248,87 @@
     "ENEEDS_FDA": {
       "title": "SE REQUIERE ACCESO COMPLETO AL DISCO",
       "detail": "MACOS BLOQUEA LAS ESCRITURAS DE DISPOSITIVO EN CRUDO HASTA QUE DISK CUTTER SE AÑADA A ACCESO COMPLETO AL DISCO. PULSA + EN AJUSTES DEL SISTEMA Y AÑADE DISK CUTTER, LUEGO REINTENTA LA GRABACIÓN."
+    }
+  },
+  "orphan": {
+    "label_one": "PROCESO AUXILIAR HUÉRFANO DE SESIÓN ANTERIOR — PID {{pids}} — AÚN RETIENE DISCOS.",
+    "label_other": "{{count}} PROCESOS AUXILIARES HUÉRFANOS DE SESIÓN ANTERIOR — PIDS {{pids}} — AÚN RETIENEN DISCOS.",
+    "cleanup": "[ LIMPIAR ]"
+  },
+  "prefs": {
+    "section": {
+      "performance": "RENDIMIENTO",
+      "display": "PANTALLA",
+      "behavior": "COMPORTAMIENTO"
+    },
+    "label": {
+      "writer_impl": "ESCRITOR",
+      "chunk_bytes": "TAMAÑO DE BLOQUE",
+      "workers_count": "TRABAJADORES",
+      "queue_depth": "PROFUND. COLA",
+      "verify_skip": "OMITIR VERIFICACIÓN",
+      "hash_algo": "ALGORITMO HASH",
+      "max_mismatches": "MÁX. DISCREPANCIAS",
+      "language": "IDIOMA",
+      "theme": "TEMA",
+      "density": "DENSIDAD",
+      "auto_eject": "AUTO EXPULSAR",
+      "auto_clear_done_seconds": "AUTO LIMPIAR HECHO"
+    },
+    "writer_impl": {
+      "raw": "CRUDO",
+      "block": "BLOQUE",
+      "pipelined": "EN CADENA"
+    },
+    "theme": {
+      "light": "CLARO",
+      "dark": "OSCURO"
+    },
+    "density": {
+      "compact": "COMPACTO",
+      "comfy": "AMPLIO"
+    },
+    "auto_clear_done": {
+      "off": "DESACT.",
+      "30s": "30 SEG",
+      "60s": "60 SEG",
+      "5m": "5 MIN",
+      "10m": "10 MIN"
+    },
+    "toggle": {
+      "on": "SÍ",
+      "off": "NO"
+    }
+  },
+  "logs": {
+    "loading": "CARGANDO…",
+    "refresh": "[ R ] ACTUALIZAR",
+    "clear_history": "BORRAR HISTORIAL",
+    "confirm_clear": "¿Borrar todo el historial de grabaciones? No se puede deshacer.",
+    "history": {
+      "heading": "HISTORIAL",
+      "empty": "AÚN NO HAY GRABACIONES."
+    },
+    "detail": {
+      "pick": "ELIGE UNA GRABACIÓN A LA IZQUIERDA PARA VER LOS LOGS.",
+      "empty": "INICIA UNA GRABACIÓN PARA VER SU LOG AQUÍ.",
+      "no_lines": "NO HAY LÍNEAS DE LOG PARA ESTA GRABACIÓN.",
+      "write_avg": "ESCRITURA PROM."
+    },
+    "state": {
+      "running": "EN CURSO",
+      "success": "OK",
+      "error": "ERROR",
+      "cancelled": "CANCELADO"
+    },
+    "relative": {
+      "just_now": "AHORA",
+      "minutes_one": "HACE {{count}} MIN",
+      "minutes_other": "HACE {{count}} MIN",
+      "hours_one": "HACE {{count}} HORA",
+      "hours_other": "HACE {{count}} HORAS",
+      "days_one": "HACE {{count}} DÍA",
+      "days_other": "HACE {{count}} DÍAS"
     }
   }
 }
