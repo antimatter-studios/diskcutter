@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Vitest
+        run: npm test
+      - name: Build
+        run: npm run build
+
+  rust:
+    name: Rust ${{ matrix.os }} ${{ matrix.task }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04]
+        task: [fmt, clippy, test]
+        include:
+          # Exercise macOS-gated code paths (translate_to_raw, RawDeviceIo).
+          - os: macos-latest
+            task: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libsoup-3.0-dev \
+            libgtk-3-dev \
+            patchelf \
+            build-essential \
+            file
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: cargo fmt
+        if: matrix.task == 'fmt'
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
+
+      - name: cargo clippy
+        if: matrix.task == 'clippy'
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+
+      - name: cargo test
+        if: matrix.task == 'test'
+        run: cargo test --manifest-path src-tauri/Cargo.toml --all-features

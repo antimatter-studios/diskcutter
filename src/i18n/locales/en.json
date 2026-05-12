@@ -1,0 +1,242 @@
+{
+  "language": {
+    "name": "English",
+    "label": "Language"
+  },
+  "common": {
+    "dash": "—"
+  },
+  "app": {
+    "title_ready": "DISK CUTTER — READY",
+    "title_writing": "DISK CUTTER — WRITING",
+    "title_verifying": "DISK CUTTER — VERIFYING",
+    "title_complete": "DISK CUTTER — COMPLETE",
+    "title_error": "DISK CUTTER — ERROR",
+    "title_short": "Disk Cutter",
+    "logo_name_line1": "DISK",
+    "logo_name_line2": "CUTTER",
+    "crumb_queue": "QUEUE"
+  },
+  "scene": {
+    "idle": {
+      "title": "WRITE THE QUEUE.",
+      "sub": "CONFIRM THE DESTRUCTIVE WRITE, THEN START THE QUEUE.",
+      "name": "IDLE"
+    },
+    "writing": {
+      "title_one": "WRITING <1>{{count}}</1> DISK.",
+      "title_other": "WRITING <1>{{count}}</1> DISKS.",
+      "sub": "BLOCK-LEVEL COPY IN PROGRESS. DO NOT UNPLUG TARGETS.",
+      "name": "WRITING"
+    },
+    "verifying": {
+      "title": "VERIFYING SECTORS.",
+      "sub": "RE-READING WRITTEN DATA AND COMPARING SHA-256 PER SECTOR.",
+      "name": "VERIFYING"
+    },
+    "success": {
+      "title_one": "ALL {{count}} JOB COMPLETE.",
+      "title_other": "ALL {{count}} JOBS COMPLETE.",
+      "sub": "EVERY SECTOR MATCHES THE SOURCE IMAGE. SAFE TO EJECT.",
+      "name": "SUCCESS"
+    },
+    "error": {
+      "title_one": "QUEUE STOPPED. {{count}} ERROR.",
+      "title_other": "QUEUE STOPPED. {{count}} ERRORS.",
+      "sub": "AT LEAST ONE JOB FAILED. EXPAND THE ROW FOR FORENSICS.",
+      "name": "ERROR"
+    },
+    "diskpicker": {
+      "title": "CHOOSE TARGETS.",
+      "sub": "PICK A REMOVABLE DISK. SYSTEM DISKS ARE LOCKED.",
+      "name": "DISKPICKER"
+    },
+    "empty": {
+      "title": "NOTHING QUEUED.",
+      "sub": "HIT [ ADD IMAGE ] BELOW TO PICK A DISK IMAGE.",
+      "name": "EMPTY"
+    }
+  },
+  "sidebar": {
+    "nav": {
+      "queue": "QUEUE",
+      "done": "DONE",
+      "failed": "FAILED",
+      "logs": "LOGS"
+    },
+    "foot": {
+      "session": "SESSION",
+      "written": "WRITTEN",
+      "avg": "AVG"
+    }
+  },
+  "toolbar": {
+    "add_image": "ADD IMAGE",
+    "clear_done": "CLEAR DONE",
+    "start_queue": "START QUEUE",
+    "running": "RUNNING…"
+  },
+  "banner": {
+    "headline_one": "DESTRUCTIVE WRITE. <1>{{count}}</1> DISK WILL BE ERASED.",
+    "headline_other": "DESTRUCTIVE WRITE. <1>{{count}}</1> DISKS WILL BE ERASED.",
+    "sub": "EVERY SECTOR ON THE TARGETS LISTED BELOW WILL BE OVERWRITTEN. PARTITION TABLES, FILESYSTEMS, AND USER DATA WILL NOT BE RECOVERABLE.",
+    "cta_line1": "I UNDERSTAND.",
+    "cta_line2": "WIPE THEM."
+  },
+  "test_mode": {
+    "label_pre": "TEST MODE — writes go to ",
+    "label_post": ", not the picked device.",
+    "elevate": "[ REQUEST PRIVILEGES ]"
+  },
+  "queue": {
+    "head": {
+      "num": "#",
+      "image": "IMAGE",
+      "target": "TARGET",
+      "state": "STATE",
+      "progress": "PROGRESS · INTEGRITY"
+    }
+  },
+  "job": {
+    "state": {
+      "ready": "READY",
+      "awaiting_target": "AWAITING TARGET",
+      "write": "WRITE",
+      "verify": "VERIFY",
+      "done": "DONE",
+      "sha_match": "SHA MATCH"
+    },
+    "select_target": "SELECT TARGET DISK",
+    "eta": "ETA {{value}}",
+    "remove": "REMOVE FROM QUEUE"
+  },
+  "detail": {
+    "block": {
+      "image": "IMAGE",
+      "target": "TARGET",
+      "verification": "VERIFICATION"
+    },
+    "kv": {
+      "path": "PATH",
+      "size": "SIZE",
+      "size_value": "{{size}}  ({{bytes}} bytes)",
+      "sectors": "SECTORS",
+      "format": "FORMAT",
+      "sha256_source": "SHA-256 (SOURCE)",
+      "device": "DEVICE",
+      "model": "MODEL",
+      "capacity": "CAPACITY",
+      "capacity_value": "{{capacity}}  ({{bytes}} bytes)",
+      "bus": "BUS",
+      "partitions": "PARTITIONS",
+      "no_target": "NO TARGET SELECTED"
+    },
+    "actions": {
+      "abort": "ABORT WRITE",
+      "retry": "RETRY",
+      "copy_error": "COPY ERROR",
+      "open_log": "OPEN LOG",
+      "eject": "EJECT",
+      "copy_hash": "COPY HASH",
+      "flash_another": "FLASH ANOTHER"
+    }
+  },
+  "verify": {
+    "hashes_match": "✓ HASHES MATCH",
+    "hash_mismatch": "✕ HASH MISMATCH",
+    "source": "SHA-256 SOURCE",
+    "readback": "SHA-256 READBACK",
+    "sectors_checked": "SECTORS CHECKED",
+    "block_size": "BLOCK SIZE",
+    "mismatches": "MISMATCHES",
+    "throughput": "THROUGHPUT",
+    "throughput_value": "{{value}} avg",
+    "mismatched_sectors": "MISMATCHED SECTORS",
+    "runs_after_write": "VERIFICATION RUNS AFTER WRITE COMPLETES.",
+    "col": {
+      "lba": "LBA",
+      "offset": "OFFSET",
+      "expected": "EXPECTED",
+      "actual": "ACTUAL",
+      "note": "NOTE"
+    }
+  },
+  "sectormap": {
+    "title": "SECTOR MAP",
+    "blocks_scanned": "[ {{lit}}/{{total}} BLOCKS SCANNED ]"
+  },
+  "picker": {
+    "eyebrow": "SELECT TARGET",
+    "title": "FLASH <1>{{name}}</1> TO:",
+    "warning": "PICK CAREFULLY. THE SELECTED DISK WILL BE ERASED ENTIRELY.",
+    "pick": "PICK",
+    "too_small": "TOO SMALL",
+    "system_disk": "SYSTEM DISK — LOCKED",
+    "disks_detected_one": "{{count}} DISK DETECTED",
+    "disks_detected_other": "{{count}} DISKS DETECTED",
+    "refresh": "[ R ] REFRESH",
+    "cancel": "[ ESC ] CANCEL",
+    "refreshed": "REFRESHED {{seconds}}s AGO"
+  },
+  "empty": {
+    "default_label": "PICK A DISK IMAGE TO BEGIN",
+    "no_done": "NO COMPLETED JOBS YET.",
+    "no_failed": "NO FAILED JOBS.",
+    "switch_back": "SWITCH BACK TO QUEUE OR ADD MORE IMAGES.",
+    "help_pre": "HIT ",
+    "help_post": " ABOVE OR DROP A FILE.",
+    "help_button": "[ ADD IMAGE ]"
+  },
+  "footer": {
+    "total": "TOTAL",
+    "data": "DATA",
+    "status": "STATUS",
+    "build": "BUILD",
+    "jobs_one": "{{count}} JOB",
+    "jobs_other": "{{count}} JOBS",
+    "status_fault": "◆ FAULT",
+    "status_idle": "◆ IDLE",
+    "status_running": "◆ RUNNING",
+    "status_ready": "◆ READY"
+  },
+  "error": {
+    "generic": "ERROR",
+    "could_not_add_image": "Could not add image: {{error}}",
+    "ETOOBIG": {
+      "title": "TARGET DISK IS TOO SMALL FOR THIS IMAGE",
+      "detail": "CHOOSE A LARGER DISK OR A SMALLER IMAGE."
+    },
+    "EHASHMISMATCH": {
+      "title": "WRITTEN DATA DOES NOT MATCH SOURCE",
+      "detail": "SHA-256 OF READBACK DOES NOT MATCH SOURCE. RETRY OR USE A DIFFERENT DISK."
+    },
+    "EUNSUPPORTED": {
+      "title": "UNSUPPORTED IMAGE FORMAT",
+      "detail": "TRY .ISO, .IMG, .BIN, OR .RAW."
+    },
+    "EIMAGE": {
+      "title": "IMAGE FILE ERROR",
+      "detail": "COULD NOT OPEN THE SOURCE IMAGE."
+    },
+    "ETARGET": {
+      "title": "TARGET ERROR",
+      "detail": "COULD NOT OPEN THE TARGET."
+    },
+    "EIO": {
+      "title": "I/O ERROR",
+      "detail": "A READ OR WRITE FAILED DURING THE OPERATION."
+    },
+    "ECANCELLED": {
+      "title": "CANCELLED",
+      "detail": "WRITE WAS ABORTED."
+    },
+    "ESIZEMISMATCH": {
+      "title": "SIZE MISMATCH",
+      "detail": "WROTE A DIFFERENT NUMBER OF BYTES THAN EXPECTED."
+    },
+    "ENEEDS_FDA": {
+      "title": "FULL DISK ACCESS REQUIRED",
+      "detail": "MACOS BLOCKS RAW DEVICE WRITES UNTIL DISK CUTTER IS ADDED TO FULL DISK ACCESS. CLICK + IN SYSTEM SETTINGS AND ADD DISK CUTTER, THEN RETRY THE BURN."
+    }
+  }
+}

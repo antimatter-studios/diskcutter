@@ -1,0 +1,242 @@
+{
+  "language": {
+    "name": "Deutsch",
+    "label": "Sprache"
+  },
+  "common": {
+    "dash": "—"
+  },
+  "app": {
+    "title_ready": "DISK CUTTER — BEREIT",
+    "title_writing": "DISK CUTTER — SCHREIBT",
+    "title_verifying": "DISK CUTTER — PRÜFT",
+    "title_complete": "DISK CUTTER — FERTIG",
+    "title_error": "DISK CUTTER — FEHLER",
+    "title_short": "Disk Cutter",
+    "logo_name_line1": "DISK",
+    "logo_name_line2": "CUTTER",
+    "crumb_queue": "WARTESCHLANGE"
+  },
+  "scene": {
+    "idle": {
+      "title": "WARTESCHLANGE SCHREIBEN.",
+      "sub": "DESTRUKTIVES SCHREIBEN BESTÄTIGEN, DANN WARTESCHLANGE STARTEN.",
+      "name": "BEREIT"
+    },
+    "writing": {
+      "title_one": "SCHREIBE <1>{{count}}</1> DATENTRÄGER.",
+      "title_other": "SCHREIBE <1>{{count}}</1> DATENTRÄGER.",
+      "sub": "BLOCKWEISE KOPIE LÄUFT. ZIELE NICHT ABZIEHEN.",
+      "name": "SCHREIBT"
+    },
+    "verifying": {
+      "title": "SEKTOREN PRÜFEN.",
+      "sub": "GESCHRIEBENE DATEN WERDEN ERNEUT GELESEN UND SHA-256 PRO SEKTOR VERGLICHEN.",
+      "name": "PRÜFT"
+    },
+    "success": {
+      "title_one": "ALLE {{count}} AUFGABE ABGESCHLOSSEN.",
+      "title_other": "ALLE {{count}} AUFGABEN ABGESCHLOSSEN.",
+      "sub": "JEDER SEKTOR STIMMT MIT DEM QUELLABBILD ÜBEREIN. SICHER AUSWERFBAR.",
+      "name": "ERFOLG"
+    },
+    "error": {
+      "title_one": "WARTESCHLANGE GESTOPPT. {{count}} FEHLER.",
+      "title_other": "WARTESCHLANGE GESTOPPT. {{count}} FEHLER.",
+      "sub": "MINDESTENS EINE AUFGABE IST FEHLGESCHLAGEN. ZEILE FÜR FORENSIK AUFKLAPPEN.",
+      "name": "FEHLER"
+    },
+    "diskpicker": {
+      "title": "ZIELE WÄHLEN.",
+      "sub": "EINEN WECHSELDATENTRÄGER WÄHLEN. SYSTEMDATENTRÄGER SIND GESPERRT.",
+      "name": "ZIELAUSWAHL"
+    },
+    "empty": {
+      "title": "NICHTS IN DER WARTESCHLANGE.",
+      "sub": "DRÜCKE [ ABBILD HINZUFÜGEN ] UNTEN, UM EIN ABBILD ZU WÄHLEN.",
+      "name": "LEER"
+    }
+  },
+  "sidebar": {
+    "nav": {
+      "queue": "WARTESCHLANGE",
+      "done": "FERTIG",
+      "failed": "FEHLER",
+      "logs": "LOGS"
+    },
+    "foot": {
+      "session": "SITZUNG",
+      "written": "GESCHRIEBEN",
+      "avg": "DURCHSCHN."
+    }
+  },
+  "toolbar": {
+    "add_image": "ABBILD HINZUFÜGEN",
+    "clear_done": "FERTIGE LÖSCHEN",
+    "start_queue": "WARTESCHLANGE STARTEN",
+    "running": "LÄUFT…"
+  },
+  "banner": {
+    "headline_one": "DESTRUKTIVES SCHREIBEN. <1>{{count}}</1> DATENTRÄGER WIRD GELÖSCHT.",
+    "headline_other": "DESTRUKTIVES SCHREIBEN. <1>{{count}}</1> DATENTRÄGER WERDEN GELÖSCHT.",
+    "sub": "JEDER SEKTOR DER UNTEN AUFGEFÜHRTEN ZIELE WIRD ÜBERSCHRIEBEN. PARTITIONSTABELLEN, DATEISYSTEME UND BENUTZERDATEN SIND DANACH NICHT WIEDERHERSTELLBAR.",
+    "cta_line1": "ICH VERSTEHE.",
+    "cta_line2": "LÖSCHE SIE."
+  },
+  "test_mode": {
+    "label_pre": "TESTMODUS — Schreibvorgänge gehen nach ",
+    "label_post": ", nicht auf das gewählte Gerät.",
+    "elevate": "[ RECHTE ANFORDERN ]"
+  },
+  "queue": {
+    "head": {
+      "num": "#",
+      "image": "ABBILD",
+      "target": "ZIEL",
+      "state": "STATUS",
+      "progress": "FORTSCHRITT · INTEGRITÄT"
+    }
+  },
+  "job": {
+    "state": {
+      "ready": "BEREIT",
+      "awaiting_target": "WARTET AUF ZIEL",
+      "write": "SCHREIBEN",
+      "verify": "PRÜFEN",
+      "done": "FERTIG",
+      "sha_match": "SHA STIMMT"
+    },
+    "select_target": "ZIEL-DATENTRÄGER WÄHLEN",
+    "eta": "REST {{value}}",
+    "remove": "AUS WARTESCHLANGE ENTFERNEN"
+  },
+  "detail": {
+    "block": {
+      "image": "ABBILD",
+      "target": "ZIEL",
+      "verification": "PRÜFUNG"
+    },
+    "kv": {
+      "path": "PFAD",
+      "size": "GRÖSSE",
+      "size_value": "{{size}}  ({{bytes}} Bytes)",
+      "sectors": "SEKTOREN",
+      "format": "FORMAT",
+      "sha256_source": "SHA-256 (QUELLE)",
+      "device": "GERÄT",
+      "model": "MODELL",
+      "capacity": "KAPAZITÄT",
+      "capacity_value": "{{capacity}}  ({{bytes}} Bytes)",
+      "bus": "BUS",
+      "partitions": "PARTITIONEN",
+      "no_target": "KEIN ZIEL GEWÄHLT"
+    },
+    "actions": {
+      "abort": "SCHREIBEN ABBRECHEN",
+      "retry": "ERNEUT VERSUCHEN",
+      "copy_error": "FEHLER KOPIEREN",
+      "open_log": "LOG ÖFFNEN",
+      "eject": "AUSWERFEN",
+      "copy_hash": "HASH KOPIEREN",
+      "flash_another": "WEITEREN SCHREIBEN"
+    }
+  },
+  "verify": {
+    "hashes_match": "✓ HASHES STIMMEN",
+    "hash_mismatch": "✕ HASH STIMMT NICHT",
+    "source": "SHA-256 QUELLE",
+    "readback": "SHA-256 RÜCKLESEN",
+    "sectors_checked": "GEPRÜFTE SEKTOREN",
+    "block_size": "BLOCKGRÖSSE",
+    "mismatches": "ABWEICHUNGEN",
+    "throughput": "DURCHSATZ",
+    "throughput_value": "{{value}} Durchschn.",
+    "mismatched_sectors": "ABWEICHENDE SEKTOREN",
+    "runs_after_write": "PRÜFUNG LÄUFT NACH ABSCHLUSS DES SCHREIBVORGANGS.",
+    "col": {
+      "lba": "LBA",
+      "offset": "OFFSET",
+      "expected": "ERWARTET",
+      "actual": "TATSÄCHLICH",
+      "note": "NOTIZ"
+    }
+  },
+  "sectormap": {
+    "title": "SEKTORKARTE",
+    "blocks_scanned": "[ {{lit}}/{{total}} BLÖCKE GESCANNT ]"
+  },
+  "picker": {
+    "eyebrow": "ZIEL WÄHLEN",
+    "title": "<1>{{name}}</1> SCHREIBEN AUF:",
+    "warning": "SORGFÄLTIG WÄHLEN. DER GEWÄHLTE DATENTRÄGER WIRD VOLLSTÄNDIG GELÖSCHT.",
+    "pick": "WÄHLEN",
+    "too_small": "ZU KLEIN",
+    "system_disk": "SYSTEMDATENTRÄGER — GESPERRT",
+    "disks_detected_one": "{{count}} DATENTRÄGER ERKANNT",
+    "disks_detected_other": "{{count}} DATENTRÄGER ERKANNT",
+    "refresh": "[ R ] AKTUALISIEREN",
+    "cancel": "[ ESC ] ABBRECHEN",
+    "refreshed": "VOR {{seconds}}s AKTUALISIERT"
+  },
+  "empty": {
+    "default_label": "ABBILD WÄHLEN, UM ZU BEGINNEN",
+    "no_done": "NOCH KEINE ABGESCHLOSSENEN AUFGABEN.",
+    "no_failed": "KEINE FEHLGESCHLAGENEN AUFGABEN.",
+    "switch_back": "ZURÜCK ZUR WARTESCHLANGE ODER WEITERE ABBILDER HINZUFÜGEN.",
+    "help_pre": "DRÜCKE ",
+    "help_post": " OBEN ODER DATEI HIER ABLEGEN.",
+    "help_button": "[ ABBILD HINZUFÜGEN ]"
+  },
+  "footer": {
+    "total": "GESAMT",
+    "data": "DATEN",
+    "status": "STATUS",
+    "build": "BUILD",
+    "jobs_one": "{{count}} AUFGABE",
+    "jobs_other": "{{count}} AUFGABEN",
+    "status_fault": "◆ STÖRUNG",
+    "status_idle": "◆ LEERLAUF",
+    "status_running": "◆ LÄUFT",
+    "status_ready": "◆ BEREIT"
+  },
+  "error": {
+    "generic": "FEHLER",
+    "could_not_add_image": "Abbild konnte nicht hinzugefügt werden: {{error}}",
+    "ETOOBIG": {
+      "title": "ZIEL-DATENTRÄGER IST ZU KLEIN FÜR DIESES ABBILD",
+      "detail": "GRÖSSEREN DATENTRÄGER ODER KLEINERES ABBILD WÄHLEN."
+    },
+    "EHASHMISMATCH": {
+      "title": "GESCHRIEBENE DATEN STIMMEN NICHT MIT DER QUELLE ÜBEREIN",
+      "detail": "SHA-256 DES RÜCKLESENS STIMMT NICHT MIT DER QUELLE ÜBEREIN. ERNEUT VERSUCHEN ODER ANDEREN DATENTRÄGER VERWENDEN."
+    },
+    "EUNSUPPORTED": {
+      "title": "NICHT UNTERSTÜTZTES ABBILDFORMAT",
+      "detail": "VERSUCHE .ISO, .IMG, .BIN ODER .RAW."
+    },
+    "EIMAGE": {
+      "title": "FEHLER IN ABBILDDATEI",
+      "detail": "QUELLABBILD KONNTE NICHT GEÖFFNET WERDEN."
+    },
+    "ETARGET": {
+      "title": "ZIEL-FEHLER",
+      "detail": "ZIEL KONNTE NICHT GEÖFFNET WERDEN."
+    },
+    "EIO": {
+      "title": "E/A-FEHLER",
+      "detail": "EIN LESE- ODER SCHREIBVORGANG IST FEHLGESCHLAGEN."
+    },
+    "ECANCELLED": {
+      "title": "ABGEBROCHEN",
+      "detail": "SCHREIBVORGANG WURDE ABGEBROCHEN."
+    },
+    "ESIZEMISMATCH": {
+      "title": "GRÖSSENABWEICHUNG",
+      "detail": "ES WURDE EINE ANDERE ANZAHL BYTES GESCHRIEBEN ALS ERWARTET."
+    },
+    "ENEEDS_FDA": {
+      "title": "VOLLZUGRIFF AUF FESTPLATTE ERFORDERLICH",
+      "detail": "MACOS BLOCKIERT ROHE GERÄTESCHREIBVORGÄNGE, BIS DISK CUTTER UNTER VOLLZUGRIFF AUF FESTPLATTE HINZUGEFÜGT WIRD. KLICKE + IN DEN SYSTEMEINSTELLUNGEN UND FÜGE DISK CUTTER HINZU, DANN ERNEUT VERSUCHEN."
+    }
+  }
+}

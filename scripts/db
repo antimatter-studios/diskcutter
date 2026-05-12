@@ -1,0 +1,156 @@
+#!/usr/bin/env bash
+# scripts/db — read-only(ish) inspector for the diskcutter SQLite database.
+#
+# Wraps `sqlite3` so common queries don't need to be hand-typed. See
+# docs/db-cli.md for the full reference. Run with no args for usage.
+
+set -euo pipefail
+
+if [[ "$(uname -s)" != "Darwin" ]]; then
+  echo "scripts/db: macOS only for now (detected $(uname -s)). Linux/Windows support will land when the app ships there." >&2
+  exit 2
+fi
+
+DB_PATH="${DISKCUTTER_DB:-$HOME/Library/Application Support/com.diskcutter.app/disk-cutter.sqlite}"
+
+if ! command -v sqlite3 >/dev/null 2>&1; then
+  echo "scripts/db: 'sqlite3' not found on PATH (ships with macOS — try 'xcode-select --install' if missing)." >&2
+  exit 2
+fi
+
+usage() {
+  cat <<'USAGE'
+Usage: scripts/db <command> [args]
+
+  path                          Print the DB file path
+  tables                        List tables with row counts
+  schema [table]                Show CREATE statements (all tables, or one)
+  migrations                    Show applied schema migrations
+  config                        Dump the config table
+  list_burn_history [LIMIT]     Recent burns, newest first (default LIMIT=50)
+  list_logs [burn_id]           Log rows; filter by burn_id or dump them all
+  query <sql>                   Run an arbitrary SQL statement (use with care)
+  vacuum                        Run VACUUM to reclaim space and defragment
+  help, --help, -h              Show this message
+
+Environment:
+  DISKCUTTER_DB                 Override the DB path (default:
+                                ~/Library/Application Support/com.diskcutter.app/disk-cutter.sqlite)
+USAGE
+}
+
+require_db() {
+  if [[ ! -f "$DB_PATH" ]]; then
+    echo "scripts/db: no database at $DB_PATH" >&2
+    echo "(run the app at least once so migrations create it, or set DISKCUTTER_DB to point elsewhere)" >&2
+    exit 1
+  fi
+}
+
+# `sqlite3 -box` gives a tidy unicode table; fall back to column mode for
+# pre-3.33 sqlite (macOS Catalina ships 3.32 — old machines still hit this).
+fmt_args=(-cmd ".headers on" -cmd ".mode box")
+if ! sqlite3 -box ":memory:" "SELECT 1" >/dev/null 2>&1; then
+  fmt_args=(-cmd ".headers on" -cmd ".mode column" -cmd ".width 0")
+fi
+
+run_sql() {
+  sqlite3 "${fmt_args[@]}" "$DB_PATH" "$@"
+}
+
+cmd="${1-}"
+shift || true
+
+case "$cmd" in
+  ""|help|--help|-h)
+    usage
+    ;;
+
+  path)
+    echo "$DB_PATH"
+    ;;
+
+  tables)
+    require_db
+    # Build one big UNION ALL so row counts come back in a single query.
+    sql=""
+    while IFS= read -r t; do
+      [[ -z "$t" ]] && continue
+      if [[ -z "$sql" ]]; then
+        sql="SELECT '$t' AS table_name, COUNT(*) AS rows FROM \"$t\""
+      else
+        sql="$sql UNION ALL SELECT '$t' AS table_name, COUNT(*) AS rows FROM \"$t\""
+      fi
+    done < <(sqlite3 "$DB_PATH" "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name;")
+    if [[ -z "$sql" ]]; then
+      echo "(no user tables — has the app run yet?)"
+      exit 0
+    fi
+    run_sql "$sql ORDER BY table_name;"
+    ;;
+
+  schema)
+    require_db
+    if [[ $# -eq 0 ]]; then
+      sqlite3 "$DB_PATH" ".schema"
+    else
+      sqlite3 "$DB_PATH" ".schema $1"
+    fi
+    ;;
+
+  migrations)
+    require_db
+    run_sql "SELECT version, name, datetime(applied_at/1000, 'unixepoch', 'localtime') AS applied_at FROM schema_migrations ORDER BY version;"
+    ;;
+
+  config)
+    require_db
+    run_sql "SELECT key, value FROM config ORDER BY key;"
+    ;;
+
+  list_burn_history)
+    require_db
+    limit="${1:-50}"
+    if ! [[ "$limit" =~ ^[0-9]+$ ]]; then
+      echo "scripts/db: list_burn_history LIMIT must be a non-negative integer (got '$limit')" >&2
+      exit 2
+    fi
+    run_sql "SELECT id, datetime(started_at/1000,'unixepoch','localtime') AS started, state, image_name, target_device, COALESCE(printf('%.2f GB', bytes_written/1e9), '—') AS written, COALESCE(elapsed_ms, '—') AS ms, COALESCE(error_code,'') AS err FROM burn_history ORDER BY started_at DESC LIMIT $limit;"
+    ;;
+
+  list_logs)
+    require_db
+    if [[ $# -eq 0 ]]; then
+      run_sql "SELECT id, burn_id, datetime(ts/1000,'unixepoch','localtime') AS ts, level, message FROM burn_logs ORDER BY ts ASC, id ASC;"
+    else
+      burn_id="$1"
+      if ! [[ "$burn_id" =~ ^[0-9]+$ ]]; then
+        echo "scripts/db: burn_id must be an integer (got '$burn_id')" >&2
+        exit 2
+      fi
+      run_sql "SELECT id, datetime(ts/1000,'unixepoch','localtime') AS ts, level, message FROM burn_logs WHERE burn_id=$burn_id ORDER BY ts ASC, id ASC;"
+    fi
+    ;;
+
+  query)
+    require_db
+    if [[ $# -eq 0 ]]; then
+      echo "scripts/db: query requires a SQL string" >&2
+      exit 2
+    fi
+    run_sql "$*"
+    ;;
+
+  vacuum)
+    require_db
+    sqlite3 "$DB_PATH" "VACUUM;"
+    echo "vacuumed."
+    ;;
+
+  *)
+    echo "scripts/db: unknown command '$cmd'" >&2
+    echo >&2
+    usage >&2
+    exit 2
+    ;;
+esac

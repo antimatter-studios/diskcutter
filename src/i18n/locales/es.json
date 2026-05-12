@@ -1,0 +1,242 @@
+{
+  "language": {
+    "name": "Español",
+    "label": "Idioma"
+  },
+  "common": {
+    "dash": "—"
+  },
+  "app": {
+    "title_ready": "DISK CUTTER — LISTO",
+    "title_writing": "DISK CUTTER — ESCRIBIENDO",
+    "title_verifying": "DISK CUTTER — VERIFICANDO",
+    "title_complete": "DISK CUTTER — COMPLETO",
+    "title_error": "DISK CUTTER — ERROR",
+    "title_short": "Disk Cutter",
+    "logo_name_line1": "DISK",
+    "logo_name_line2": "CUTTER",
+    "crumb_queue": "COLA"
+  },
+  "scene": {
+    "idle": {
+      "title": "ESCRIBE LA COLA.",
+      "sub": "CONFIRMA LA ESCRITURA DESTRUCTIVA Y LUEGO INICIA LA COLA.",
+      "name": "INACTIVO"
+    },
+    "writing": {
+      "title_one": "ESCRIBIENDO <1>{{count}}</1> DISCO.",
+      "title_other": "ESCRIBIENDO <1>{{count}}</1> DISCOS.",
+      "sub": "COPIA A NIVEL DE BLOQUE EN CURSO. NO DESCONECTES LOS DESTINOS.",
+      "name": "ESCRIBIENDO"
+    },
+    "verifying": {
+      "title": "VERIFICANDO SECTORES.",
+      "sub": "RELEYENDO DATOS ESCRITOS Y COMPARANDO SHA-256 POR SECTOR.",
+      "name": "VERIFICANDO"
+    },
+    "success": {
+      "title_one": "{{count}} TRABAJO COMPLETO.",
+      "title_other": "TODOS LOS {{count}} TRABAJOS COMPLETOS.",
+      "sub": "CADA SECTOR COINCIDE CON LA IMAGEN ORIGEN. SEGURO PARA EXPULSAR.",
+      "name": "ÉXITO"
+    },
+    "error": {
+      "title_one": "COLA DETENIDA. {{count}} ERROR.",
+      "title_other": "COLA DETENIDA. {{count}} ERRORES.",
+      "sub": "AL MENOS UN TRABAJO FALLÓ. EXPANDE LA FILA PARA EL FORENSE.",
+      "name": "ERROR"
+    },
+    "diskpicker": {
+      "title": "ELIGE DESTINOS.",
+      "sub": "ELIGE UN DISCO EXTRAÍBLE. LOS DISCOS DEL SISTEMA ESTÁN BLOQUEADOS.",
+      "name": "SELECCIÓN"
+    },
+    "empty": {
+      "title": "NADA EN COLA.",
+      "sub": "PULSA [ AÑADIR IMAGEN ] ABAJO PARA ELEGIR UNA IMAGEN DE DISCO.",
+      "name": "VACÍO"
+    }
+  },
+  "sidebar": {
+    "nav": {
+      "queue": "COLA",
+      "done": "HECHO",
+      "failed": "FALLOS",
+      "logs": "LOGS"
+    },
+    "foot": {
+      "session": "SESIÓN",
+      "written": "ESCRITO",
+      "avg": "PROM."
+    }
+  },
+  "toolbar": {
+    "add_image": "AÑADIR IMAGEN",
+    "clear_done": "LIMPIAR HECHO",
+    "start_queue": "INICIAR COLA",
+    "running": "EJECUTANDO…"
+  },
+  "banner": {
+    "headline_one": "ESCRITURA DESTRUCTIVA. <1>{{count}}</1> DISCO SERÁ BORRADO.",
+    "headline_other": "ESCRITURA DESTRUCTIVA. <1>{{count}}</1> DISCOS SERÁN BORRADOS.",
+    "sub": "CADA SECTOR DE LOS DESTINOS LISTADOS ABAJO SERÁ SOBRESCRITO. LAS TABLAS DE PARTICIONES, LOS SISTEMAS DE ARCHIVOS Y LOS DATOS DE USUARIO NO SE PODRÁN RECUPERAR.",
+    "cta_line1": "ENTIENDO.",
+    "cta_line2": "BÓRRALOS."
+  },
+  "test_mode": {
+    "label_pre": "MODO DE PRUEBA — las escrituras van a ",
+    "label_post": ", no al dispositivo elegido.",
+    "elevate": "[ SOLICITAR PRIVILEGIOS ]"
+  },
+  "queue": {
+    "head": {
+      "num": "#",
+      "image": "IMAGEN",
+      "target": "DESTINO",
+      "state": "ESTADO",
+      "progress": "PROGRESO · INTEGRIDAD"
+    }
+  },
+  "job": {
+    "state": {
+      "ready": "LISTO",
+      "awaiting_target": "ESPERANDO DESTINO",
+      "write": "ESCRIBIR",
+      "verify": "VERIFICAR",
+      "done": "HECHO",
+      "sha_match": "SHA COINCIDE"
+    },
+    "select_target": "SELECCIONAR DISCO DESTINO",
+    "eta": "ETA {{value}}",
+    "remove": "QUITAR DE LA COLA"
+  },
+  "detail": {
+    "block": {
+      "image": "IMAGEN",
+      "target": "DESTINO",
+      "verification": "VERIFICACIÓN"
+    },
+    "kv": {
+      "path": "RUTA",
+      "size": "TAMAÑO",
+      "size_value": "{{size}}  ({{bytes}} bytes)",
+      "sectors": "SECTORES",
+      "format": "FORMATO",
+      "sha256_source": "SHA-256 (ORIGEN)",
+      "device": "DISPOSITIVO",
+      "model": "MODELO",
+      "capacity": "CAPACIDAD",
+      "capacity_value": "{{capacity}}  ({{bytes}} bytes)",
+      "bus": "BUS",
+      "partitions": "PARTICIONES",
+      "no_target": "SIN DESTINO SELECCIONADO"
+    },
+    "actions": {
+      "abort": "ABORTAR ESCRITURA",
+      "retry": "REINTENTAR",
+      "copy_error": "COPIAR ERROR",
+      "open_log": "ABRIR LOG",
+      "eject": "EXPULSAR",
+      "copy_hash": "COPIAR HASH",
+      "flash_another": "GRABAR OTRO"
+    }
+  },
+  "verify": {
+    "hashes_match": "✓ HASHES COINCIDEN",
+    "hash_mismatch": "✕ HASH NO COINCIDE",
+    "source": "SHA-256 ORIGEN",
+    "readback": "SHA-256 RELECTURA",
+    "sectors_checked": "SECTORES COMPROBADOS",
+    "block_size": "TAMAÑO DE BLOQUE",
+    "mismatches": "DISCREPANCIAS",
+    "throughput": "RENDIMIENTO",
+    "throughput_value": "{{value}} prom.",
+    "mismatched_sectors": "SECTORES DISCREPANTES",
+    "runs_after_write": "LA VERIFICACIÓN SE EJECUTA TRAS COMPLETAR LA ESCRITURA.",
+    "col": {
+      "lba": "LBA",
+      "offset": "DESPLAZAM.",
+      "expected": "ESPERADO",
+      "actual": "REAL",
+      "note": "NOTA"
+    }
+  },
+  "sectormap": {
+    "title": "MAPA DE SECTORES",
+    "blocks_scanned": "[ {{lit}}/{{total}} BLOQUES ESCANEADOS ]"
+  },
+  "picker": {
+    "eyebrow": "SELECCIONAR DESTINO",
+    "title": "GRABAR <1>{{name}}</1> EN:",
+    "warning": "ELIGE CON CUIDADO. EL DISCO SELECCIONADO SERÁ BORRADO POR COMPLETO.",
+    "pick": "ELEGIR",
+    "too_small": "MUY PEQUEÑO",
+    "system_disk": "DISCO DE SISTEMA — BLOQUEADO",
+    "disks_detected_one": "{{count}} DISCO DETECTADO",
+    "disks_detected_other": "{{count}} DISCOS DETECTADOS",
+    "refresh": "[ R ] ACTUALIZAR",
+    "cancel": "[ ESC ] CANCELAR",
+    "refreshed": "ACTUALIZADO HACE {{seconds}}s"
+  },
+  "empty": {
+    "default_label": "ELIGE UNA IMAGEN DE DISCO PARA EMPEZAR",
+    "no_done": "AÚN NO HAY TRABAJOS COMPLETADOS.",
+    "no_failed": "SIN TRABAJOS FALLIDOS.",
+    "switch_back": "VUELVE A LA COLA O AÑADE MÁS IMÁGENES.",
+    "help_pre": "PULSA ",
+    "help_post": " ARRIBA O ARRASTRA UN ARCHIVO.",
+    "help_button": "[ AÑADIR IMAGEN ]"
+  },
+  "footer": {
+    "total": "TOTAL",
+    "data": "DATOS",
+    "status": "ESTADO",
+    "build": "BUILD",
+    "jobs_one": "{{count}} TRABAJO",
+    "jobs_other": "{{count}} TRABAJOS",
+    "status_fault": "◆ FALLO",
+    "status_idle": "◆ INACTIVO",
+    "status_running": "◆ EJECUTANDO",
+    "status_ready": "◆ LISTO"
+  },
+  "error": {
+    "generic": "ERROR",
+    "could_not_add_image": "No se pudo añadir la imagen: {{error}}",
+    "ETOOBIG": {
+      "title": "EL DISCO DESTINO ES DEMASIADO PEQUEÑO PARA ESTA IMAGEN",
+      "detail": "ELIGE UN DISCO MÁS GRANDE O UNA IMAGEN MÁS PEQUEÑA."
+    },
+    "EHASHMISMATCH": {
+      "title": "LOS DATOS ESCRITOS NO COINCIDEN CON EL ORIGEN",
+      "detail": "EL SHA-256 DE LA RELECTURA NO COINCIDE CON EL ORIGEN. REINTENTA O USA OTRO DISCO."
+    },
+    "EUNSUPPORTED": {
+      "title": "FORMATO DE IMAGEN NO COMPATIBLE",
+      "detail": "PRUEBA CON .ISO, .IMG, .BIN O .RAW."
+    },
+    "EIMAGE": {
+      "title": "ERROR DE ARCHIVO DE IMAGEN",
+      "detail": "NO SE PUDO ABRIR LA IMAGEN ORIGEN."
+    },
+    "ETARGET": {
+      "title": "ERROR DE DESTINO",
+      "detail": "NO SE PUDO ABRIR EL DESTINO."
+    },
+    "EIO": {
+      "title": "ERROR DE E/S",
+      "detail": "FALLÓ UNA LECTURA O ESCRITURA DURANTE LA OPERACIÓN."
+    },
+    "ECANCELLED": {
+      "title": "CANCELADO",
+      "detail": "LA ESCRITURA FUE ABORTADA."
+    },
+    "ESIZEMISMATCH": {
+      "title": "DISCREPANCIA DE TAMAÑO",
+      "detail": "SE ESCRIBIÓ UN NÚMERO DE BYTES DIFERENTE AL ESPERADO."
+    },
+    "ENEEDS_FDA": {
+      "title": "SE REQUIERE ACCESO COMPLETO AL DISCO",
+      "detail": "MACOS BLOQUEA LAS ESCRITURAS DE DISPOSITIVO EN CRUDO HASTA QUE DISK CUTTER SE AÑADA A ACCESO COMPLETO AL DISCO. PULSA + EN AJUSTES DEL SISTEMA Y AÑADE DISK CUTTER, LUEGO REINTENTA LA GRABACIÓN."
+    }
+  }
+}

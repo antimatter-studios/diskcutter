@@ -1,0 +1,640 @@
+use std::io::Read;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
+
+use sha2::{Digest, Sha256};
+
+use crate::readers::ImageReader;
+use crate::writers::{DeviceReader, DeviceWriter};
+
+const CHUNK: usize = 16 * 1024 * 1024;
+const MAX_MISMATCHES: usize = 256;
+const SECTOR_BYTES: u64 = 512;
+
+#[derive(Debug)]
+pub enum BurnError {
+    Io(std::io::Error),
+    Cancelled,
+    SizeMismatch { expected: u64, actual: u64 },
+}
+
+impl From<std::io::Error> for BurnError {
+    fn from(e: std::io::Error) -> Self {
+        BurnError::Io(e)
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct BurnProgress {
+    pub bytes_done: u64,
+    pub bytes_total: u64,
+    pub bytes_per_sec: u64,
+    pub elapsed: Duration,
+}
+
+pub struct BurnResult {
+    pub bytes_written: u64,
+    pub source_sha256: String,
+    pub elapsed: Duration,
+    pub avg_bytes_per_sec: u64,
+}
+
+pub fn burn(
+    reader: &mut dyn ImageReader,
+    writer: Box<dyn DeviceWriter>,
+    cancel: &AtomicBool,
+    mut on_progress: impl FnMut(BurnProgress),
+) -> Result<BurnResult, BurnError> {
+    let total = reader.info().uncompressed_bytes;
+    let mut writer = writer;
+    let mut hasher = Sha256::new();
+    let mut buf = vec![0u8; CHUNK];
+    let mut done: u64 = 0;
+    let started = Instant::now();
+    let mut last_emit = Instant::now();
+    let mut window_start = Instant::now();
+    let mut window_bytes: u64 = 0;
+
+    loop {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(BurnError::Cancelled);
+        }
+        let n = reader.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        writer.write_all(&buf[..n])?;
+        hasher.update(&buf[..n]);
+        done += n as u64;
+        window_bytes += n as u64;
+
+        if last_emit.elapsed() >= Duration::from_millis(250) {
+            let win = window_start.elapsed().as_secs_f64().max(0.001);
+            let bps = (window_bytes as f64 / win) as u64;
+            on_progress(BurnProgress {
+                bytes_done: done,
+                bytes_total: total,
+                bytes_per_sec: bps,
+                elapsed: started.elapsed(),
+            });
+            last_emit = Instant::now();
+            window_start = Instant::now();
+            window_bytes = 0;
+        }
+    }
+
+    writer.finish()?;
+    let elapsed = started.elapsed();
+    let avg = (done as f64 / elapsed.as_secs_f64().max(0.001)) as u64;
+    on_progress(BurnProgress {
+        bytes_done: done,
+        bytes_total: total.max(done),
+        bytes_per_sec: avg,
+        elapsed,
+    });
+    Ok(BurnResult {
+        bytes_written: done,
+        source_sha256: hex(&hasher.finalize()),
+        elapsed,
+        avg_bytes_per_sec: avg,
+    })
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct VerifyMismatch {
+    pub lba: String,
+    pub byte_offset: String,
+    pub expected: String,
+    pub actual: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct VerifyProgress {
+    pub bytes_done: u64,
+    pub bytes_total: u64,
+    pub bytes_per_sec: u64,
+    pub elapsed: Duration,
+}
+
+pub struct VerifyResult {
+    pub source_sha256: String,
+    pub readback_sha256: String,
+    pub match_: bool,
+    pub bytes_checked: u64,
+    pub bytes_total: u64,
+    pub mismatches: Vec<VerifyMismatch>,
+    pub elapsed: Duration,
+    pub avg_bytes_per_sec: u64,
+}
+
+pub struct HashOnlyResult {
+    pub readback_sha256: String,
+    pub bytes_checked: u64,
+    pub bytes_total: u64,
+    pub elapsed: Duration,
+    pub avg_bytes_per_sec: u64,
+}
+
+pub fn verify_hash_only(
+    device: &mut dyn DeviceReader,
+    expected_bytes: u64,
+    cancel: &AtomicBool,
+    mut on_progress: impl FnMut(VerifyProgress),
+) -> Result<HashOnlyResult, BurnError> {
+    let mut hasher = Sha256::new();
+    let mut buf = vec![0u8; CHUNK];
+    let mut done: u64 = 0;
+    let started = Instant::now();
+    let mut last_emit = Instant::now();
+    let mut window_start = Instant::now();
+    let mut window_bytes: u64 = 0;
+
+    while done < expected_bytes {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(BurnError::Cancelled);
+        }
+        let remaining = expected_bytes - done;
+        let cap = (buf.len() as u64).min(remaining) as usize;
+        let n = device.read(&mut buf[..cap])?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+        done += n as u64;
+        window_bytes += n as u64;
+
+        if last_emit.elapsed() >= Duration::from_millis(250) {
+            let win = window_start.elapsed().as_secs_f64().max(0.001);
+            let bps = (window_bytes as f64 / win) as u64;
+            on_progress(VerifyProgress {
+                bytes_done: done,
+                bytes_total: expected_bytes,
+                bytes_per_sec: bps,
+                elapsed: started.elapsed(),
+            });
+            last_emit = Instant::now();
+            window_start = Instant::now();
+            window_bytes = 0;
+        }
+    }
+
+    let elapsed = started.elapsed();
+    let avg = (done as f64 / elapsed.as_secs_f64().max(0.001)) as u64;
+    on_progress(VerifyProgress {
+        bytes_done: done,
+        bytes_total: expected_bytes.max(done),
+        bytes_per_sec: avg,
+        elapsed,
+    });
+    Ok(HashOnlyResult {
+        readback_sha256: hex(&hasher.finalize()),
+        bytes_checked: done,
+        bytes_total: expected_bytes.max(done),
+        elapsed,
+        avg_bytes_per_sec: avg,
+    })
+}
+
+pub fn verify(
+    source: &mut dyn ImageReader,
+    device: &mut dyn DeviceReader,
+    cancel: &AtomicBool,
+    mut on_progress: impl FnMut(VerifyProgress),
+) -> Result<VerifyResult, BurnError> {
+    let total = source.info().uncompressed_bytes;
+    let mut src_hasher = Sha256::new();
+    let mut dev_hasher = Sha256::new();
+    let mut src_buf = vec![0u8; CHUNK];
+    let mut dev_buf = vec![0u8; CHUNK];
+    let mut mismatches: Vec<VerifyMismatch> = Vec::new();
+    let mut done: u64 = 0;
+    let started = Instant::now();
+    let mut last_emit = Instant::now();
+    let mut window_start = Instant::now();
+    let mut window_bytes: u64 = 0;
+
+    loop {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(BurnError::Cancelled);
+        }
+        let n_src = read_full(source, &mut src_buf)?;
+        if n_src == 0 {
+            break;
+        }
+        let n_dev = read_full(device, &mut dev_buf[..n_src])?;
+        if n_dev < n_src {
+            for i in n_dev..n_src {
+                push_mismatch(&mut mismatches, done + i as u64, &src_buf[i..i + 1], b"");
+            }
+        }
+        src_hasher.update(&src_buf[..n_src]);
+        dev_hasher.update(&dev_buf[..n_dev]);
+
+        if mismatches.len() < MAX_MISMATCHES {
+            scan_mismatches(
+                &src_buf[..n_src],
+                &dev_buf[..n_dev.min(n_src)],
+                done,
+                &mut mismatches,
+            );
+        }
+
+        done += n_src as u64;
+        window_bytes += n_src as u64;
+
+        if last_emit.elapsed() >= Duration::from_millis(250) {
+            let win = window_start.elapsed().as_secs_f64().max(0.001);
+            let bps = (window_bytes as f64 / win) as u64;
+            on_progress(VerifyProgress {
+                bytes_done: done,
+                bytes_total: total,
+                bytes_per_sec: bps,
+                elapsed: started.elapsed(),
+            });
+            last_emit = Instant::now();
+            window_start = Instant::now();
+            window_bytes = 0;
+        }
+    }
+
+    let elapsed = started.elapsed();
+    let avg = (done as f64 / elapsed.as_secs_f64().max(0.001)) as u64;
+    let src_hash = hex(&src_hasher.finalize());
+    let dev_hash = hex(&dev_hasher.finalize());
+    Ok(VerifyResult {
+        match_: src_hash == dev_hash && mismatches.is_empty(),
+        source_sha256: src_hash,
+        readback_sha256: dev_hash,
+        bytes_checked: done,
+        bytes_total: total.max(done),
+        mismatches,
+        elapsed,
+        avg_bytes_per_sec: avg,
+    })
+}
+
+fn read_full<R: Read + ?Sized>(r: &mut R, buf: &mut [u8]) -> std::io::Result<usize> {
+    let mut filled = 0;
+    while filled < buf.len() {
+        match r.read(&mut buf[filled..]) {
+            Ok(0) => break,
+            Ok(n) => filled += n,
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(filled)
+}
+
+fn scan_mismatches(src: &[u8], dev: &[u8], base: u64, out: &mut Vec<VerifyMismatch>) {
+    let len = src.len().min(dev.len());
+    let mut i = 0;
+    while i < len && out.len() < MAX_MISMATCHES {
+        if src[i] != dev[i] {
+            let end = (i + 16).min(len);
+            push_mismatch(out, base + i as u64, &src[i..end], &dev[i..end]);
+            i = end;
+        } else {
+            i += 1;
+        }
+    }
+}
+
+fn push_mismatch(out: &mut Vec<VerifyMismatch>, byte_pos: u64, expected: &[u8], actual: &[u8]) {
+    if out.len() >= MAX_MISMATCHES {
+        return;
+    }
+    let lba = byte_pos / SECTOR_BYTES;
+    let off = byte_pos % SECTOR_BYTES;
+    out.push(VerifyMismatch {
+        lba: format!("0x{:08X}", lba),
+        byte_offset: format!("+0x{:04X}", off),
+        expected: hex_bytes(expected),
+        actual: hex_bytes(actual),
+    });
+}
+
+fn hex(bytes: impl AsRef<[u8]>) -> String {
+    let mut s = String::with_capacity(bytes.as_ref().len() * 2);
+    for b in bytes.as_ref() {
+        s.push_str(&format!("{:02x}", b));
+    }
+    s
+}
+
+fn hex_bytes(bytes: &[u8]) -> String {
+    if bytes.is_empty() {
+        return "—".to_string();
+    }
+    bytes
+        .iter()
+        .map(|b| format!("{:02X}", b))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::readers::{ImageInfo, ImageReader};
+    use crate::writers::{DeviceReader, DeviceWriter};
+    use std::cell::RefCell;
+    use std::io::{Cursor, Read as IoRead, Write as IoWrite};
+    use std::path::PathBuf;
+    use std::sync::{Arc, Mutex};
+
+    struct MockImageReader {
+        info: ImageInfo,
+        inner: Cursor<Vec<u8>>,
+    }
+
+    impl MockImageReader {
+        fn new(data: Vec<u8>) -> Self {
+            let len = data.len() as u64;
+            Self {
+                info: ImageInfo {
+                    path: PathBuf::from("/mock.img"),
+                    format_label: "MOCK".into(),
+                    source_bytes: len,
+                    uncompressed_bytes: len,
+                },
+                inner: Cursor::new(data),
+            }
+        }
+    }
+
+    impl IoRead for MockImageReader {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            self.inner.read(buf)
+        }
+    }
+
+    impl ImageReader for MockImageReader {
+        fn info(&self) -> &ImageInfo {
+            &self.info
+        }
+    }
+
+    struct CollectingWriter {
+        sink: Arc<Mutex<Vec<u8>>>,
+        finished: Arc<AtomicBool>,
+    }
+
+    impl IoWrite for CollectingWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.sink.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl DeviceWriter for CollectingWriter {
+        fn finish(self: Box<Self>) -> std::io::Result<()> {
+            self.finished.store(true, Ordering::Relaxed);
+            Ok(())
+        }
+    }
+
+    struct CursorDeviceReader {
+        inner: Cursor<Vec<u8>>,
+    }
+
+    impl IoRead for CursorDeviceReader {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            self.inner.read(buf)
+        }
+    }
+
+    impl DeviceReader for CursorDeviceReader {}
+
+    fn sha256_of(bytes: &[u8]) -> String {
+        let mut h = Sha256::new();
+        h.update(bytes);
+        hex(&h.finalize())
+    }
+
+    fn make_writer() -> (Box<dyn DeviceWriter>, Arc<Mutex<Vec<u8>>>, Arc<AtomicBool>) {
+        let sink = Arc::new(Mutex::new(Vec::new()));
+        let finished = Arc::new(AtomicBool::new(false));
+        let w = Box::new(CollectingWriter {
+            sink: sink.clone(),
+            finished: finished.clone(),
+        });
+        (w, sink, finished)
+    }
+
+    #[test]
+    fn burn_writes_all_source_bytes() {
+        let data: Vec<u8> = (0..10_000u32).map(|i| (i % 256) as u8).collect();
+        let mut reader = MockImageReader::new(data.clone());
+        let (writer, sink, finished) = make_writer();
+        let cancel = AtomicBool::new(false);
+
+        let result = burn(&mut reader, writer, &cancel, |_| {}).expect("burn ok");
+
+        assert_eq!(result.bytes_written, data.len() as u64);
+        assert_eq!(result.source_sha256, sha256_of(&data));
+        assert_eq!(*sink.lock().unwrap(), data);
+        assert!(finished.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn burn_handles_data_larger_than_one_chunk() {
+        let data: Vec<u8> = vec![0xAB; CHUNK + 1_000];
+        let mut reader = MockImageReader::new(data.clone());
+        let (writer, sink, _) = make_writer();
+        let cancel = AtomicBool::new(false);
+
+        let result = burn(&mut reader, writer, &cancel, |_| {}).unwrap();
+
+        assert_eq!(result.bytes_written, data.len() as u64);
+        assert_eq!(*sink.lock().unwrap(), data);
+    }
+
+    #[test]
+    fn burn_returns_cancelled_when_flag_set_before_start() {
+        let mut reader = MockImageReader::new(vec![0u8; 1024]);
+        let (writer, _, _) = make_writer();
+        let cancel = AtomicBool::new(true);
+
+        match burn(&mut reader, writer, &cancel, |_| {}) {
+            Err(BurnError::Cancelled) => {}
+            Err(e) => panic!("expected Cancelled, got {e:?}"),
+            Ok(_) => panic!("expected Err, got Ok"),
+        }
+    }
+
+    #[test]
+    fn burn_emits_final_progress_at_completion() {
+        let mut reader = MockImageReader::new(vec![1u8; 64]);
+        let (writer, _, _) = make_writer();
+        let cancel = AtomicBool::new(false);
+        let progress = RefCell::new(Vec::<BurnProgress>::new());
+
+        burn(&mut reader, writer, &cancel, |p| progress.borrow_mut().push(p)).unwrap();
+
+        let last = progress.borrow().last().cloned().expect("progress");
+        assert_eq!(last.bytes_done, 64);
+        assert!(last.bytes_total >= 64);
+    }
+
+    #[test]
+    fn verify_matches_identical_streams() {
+        let data: Vec<u8> = (0..2048u32).map(|i| (i % 256) as u8).collect();
+        let mut src = MockImageReader::new(data.clone());
+        let mut dev = CursorDeviceReader {
+            inner: Cursor::new(data.clone()),
+        };
+        let cancel = AtomicBool::new(false);
+
+        let result = verify(&mut src, &mut dev, &cancel, |_| {}).unwrap();
+
+        assert!(result.match_);
+        assert!(result.mismatches.is_empty());
+        assert_eq!(result.bytes_checked, data.len() as u64);
+        assert_eq!(result.source_sha256, result.readback_sha256);
+    }
+
+    #[test]
+    fn verify_detects_mismatched_bytes() {
+        let src_bytes = vec![0u8; 1024];
+        let mut dev_bytes = src_bytes.clone();
+        dev_bytes[100] = 0xFF;
+        dev_bytes[200] = 0xAA;
+        let mut src = MockImageReader::new(src_bytes);
+        let mut dev = CursorDeviceReader {
+            inner: Cursor::new(dev_bytes),
+        };
+        let cancel = AtomicBool::new(false);
+
+        let result = verify(&mut src, &mut dev, &cancel, |_| {}).unwrap();
+
+        assert!(!result.match_);
+        assert!(!result.mismatches.is_empty());
+        assert_ne!(result.source_sha256, result.readback_sha256);
+    }
+
+    #[test]
+    fn verify_reports_mismatches_when_device_truncated() {
+        let src_bytes = vec![1u8; 1024];
+        let dev_bytes = vec![1u8; 512];
+        let mut src = MockImageReader::new(src_bytes);
+        let mut dev = CursorDeviceReader {
+            inner: Cursor::new(dev_bytes),
+        };
+        let cancel = AtomicBool::new(false);
+
+        let result = verify(&mut src, &mut dev, &cancel, |_| {}).unwrap();
+
+        assert!(!result.match_);
+        assert!(!result.mismatches.is_empty());
+    }
+
+    #[test]
+    fn verify_caps_at_max_mismatches() {
+        let src_bytes = vec![0u8; 16 * 1024];
+        let dev_bytes = vec![0xFFu8; 16 * 1024];
+        let mut src = MockImageReader::new(src_bytes);
+        let mut dev = CursorDeviceReader {
+            inner: Cursor::new(dev_bytes),
+        };
+        let cancel = AtomicBool::new(false);
+
+        let result = verify(&mut src, &mut dev, &cancel, |_| {}).unwrap();
+
+        assert!(result.mismatches.len() <= MAX_MISMATCHES);
+    }
+
+    #[test]
+    fn verify_returns_cancelled_when_flag_set_first() {
+        let mut src = MockImageReader::new(vec![0u8; 1024]);
+        let mut dev = CursorDeviceReader {
+            inner: Cursor::new(vec![0u8; 1024]),
+        };
+        let cancel = AtomicBool::new(true);
+
+        match verify(&mut src, &mut dev, &cancel, |_| {}) {
+            Err(BurnError::Cancelled) => {}
+            Err(e) => panic!("expected Cancelled, got {e:?}"),
+            Ok(_) => panic!("expected Err, got Ok"),
+        }
+    }
+
+    #[test]
+    fn read_full_fills_buffer() {
+        let data = b"hello world";
+        let mut cur = Cursor::new(&data[..]);
+        let mut out = [0u8; 11];
+        let n = read_full(&mut cur, &mut out).unwrap();
+        assert_eq!(n, 11);
+        assert_eq!(&out, b"hello world");
+    }
+
+    #[test]
+    fn read_full_returns_partial_at_eof() {
+        let data = b"hi";
+        let mut cur = Cursor::new(&data[..]);
+        let mut out = [0u8; 8];
+        let n = read_full(&mut cur, &mut out).unwrap();
+        assert_eq!(n, 2);
+        assert_eq!(&out[..n], b"hi");
+    }
+
+    #[test]
+    fn scan_mismatches_finds_byte_differences() {
+        let src = b"AAAAAAAA";
+        let dev = b"AABAAAAA";
+        let mut out = Vec::new();
+        scan_mismatches(src, dev, 0, &mut out);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].byte_offset, "+0x0002");
+    }
+
+    #[test]
+    fn scan_mismatches_advances_past_a_run_in_16_byte_chunks() {
+        let src = vec![0u8; 100];
+        let dev = vec![0xFFu8; 100];
+        let mut out = Vec::new();
+        scan_mismatches(&src, &dev, 0, &mut out);
+        // Each mismatch entry covers 16 bytes; ceil(100 / 16) = 7 entries.
+        assert_eq!(out.len(), 7);
+    }
+
+    #[test]
+    fn push_mismatch_formats_lba_and_offset() {
+        let mut out = Vec::new();
+        push_mismatch(&mut out, 1024 + 5, b"\x01", b"\x02");
+        let m = &out[0];
+        assert_eq!(m.lba, "0x00000002");
+        assert_eq!(m.byte_offset, "+0x0005");
+        assert_eq!(m.expected, "01");
+        assert_eq!(m.actual, "02");
+    }
+
+    #[test]
+    fn push_mismatch_respects_cap() {
+        let mut out: Vec<VerifyMismatch> = (0..MAX_MISMATCHES)
+            .map(|i| VerifyMismatch {
+                lba: format!("{i}"),
+                byte_offset: "".into(),
+                expected: "".into(),
+                actual: "".into(),
+            })
+            .collect();
+        push_mismatch(&mut out, 0, b"\x01", b"\x02");
+        assert_eq!(out.len(), MAX_MISMATCHES);
+    }
+
+    #[test]
+    fn hex_is_lowercase_and_zero_padded() {
+        assert_eq!(hex([0xAB, 0xCD, 0x00]), "abcd00");
+        assert_eq!(hex([] as [u8; 0]), "");
+    }
+
+    #[test]
+    fn hex_bytes_renders_empty_dash_and_uppercase_with_separators() {
+        assert_eq!(hex_bytes(&[]), "—");
+        assert_eq!(hex_bytes(&[0x0A, 0xFF]), "0A FF");
+    }
+}
