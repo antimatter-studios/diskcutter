@@ -5,6 +5,7 @@ import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import i18n, { availableLanguages } from './i18n/index.js';
 import { formatBytes, formatBps, formatDuration } from './format.js';
+import logoUrl from './assets/logo.svg';
 
 const winCtl = {
   minimize: () => getCurrentWindow().minimize(),
@@ -85,8 +86,8 @@ function Sidebar({ active, onSelect, jobs, accent, sessionStats }) {
   return (
     <aside className="sidebar">
       <div className="logo">
-        <div className="logo-mark" style={{ background: accent, color: 'var(--ink)' }}>
-          <svg viewBox="0 0 24 24" width="20" height="20"><circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" strokeWidth="2"/><circle cx="12" cy="12" r="3" fill="currentColor"/></svg>
+        <div className="logo-mark">
+          <img src={logoUrl} alt="" width="34" height="34" />
         </div>
         <div className="logo-text">
           <div className="logo-name">{t('app.logo_name_line1')}<br/>{t('app.logo_name_line2')}</div>
