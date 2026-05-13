@@ -26,27 +26,27 @@ Update this file as work moves; it's the single source of truth.
 
 | Feature | Status | Notes |
 |---|---|---|
-| **SMART preflight** on target | claimed by 1 | parse `diskutil info -plist` `SMARTStatus`; warn on Failing / reallocated sectors |
-| Pre-burn snapshot of target's partition table | claimed by 2 | dump first 4 MiB to a recovery file before destruction |
-| Pre-burn partition inspection (source side) | claimed by 2 | parse MBR/GPT inside the source image via am-partitions, surface in `inspect_image` |
-| Filesystem inspection per partition | claimed by 2 | am-fs-ext4 / am-fs-ntfs detect fs type, label, used/free; display-only |
+| **SMART preflight** on target | landed (10712f9 on feat/smart-preflight) | `smart::check` parses `diskutil info -plist` SMARTStatus → 4-variant verdict, logged on every burn; `smart_check` Tauri command for future picker badge |
+| Pre-burn snapshot of target's partition table | landed (76a1f7f on main) by 2 | snapshot.rs: 4 MiB recovery dump w/ JSON header + sha256 verification on restore; 8 unit tests. (instance 1 also drafted on a feature branch — merge conflict; pick one when reconciling) |
+| Pre-burn partition inspection (source side) | landed (10f5acf on main) by 2 | inspect.rs uses am-partitions to parse MBR/GPT in raw image; `inspect_any()` dispatches to qcow2/vhd/vhdx/vmdk readers' BlockRead view for container formats |
+| Filesystem inspection per partition | landed (10f5acf on main) by 2 | `am-partitions::sniff::classify` identifies ext2/3/4, NTFS, exFAT, FAT16/32, HFS+, APFS, Linux swap, ISO 9660, SquashFS at the start of each partition |
 | Bootability test (QEMU launch after verify) | planned | shell out to `qemu-system-*`; optional |
-| Forensic-grade burn record (PDF/JSON export) | planned | image SHA, target serial+model, write timestamps, host machine ID |
+| Forensic-grade burn record (JSON+Markdown export) | landed (b62ac0f on main) by 2 | forensic.rs: tamper-evident report w/ sha256 digest over canonical JSON; HostInfo + BurnSection + LogEntry; 11 unit tests. Tauri command wiring deferred. (instance 1 also claimed this — see notes; their version on a branch if any) |
 
 ## Pipeline / performance
 
 | Feature | Status | Notes |
 |---|---|---|
-| Concurrent verify (read back as we write) | claimed by 2 | second IO queue on pipelined writer; halves total time on fast media |
-| Sparse / skip-zero writing | claimed by 2 | for qcow2 / sparse images; needs upstream `allocated_extents()` on am-img-* BlockRead; massive win on thin-provisioned VM images |
+| Concurrent verify (read back as we write) | planned | second IO queue on pipelined writer; halves total time on fast media (was claimed by 2; deferred — pipeline.rs collision risk) |
+| Sparse / skip-zero writing | landed-partial (cca8574 on main) by 2 | sparse.rs: SparseFileWriter punches holes for zero chunks on write — saves on disk for backups. Full read-side skip-zero still wants upstream `allocated_extents()` on am-img-* BlockRead — see morning summary for the design sketch |
 | **Bulk parallel burns** (N USBs, one image) | planned | frontend orchestration of existing `start_write`; per-target progress lane |
 
 ## Power-user surface
 
 | Feature | Status | Notes |
 |---|---|---|
-| CLI front-end (`disk-cutter burn ubuntu.iso /dev/disk5`) | planned | scriptable; talks to same Tauri backend or standalone binary |
-| Watch folder (auto-queue dropped images) | planned | `notify` crate; configurable path; uses last target |
+| CLI front-end (`disk-cutter burn ubuntu.iso /dev/disk5`) | landed (e166c74 on main) by 2 | cli.rs: inspect / formats / backup / snapshot / restore / version / help subcommands; main.rs routes recognised subcommands to run_cli, no-arg still launches GUI; 24 unit tests |
+| Watch folder (auto-queue dropped images) | landed (4ed7fd5 on feat/watch-folder) | `notify` crate; `watch_folder_{start,stop,status}` commands; emits `disk-cutter://image-found`; debounced; needs frontend wire-up |
 | Per-chunk latency heatmap in log detail view | planned | needs per-chunk telemetry from pipeline; pure frontend if data exists |
 
 ## Wild cards
