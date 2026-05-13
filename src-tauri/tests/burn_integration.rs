@@ -240,6 +240,49 @@ fn cancel_mid_burn_returns_cancelled_error() {
 }
 
 #[test]
+fn cancel_mid_verify_returns_cancelled_error() {
+    let dir = tempdir().unwrap();
+    let target = dir.path().join("target.img");
+
+    // 64 MiB — large enough that a 10 ms sleep lands mid-verify even on fast disks.
+    let data = deterministic_bytes(64 * 1024 * 1024, 0xBADD_CAFE_BADD_CAFE);
+    let mut reader = TestImageReader::new(data.clone());
+
+    let io = PlainFileDeviceIo;
+    let writer = io.open_write(&target).unwrap();
+    let burn_cancel = AtomicBool::new(false);
+
+    burn(&mut reader, writer, DEFAULT_CHUNK, &burn_cancel, |_| {}).expect("burn ok");
+
+    let mut device_reader = io.open_read(&target).unwrap();
+    let cancel = std::sync::Arc::new(AtomicBool::new(false));
+
+    let canceller = {
+        let cancel = cancel.clone();
+        thread::spawn(move || {
+            thread::sleep(Duration::from_millis(10));
+            cancel.store(true, Ordering::Relaxed);
+        })
+    };
+
+    let res = verify_hash_only_with_hash(
+        device_reader.as_mut(),
+        data.len() as u64,
+        DEFAULT_CHUNK,
+        HashAlgo::Sha256,
+        cancel.as_ref(),
+        |_| {},
+    );
+    canceller.join().unwrap();
+
+    match res {
+        Err(BurnError::Cancelled) => {}
+        Err(e) => panic!("expected Cancelled, got {e:?}"),
+        Ok(_) => panic!("expected Cancelled error, verify completed successfully"),
+    }
+}
+
+#[test]
 fn burn_then_verify_hash_only_round_trips_with_xxhash_on_real_file() {
     // Same shape as `burn_then_verify_hash_only_matches`, but using
     // HashAlgo::Xxhash end-to-end against a real on-disk target via
