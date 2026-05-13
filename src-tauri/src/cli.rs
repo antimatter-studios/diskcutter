@@ -24,6 +24,7 @@ use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 
 use crate::backup::{self, BackupOptions, Compression};
+use crate::doctor::{self, CheckStatus};
 use crate::inspect;
 use crate::snapshot::{self, DEFAULT_SNAPSHOT_BYTES};
 
@@ -50,6 +51,7 @@ pub enum Command {
         recovery: PathBuf,
         device: PathBuf,
     },
+    Doctor,
     Invalid(String),
 }
 
@@ -85,6 +87,10 @@ pub fn parse(args: &[String]) -> Command {
                 device: PathBuf::from(&args[2]),
             }
         }
+        // `doctor` takes no arguments; any trailing argv is silently
+        // ignored so `diskcutter doctor --verbose` (future flag) parses
+        // today rather than erroring.
+        "doctor" => Command::Doctor,
         other => Command::Invalid(format!("unknown subcommand: {other}")),
     }
 }
@@ -151,6 +157,7 @@ commands:
   backup   <src> <out> [opts]         disk-to-image; --compression=none|gz|xz|bz2|zst, --sparse
   snapshot <dev> <out> [--bytes=N]    capture first N bytes of device (default 4 MiB)
   restore  <rec> <dev>                write a recovery file back to the device's first bytes
+  doctor                              run environment self-diagnostic
   version                             print version
   help                                this message
 
@@ -201,6 +208,7 @@ pub fn run_cli(args: &[String]) -> i32 {
             bytes,
         } => run_snapshot(&device, &output, bytes),
         Command::Restore { recovery, device } => run_restore(&recovery, &device),
+        Command::Doctor => run_doctor(),
         Command::Invalid(msg) => {
             eprintln!("diskcutter: {msg}");
             eprintln!();
@@ -324,6 +332,28 @@ fn run_restore(recovery: &std::path::Path, device: &std::path::Path) -> i32 {
             1
         }
     }
+}
+
+fn run_doctor() -> i32 {
+    let report = doctor::run_all();
+    println!("diskcutter doctor — environment checklist");
+    // Status badges are fixed-width (4 chars) so all check names align
+    // vertically regardless of verdict. Keeps grep-by-status trivial.
+    for c in &report.checks {
+        let badge = match c.status {
+            CheckStatus::Pass => "[PASS]",
+            CheckStatus::Warn => "[WARN]",
+            CheckStatus::Fail => "[FAIL]",
+        };
+        println!("{badge} {}: {}", c.name, c.note);
+    }
+    let (label, code) = match report.overall {
+        CheckStatus::Pass => ("pass", 0),
+        CheckStatus::Warn => ("warn", 1),
+        CheckStatus::Fail => ("fail", 2),
+    };
+    println!("overall: {label}");
+    code
 }
 
 #[cfg(test)]
@@ -551,5 +581,29 @@ mod tests {
         );
         assert_eq!(run_cli(&args(&["restore", &recov_s, &dest_s])), 0);
         assert_eq!(std::fs::read(&dest).unwrap(), vec![0x42u8; 1024]);
+    }
+
+    #[test]
+    fn parse_doctor_with_no_args_returns_doctor_variant() {
+        assert_eq!(parse(&args(&["doctor"])), Command::Doctor);
+    }
+
+    // Semantics choice: extra positional args after `doctor` are
+    // silently ignored (parse returns Doctor) so future flags like
+    // `--verbose` won't break existing scripts. Documented at the
+    // parser site.
+    #[test]
+    fn parse_doctor_with_extra_args_returns_invalid_or_ignores_them() {
+        assert_eq!(parse(&args(&["doctor", "--verbose"])), Command::Doctor);
+        assert_eq!(parse(&args(&["doctor", "junk", "more"])), Command::Doctor);
+    }
+
+    #[test]
+    fn run_cli_doctor_exits_with_overall_verdict_code() {
+        // run_doctor returns 0/1/2 keyed off doctor::run_all()'s
+        // overall verdict. We can't pin the exact value (depends on
+        // host environment) but it must be in {0,1,2}.
+        let rc = run_cli(&args(&["doctor"]));
+        assert!(matches!(rc, 0..=2), "doctor exited {rc}, expected 0/1/2");
     }
 }

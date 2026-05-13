@@ -11,7 +11,7 @@ fn main() {
             // Anything else (or no arg) falls through to the GUI so a
             // double-click still launches normally.
             "help" | "-h" | "--help" | "version" | "-v" | "--version" | "formats" | "inspect"
-            | "backup" | "snapshot" | "restore" => {
+            | "backup" | "snapshot" | "restore" | "doctor" => {
                 std::process::exit(diskcutter_lib::run_cli(&args[1..]));
             }
             _ => {}
