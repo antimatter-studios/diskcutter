@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>com.diskcutter.app</string>
+	<key>CFBundleName</key>
+	<string>Disk Cutter</string>
+	<key>CFBundleDisplayName</key>
+	<string>Disk Cutter</string>
+	<key>CFBundleExecutable</key>
+	<string>diskcutter</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleIconFile</key>
+	<string>icon</string>
+	<key>CFBundleIconName</key>
+	<string>icon</string>
+</dict>
+</plist>

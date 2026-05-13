@@ -2,7 +2,30 @@ use std::path::PathBuf;
 
 fn main() {
     generate_migrations_index();
+    embed_macos_info_plist();
     tauri_build::build();
+}
+
+// On macOS, embed an Info.plist section into the Mach-O so the binary carries
+// its own bundle identity (name + icon) when the OS asks "who is this
+// executable?" — e.g. the Full Disk Access / Privacy panes. Without this, the
+// elevated helper subprocess (spawned via osascript admin) is listed by raw
+// binary name ("diskcutter") with a generic icon, instead of "Disk Cutter".
+fn embed_macos_info_plist() {
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("macos") {
+        return;
+    }
+    let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
+    let plist = manifest.join("embedded-info.plist");
+    println!("cargo:rerun-if-changed={}", plist.display());
+    // -sectcreate takes 3 args (segment, section, file). Pass via -Wl with
+    // commas — cc splits each comma-separated piece into its own ld arg.
+    // Scope to the bin only; the staticlib/cdylib outputs don't need it and
+    // some linker drivers reject section flags on dylibs.
+    println!(
+        "cargo:rustc-link-arg-bin=diskcutter=-Wl,-sectcreate,__TEXT,__info_plist,{}",
+        plist.display()
+    );
 }
 
 // Scans ./migrations/*.sql at build time and emits OUT_DIR/migrations.gen.rs
