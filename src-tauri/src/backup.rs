@@ -70,6 +70,12 @@ pub struct BackupOptions {
     /// and to decide when to stop reading (a raw device read returns
     /// EOF eventually but reading the whole disk twice is wasteful).
     pub source_bytes: u64,
+    /// When true and compression == None, punch filesystem holes for
+    /// runs of zero bytes — backups of sparse VM images (qcow2 /
+    /// vhd-dynamic / etc.) shrink to roughly the allocated extent on
+    /// disk instead of the full virtual size. Compressed outputs
+    /// already compress zeros for free so the flag is a no-op there.
+    pub sparse: bool,
 }
 
 impl BackupOptions {
@@ -80,6 +86,7 @@ impl BackupOptions {
             compression: Compression::None,
             chunk_size: DEFAULT_CHUNK,
             source_bytes: 0,
+            sparse: false,
         }
     }
 }
@@ -332,7 +339,19 @@ pub fn run_to_file(
 ) -> std::result::Result<BackupResult, BackupError> {
     let mut source = File::open(&options.source_path)?;
     let dest = File::create(&options.output_path)?;
-    let sink: Box<dyn Write + Send> = Box::new(BufWriter::new(dest));
+    // Sparse only makes sense for uncompressed output to a regular
+    // file — compressed encoders already squash zero runs, and block
+    // devices can't have holes. The sparse writer wraps the dest file
+    // before the encoder so the hole detection runs on the raw stream.
+    let use_sparse = options.sparse && matches!(options.compression, Compression::None);
+    let sink: Box<dyn Write + Send> = if use_sparse {
+        Box::new(crate::sparse::SparseFileWriter::new(
+            dest,
+            options.chunk_size,
+        ))
+    } else {
+        Box::new(BufWriter::new(dest))
+    };
     let writer = make_encoder(options.compression, sink);
     let mut result = run(
         &mut source,
@@ -343,7 +362,9 @@ pub fn run_to_file(
         on_progress,
     )?;
     // Probe the output file size — for plain output this equals
-    // bytes_read; for compressed output it's the compressed length.
+    // bytes_read; for compressed output it's the compressed length;
+    // for sparse output it's the file's *logical* length (holes are
+    // counted toward len() but don't consume blocks).
     result.bytes_written = std::fs::metadata(&options.output_path)
         .map(|m| m.len())
         .unwrap_or(0);
@@ -620,6 +641,7 @@ mod tests {
             compression: Compression::None,
             chunk_size: 256,
             source_bytes: payload.len() as u64,
+            sparse: false,
         };
         let cancel = AtomicBool::new(false);
         let r = run_to_file(&options, &cancel, |_| {}).unwrap();
@@ -642,6 +664,7 @@ mod tests {
             compression: Compression::Gzip,
             chunk_size: 256,
             source_bytes: payload.len() as u64,
+            sparse: false,
         };
         let cancel = AtomicBool::new(false);
         let r = run_to_file(&options, &cancel, |_| {}).unwrap();
@@ -653,6 +676,60 @@ mod tests {
             r.bytes_written,
             payload.len(),
         );
+    }
+
+    #[test]
+    fn run_to_file_sparse_output_logical_size_matches_source() {
+        // A 1 MiB source with 1 KiB of real content + 1 MiB - 1 KiB of
+        // trailing zeros should produce an output whose *logical* size
+        // equals the source (1 MiB) but whose on-disk content is
+        // dominated by a hole. We can't assert on-disk block count
+        // portably, so we assert on the logical length and that the
+        // bytes round-trip exactly.
+        let dir = tempdir().unwrap();
+        let source = dir.path().join("sparse_src.bin");
+        let output = dir.path().join("sparse_out.bin");
+        let mut payload = vec![0u8; 1024 * 1024];
+        for (i, b) in payload[..1024].iter_mut().enumerate() {
+            *b = (i % 256) as u8;
+        }
+        std::fs::write(&source, &payload).unwrap();
+        let options = BackupOptions {
+            source_path: source.clone(),
+            output_path: output.clone(),
+            compression: Compression::None,
+            chunk_size: 4096,
+            source_bytes: payload.len() as u64,
+            sparse: true,
+        };
+        let cancel = AtomicBool::new(false);
+        let r = run_to_file(&options, &cancel, |_| {}).unwrap();
+        assert_eq!(r.bytes_read, payload.len() as u64);
+        assert_eq!(r.bytes_written, payload.len() as u64);
+        assert_eq!(std::fs::read(&output).unwrap(), payload);
+    }
+
+    #[test]
+    fn run_to_file_sparse_disabled_writes_dense_output() {
+        let dir = tempdir().unwrap();
+        let source = dir.path().join("dense_src.bin");
+        let output = dir.path().join("dense_out.bin");
+        let payload = vec![0u8; 8192];
+        std::fs::write(&source, &payload).unwrap();
+        let options = BackupOptions {
+            source_path: source.clone(),
+            output_path: output.clone(),
+            compression: Compression::None,
+            chunk_size: 4096,
+            source_bytes: payload.len() as u64,
+            sparse: false,
+        };
+        let cancel = AtomicBool::new(false);
+        let r = run_to_file(&options, &cancel, |_| {}).unwrap();
+        assert_eq!(r.bytes_read, payload.len() as u64);
+        assert_eq!(r.bytes_written, payload.len() as u64);
+        // Dense path still emits zeros to the file — round-trip equal.
+        assert_eq!(std::fs::read(&output).unwrap(), payload);
     }
 
     #[test]

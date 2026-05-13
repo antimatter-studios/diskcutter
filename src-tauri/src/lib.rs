@@ -8,6 +8,7 @@ pub mod inspect;
 pub mod pipeline;
 pub mod readers;
 pub mod snapshot;
+pub mod sparse;
 pub mod writers;
 
 pub use helper::run_helper;
