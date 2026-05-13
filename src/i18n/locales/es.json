@@ -216,6 +216,14 @@
   "error": {
     "generic": "ERROR",
     "could_not_add_image": "No se pudo añadir la imagen: {{error}}",
+    "could_not_list_disks": "No se pudieron listar los discos: {{error}}",
+    "app_info_unavailable": "Información de la app no disponible",
+    "prefs_load_failed": "No se pudieron cargar las preferencias",
+    "could_not_save_pref": "No se pudo guardar la preferencia: {{key}}",
+    "cleanup_incomplete": "La limpieza no se completó",
+    "could_not_open_system_settings": "No se pudo abrir Ajustes del Sistema",
+    "burn_start_failed": "No se pudo iniciar la grabación: {{error}}",
+    "cancel_unclean": "La cancelación no se completó correctamente",
     "ETOOBIG": {
       "title": "EL DISCO DESTINO ES DEMASIADO PEQUEÑO PARA ESTA IMAGEN",
       "detail": "ELIGE UN DISCO MÁS GRANDE O UNA IMAGEN MÁS PEQUEÑA."

@@ -216,6 +216,14 @@
   "error": {
     "generic": "ERROR",
     "could_not_add_image": "Could not add image: {{error}}",
+    "could_not_list_disks": "Could not list disks: {{error}}",
+    "app_info_unavailable": "App info unavailable",
+    "prefs_load_failed": "Preferences could not be loaded",
+    "could_not_save_pref": "Could not save preference: {{key}}",
+    "cleanup_incomplete": "Cleanup did not complete",
+    "could_not_open_system_settings": "Could not open System Settings",
+    "burn_start_failed": "Burn could not start: {{error}}",
+    "cancel_unclean": "Cancel did not complete cleanly",
     "ETOOBIG": {
       "title": "TARGET DISK IS TOO SMALL FOR THIS IMAGE",
       "detail": "CHOOSE A LARGER DISK OR A SMALLER IMAGE."

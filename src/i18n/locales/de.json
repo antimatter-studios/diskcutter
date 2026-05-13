@@ -216,6 +216,14 @@
   "error": {
     "generic": "FEHLER",
     "could_not_add_image": "Abbild konnte nicht hinzugefügt werden: {{error}}",
+    "could_not_list_disks": "Datenträger konnten nicht aufgelistet werden: {{error}}",
+    "app_info_unavailable": "App-Informationen nicht verfügbar",
+    "prefs_load_failed": "Einstellungen konnten nicht geladen werden",
+    "could_not_save_pref": "Einstellung konnte nicht gespeichert werden: {{key}}",
+    "cleanup_incomplete": "Aufräumen nicht abgeschlossen",
+    "could_not_open_system_settings": "Systemeinstellungen konnten nicht geöffnet werden",
+    "burn_start_failed": "Brennvorgang konnte nicht gestartet werden: {{error}}",
+    "cancel_unclean": "Abbruch nicht sauber abgeschlossen",
     "ETOOBIG": {
       "title": "ZIEL-DATENTRÄGER IST ZU KLEIN FÜR DIESES ABBILD",
       "detail": "GRÖSSEREN DATENTRÄGER ODER KLEINERES ABBILD WÄHLEN."

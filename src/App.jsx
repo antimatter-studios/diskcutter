@@ -106,7 +106,7 @@ function App() {
   useEffect(() => {
     invoke('list_disks').then(setDisks).catch((e) => {
       console.error('list_disks failed', e);
-      pushToast('error', `Could not list disks: ${e}`);
+      pushToast('error', t('error.could_not_list_disks', { error: e }));
     });
     invoke('app_info').then((info) => {
       const osShort = { macos: 'darwin', windows: 'win32', linux: 'linux' }[info.os] || info.os;
@@ -114,7 +114,7 @@ function App() {
       setBuildInfo(`${info.version} · ${osShort}/${archShort}${info.is_privileged ? ' · root' : ''}`);
     }).catch((e) => {
       console.error('app_info failed', e);
-      pushToast('warn', 'App info unavailable');
+      pushToast('warn', t('error.app_info_unavailable'));
     });
     // find_orphan_helpers is expected to fail on non-macOS — keep console.error
     // for devtools visibility but suppress the user-facing toast.
@@ -135,9 +135,9 @@ function App() {
       });
     }).catch((e) => {
       console.error('config_all failed', e);
-      pushToast('warn', 'Preferences could not be loaded');
+      pushToast('warn', t('error.prefs_load_failed'));
     });
-  }, [pushToast]);
+  }, [pushToast, t]);
 
   // Persist + apply a single pref change. Side effects (language, theme) are
   // handled inline so the UI updates in lockstep with the DB write.
@@ -146,7 +146,7 @@ function App() {
     setPrefs((prev) => ({ ...prev, [key]: v }));
     invoke('config_set', { key, value: v }).catch((e) => {
       console.error('config_set failed', key, e);
-      pushToast('error', `Could not save preference: ${key}`);
+      pushToast('error', t('error.could_not_save_pref', { key }));
     });
     if (key === 'language') {
       i18n.changeLanguage(v).catch(() => {});
@@ -155,7 +155,7 @@ function App() {
       // TODO: invoke('eject_disk', { device }) once the backend ships it.
       console.warn('auto.eject enabled, but eject_disk command is not implemented yet');
     }
-  }, [pushToast]);
+  }, [pushToast, t]);
 
   // Theme: data-theme attribute on <html> drives the dark palette swap.
   useEffect(() => {
@@ -194,9 +194,9 @@ function App() {
       }, 500);
     } catch (e) {
       console.error('kill_orphan_helpers failed', e);
-      pushToast('warn', 'Cleanup did not complete');
+      pushToast('warn', t('error.cleanup_incomplete'));
     }
-  }, [orphanPids, pushToast]);
+  }, [orphanPids, pushToast, t]);
 
   useEffect(() => {
     let mounted = true;
@@ -224,7 +224,7 @@ function App() {
       if (f.error_code === 'ENEEDS_FDA') {
         invoke('open_fda_settings').catch((err) => {
           console.error('open_fda_settings failed', err);
-          pushToast('warn', 'Could not open System Settings');
+          pushToast('warn', t('error.could_not_open_system_settings'));
         });
       }
     }).then((u) => subs.push(u));
@@ -233,7 +233,7 @@ function App() {
       mounted = false;
       subs.forEach((u) => u());
     };
-  }, [pushToast]);
+  }, [pushToast, t]);
 
   const addImageFromPath = useCallback(async (path) => {
     try {
@@ -307,10 +307,10 @@ function App() {
         });
       } catch (e) {
         console.error('start_write failed', e);
-        pushToast('error', `Burn could not start: ${e}`);
+        pushToast('error', t('error.burn_start_failed', { error: e }));
       }
     }
-  }, [jobs, pushToast]);
+  }, [jobs, pushToast, t]);
 
   // Global keyboard shortcuts. Skip when focus is in a text-entry surface so
   // we don't eat keystrokes the user expects to land in a form field. Cmd+Q
@@ -349,9 +349,9 @@ function App() {
       await invoke('cancel_write', { jobId });
     } catch (e) {
       console.error('cancel_write failed', e);
-      pushToast('warn', 'Cancel did not complete cleanly');
+      pushToast('warn', t('error.cancel_unclean'));
     }
-  }, [pushToast]);
+  }, [pushToast, t]);
 
   const retryJob = useCallback(async (jobId) => {
     const job = jobs.find((j) => j.id === jobId);
