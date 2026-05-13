@@ -446,11 +446,11 @@ mod tests {
     #[test]
     fn bundled_groups_have_expected_categories() {
         // Sanity: anyone bumping the bundled catalog accidentally
-        // dropping the embedded category will fail this. Catches
-        // copy-paste mistakes during version bumps.
+        // dropping a core category will fail this. Catches copy-
+        // paste mistakes during version bumps.
         let cat = bundled();
         let group_ids: Vec<&str> = cat.groups.iter().map(|g| g.id.as_str()).collect();
-        for required in &["linux-desktop", "linux-server", "embedded", "rescue"] {
+        for required in &["linux-desktop", "linux-server", "raspberry-pi", "rescue"] {
             assert!(
                 group_ids.contains(required),
                 "bundled catalog missing required group {required:?}"
