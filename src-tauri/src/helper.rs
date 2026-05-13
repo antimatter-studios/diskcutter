@@ -563,4 +563,212 @@ mod tests {
             .unwrap_or(HashAlgo::Sha256);
         assert_eq!(algo, HashAlgo::Xxhash);
     }
+
+    // ------------------------------------------------------------------
+    // HelperMessage IPC contract.
+    //
+    // These tests lock down the *wire shape* of HelperMessage. The parent
+    // app reads progress-file lines through `disks.rs::emit_helper_line`,
+    // which dispatches on the `kind` discriminator and then pulls each
+    // variant's fields by name. Any rename / field-shape change on this
+    // side silently breaks that parser, so we assert the exact JSON keys
+    // and tag values here. The parsing-side struct lives in disks.rs and
+    // is itself covered by sibling tests; this side guards the producer.
+    // ------------------------------------------------------------------
+
+    fn to_json_value(m: &HelperMessage) -> serde_json::Value {
+        serde_json::from_str(&serde_json::to_string(m).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn helper_message_progress_has_expected_fields() {
+        let m = HelperMessage::Progress {
+            state: "writing".into(),
+            bytes_done: 42,
+            bytes_total: 100,
+            bytes_per_sec: 7,
+        };
+        let v = to_json_value(&m);
+        assert_eq!(v["kind"], "progress");
+        assert_eq!(v["state"], "writing");
+        assert_eq!(v["bytes_done"], 42);
+        assert_eq!(v["bytes_total"], 100);
+        assert_eq!(v["bytes_per_sec"], 7);
+        // No extra fields beyond the documented contract.
+        let obj = v.as_object().unwrap();
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec![
+                "bytes_done",
+                "bytes_per_sec",
+                "bytes_total",
+                "kind",
+                "state"
+            ]
+        );
+    }
+
+    #[test]
+    fn helper_message_progress_verifying_state_serializes_verbatim() {
+        // Two `state` values exist in production: "writing" and "verifying".
+        // Both must pass through unmolested by the rename_all attribute (it
+        // only applies to the enum tag, not field values).
+        let m = HelperMessage::Progress {
+            state: "verifying".into(),
+            bytes_done: 0,
+            bytes_total: 0,
+            bytes_per_sec: 0,
+        };
+        let v = to_json_value(&m);
+        assert_eq!(v["state"], "verifying");
+    }
+
+    #[test]
+    fn helper_message_complete_has_expected_fields_when_match() {
+        let m = HelperMessage::Complete {
+            bytes_written: 1024,
+            source_sha256: "deadbeef".into(),
+            readback_sha256: "deadbeef".into(),
+            verify_match: true,
+            mismatches: vec![],
+            elapsed_ms: 5000,
+            avg_write_bps: 200_000,
+            avg_verify_bps: 400_000,
+        };
+        let v = to_json_value(&m);
+        assert_eq!(v["kind"], "complete");
+        assert_eq!(v["bytes_written"], 1024);
+        assert_eq!(v["source_sha256"], "deadbeef");
+        assert_eq!(v["readback_sha256"], "deadbeef");
+        assert_eq!(v["verify_match"], true);
+        assert!(v["mismatches"].is_array());
+        assert_eq!(v["mismatches"].as_array().unwrap().len(), 0);
+        assert_eq!(v["elapsed_ms"], 5000);
+        assert_eq!(v["avg_write_bps"], 200_000);
+        assert_eq!(v["avg_verify_bps"], 400_000);
+
+        let obj = v.as_object().unwrap();
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec![
+                "avg_verify_bps",
+                "avg_write_bps",
+                "bytes_written",
+                "elapsed_ms",
+                "kind",
+                "mismatches",
+                "readback_sha256",
+                "source_sha256",
+                "verify_match",
+            ]
+        );
+    }
+
+    #[test]
+    fn helper_message_complete_with_mismatches_serializes_their_shape() {
+        // VerifyMismatch fields are the forensic detail the parent UI shows
+        // when a verify fails — lba, byte_offset, expected, actual.
+        let m = HelperMessage::Complete {
+            bytes_written: 2048,
+            source_sha256: "aa".into(),
+            readback_sha256: "bb".into(),
+            verify_match: false,
+            mismatches: vec![VerifyMismatch {
+                lba: "0x10".into(),
+                byte_offset: "0x2000".into(),
+                expected: "deadbeef".into(),
+                actual: "cafef00d".into(),
+            }],
+            elapsed_ms: 100,
+            avg_write_bps: 1,
+            avg_verify_bps: 1,
+        };
+        let v = to_json_value(&m);
+        assert_eq!(v["verify_match"], false);
+        let mm = &v["mismatches"][0];
+        assert_eq!(mm["lba"], "0x10");
+        assert_eq!(mm["byte_offset"], "0x2000");
+        assert_eq!(mm["expected"], "deadbeef");
+        assert_eq!(mm["actual"], "cafef00d");
+        let mm_obj = mm.as_object().unwrap();
+        let mut keys: Vec<&str> = mm_obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(keys, vec!["actual", "byte_offset", "expected", "lba"]);
+    }
+
+    #[test]
+    fn helper_message_error_has_expected_fields() {
+        let m = HelperMessage::Error {
+            error_code: "ENEEDS_FDA".into(),
+            error_message: "Full Disk Access required".into(),
+        };
+        let v = to_json_value(&m);
+        assert_eq!(v["kind"], "error");
+        assert_eq!(v["error_code"], "ENEEDS_FDA");
+        assert_eq!(v["error_message"], "Full Disk Access required");
+        let obj = v.as_object().unwrap();
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        assert_eq!(keys, vec!["error_code", "error_message", "kind"]);
+    }
+
+    #[test]
+    fn helper_message_kind_tag_uses_lowercase_variant_names() {
+        // The `#[serde(rename_all = "lowercase")]` attribute is the IPC
+        // contract — disks.rs::emit_helper_line dispatches by exactly these
+        // three string values.
+        for (m, expected) in [
+            (
+                HelperMessage::Progress {
+                    state: "writing".into(),
+                    bytes_done: 0,
+                    bytes_total: 0,
+                    bytes_per_sec: 0,
+                },
+                "progress",
+            ),
+            (
+                HelperMessage::Complete {
+                    bytes_written: 0,
+                    source_sha256: String::new(),
+                    readback_sha256: String::new(),
+                    verify_match: true,
+                    mismatches: vec![],
+                    elapsed_ms: 0,
+                    avg_write_bps: 0,
+                    avg_verify_bps: 0,
+                },
+                "complete",
+            ),
+            (
+                HelperMessage::Error {
+                    error_code: String::new(),
+                    error_message: String::new(),
+                },
+                "error",
+            ),
+        ] {
+            let v = to_json_value(&m);
+            assert_eq!(v["kind"], expected, "kind tag mismatch for {expected}");
+        }
+    }
+
+    #[test]
+    fn helper_message_serializes_as_single_line_json() {
+        // The receiver reads the progress file line-by-line; each emit
+        // writes one JSON object terminated by a newline. The JSON itself
+        // must not contain embedded newlines or it'll break the splitter.
+        let m = HelperMessage::Progress {
+            state: "writing".into(),
+            bytes_done: 1,
+            bytes_total: 2,
+            bytes_per_sec: 3,
+        };
+        let s = serde_json::to_string(&m).unwrap();
+        assert!(!s.contains('\n'), "serialized form must be one line: {s}");
+    }
 }
