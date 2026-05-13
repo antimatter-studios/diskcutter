@@ -103,12 +103,19 @@ function App() {
   // round-trip is still pending. Without this, every extra click stacks
   // another osascript prompt + helper.
   const retryInFlightRef = useRef(new Set());
+  // prefs ref so long-lived event listeners can read the latest toggle
+  // (e.g. auto.eject in the job-complete listener) without re-subscribing.
+  const prefsRef = useRef(null);
   const [, forceTick] = useState(0);
 
   useEffect(() => {
     const i = setInterval(() => forceTick((n) => n + 1), 10000);
     return () => clearInterval(i);
   }, []);
+
+  // Keep prefsRef in lockstep with the prefs state — listeners that
+  // mount once but need to observe later pref changes read prefsRef.
+  useEffect(() => { prefsRef.current = prefs; }, [prefs]);
 
   // Push a transient toast. `level` is 'info' | 'warn' | 'error'.
   // Errors linger 8s; info/warn 4s. Stable callback identity so it can be
@@ -192,10 +199,8 @@ function App() {
     if (key === 'language') {
       i18n.changeLanguage(v).catch(() => {});
     }
-    if (key === 'auto.eject' && v === 'true') {
-      // TODO: invoke('eject_disk', { device }) once the backend ships it.
-      console.warn('auto.eject enabled, but eject_disk command is not implemented yet');
-    }
+    // auto.eject pref is consumed at job-complete time (see listener
+    // below); nothing to do at toggle time.
   }, [pushToast, t]);
 
   // Theme: data-theme attribute on <html> drives the dark palette swap.
@@ -259,6 +264,35 @@ function App() {
       },
     });
     subs.push(detachQueue);
+
+    // Auto-eject — sibling job-complete listener that does only the eject
+    // side-effect. The store's own job-complete listener (inside
+    // attachQueueListeners above) handles the queue-state update; this
+    // one just consults the auto.eject pref via ref (so a toggle doesn't
+    // need a re-subscribe), reads the just-completed job's target from
+    // the store, and fires eject_disk when verify matched. Failures
+    // surface as toasts — the burn itself is already done, so a failed
+    // eject is non-blocking.
+    listen('disk-cutter://job-complete', (e) => {
+      if (!mounted) return;
+      if (!e.payload?.verify_match) return;
+      if (prefsRef.current?.['auto.eject'] !== 'true') return;
+      const job = useQueueStore.getState().jobs[e.payload.job_id];
+      const device = job?.target?.device;
+      if (!device) return;
+      invoke('eject_disk', { device })
+        .then((o) => {
+          if (o?.success) {
+            pushToast('info', `Ejected ${device}`);
+          } else {
+            pushToast('warn', `Could not eject ${device}: ${o?.note || ''}`);
+          }
+        })
+        .catch((err) => {
+          console.error('eject_disk failed', err);
+          pushToast('warn', `Eject failed: ${err}`);
+        });
+    }).then((u) => subs.push(u));
 
     // URL fetch: progress as a transient toast every ~250ms; on
     // completion, hand the local file path to addImageFromPath which

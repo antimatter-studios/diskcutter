@@ -9,6 +9,7 @@ pub mod decoder_chain;
 mod disk_arb;
 mod disks;
 pub mod doctor;
+pub mod eject;
 pub mod forensic;
 pub mod hash;
 mod helper;
@@ -133,6 +134,7 @@ pub fn run() {
             updater::updater_fetch_updates,
             start_capture,
             cancel_capture,
+            eject::eject_disk,
         ])
         .setup(|app| {
             // Persistence is load-bearing: burn_jobs is the source of truth
