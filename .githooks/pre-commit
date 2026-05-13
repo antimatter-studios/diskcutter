@@ -13,7 +13,12 @@
 
 set -euo pipefail
 
-cd "$(git rev-parse --show-toplevel)/src-tauri"
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+
+echo "[pre-commit] i18n key parity"
+node "$REPO_ROOT/scripts/check-i18n.mjs" || exit 1
+
+cd "$REPO_ROOT/src-tauri"
 
 echo "[pre-commit] cargo fmt --check"
 if ! cargo fmt --check; then
