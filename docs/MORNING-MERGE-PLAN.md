@@ -27,23 +27,11 @@ before starting the merge so you know what state main is in:
 The morning summary doc [`docs/morning-2026-05-13.md`](./morning-2026-05-13.md)
 covers all four in more depth.
 
-### Reconciliation of two phantom branches
-
-Both turned out to be empty after a `git rev-list --count main..<br>`
-check:
-
-- `feat/forensic-record` — 0 commits ahead of main. Instance 1
-  claimed the lane in the roadmap but never produced a commit. The
-  forensic export landed under my name at `b62ac0f` on main
-  (`forensic.rs`, 11 unit tests, JSON + Markdown, SHA-256 digest).
-  Safe to `git branch -D feat/forensic-record`.
-- No `feat/snapshot` branch was ever created. The pre-burn snapshot
-  landed under my name at `76a1f7f` on main (`snapshot.rs`, 8 unit
-  tests, recovery file with sha256-verified restore). No reconcile
-  step needed.
-
-The other 8 cluster branches (table below) are all real and 1+
-commits ahead of main.
+The 8 branches in the table below are all real and 1+ commits ahead
+of main. `feat/forensic-record` exists but is empty (0 ahead) and
+`feat/snapshot` was never created — both lanes' work landed directly
+on main as `b62ac0f` (forensic) and `76a1f7f` (snapshot). Cleanup
+script at the bottom drops the empty branch.
 
 ## What landed (in time order)
 
