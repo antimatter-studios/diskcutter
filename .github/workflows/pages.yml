@@ -3,7 +3,11 @@ name: Deploy website to GitHub Pages
 on:
   push:
     branches: [main]
-    paths: ['website/**', '.github/workflows/pages.yml']
+    paths:
+      - 'website/**'
+      - 'src-tauri/catalog.json'
+      - 'src-tauri/catalog.schema.json'
+      - '.github/workflows/pages.yml'
   workflow_dispatch:
 
 permissions:
@@ -24,6 +28,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/configure-pages@v5
+      - name: Stage catalog alongside website
+        run: |
+          # Single source of truth lives in src-tauri/. The site is
+          # the public mirror the app fetches from at
+          # https://diskcutter.app/catalog.json.
+          cp src-tauri/catalog.json website/catalog.json
+          cp src-tauri/catalog.schema.json website/catalog.schema.json
       - uses: actions/upload-pages-artifact@v3
         with:
           path: website
