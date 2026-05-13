@@ -160,7 +160,7 @@ function DangerBanner({ confirmed, onConfirm, jobs, accent }) {
 
 /* ─────────── Toolbar ─────────── */
 
-function Toolbar({ onAdd, onStart, onClearDone, confirmed, jobs, accent, busy }) {
+function Toolbar({ onAdd, onAddFromUrl, onStart, onClearDone, confirmed, jobs, accent, busy }) {
   const { t } = useTranslation();
   const ready = confirmed && jobs.some(j => j.state === 'idle' && j.target);
   const hasDone = jobs.some(j => j.state === 'success');
@@ -170,6 +170,11 @@ function Toolbar({ onAdd, onStart, onClearDone, confirmed, jobs, accent, busy })
         <button className="btn btn-ghost" onClick={onAdd}>
           <span className="btn-bracket">[</span> {t('toolbar.add_image')} <span className="btn-bracket">]</span>
         </button>
+        {onAddFromUrl && (
+          <button className="btn btn-ghost" onClick={onAddFromUrl}>
+            <span className="btn-bracket">[</span> {t('toolbar.from_url')} <span className="btn-bracket">]</span>
+          </button>
+        )}
         <div className="tb-sep" />
         <button className={"btn btn-ghost" + (hasDone ? "" : " is-disabled")} onClick={hasDone ? onClearDone : null}>[ {t('toolbar.clear_done')} ]</button>
       </div>

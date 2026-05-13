@@ -229,6 +229,35 @@ function App() {
       }
     }).then((u) => subs.push(u));
 
+    // URL fetch: progress as a transient toast every ~250ms; on
+    // completion, hand the local file path to addImageFromPath which
+    // will inspect + queue it just like a drag-drop or open-dialog.
+    listen('disk-cutter://download-progress', (e) => {
+      if (!mounted) return;
+      const p = e.payload;
+      // Throttle UI noise — only push a toast when we cross a 25% boundary.
+      if (p.bytes_total > 0) {
+        const pct = Math.floor((p.bytes_done / p.bytes_total) * 4) * 25;
+        if (pct > 0 && pct % 25 === 0 && p.bytes_done >= (p.bytes_total * pct) / 100
+            && p.bytes_done < (p.bytes_total * (pct + 1)) / 100) {
+          pushToast('info', `${pct}%`);
+        }
+      }
+    }).then((u) => subs.push(u));
+
+    listen('disk-cutter://download-complete', (e) => {
+      if (!mounted) return;
+      const c = e.payload;
+      pushToast('info', t('url.complete', { name: c.name }));
+      addImageFromPathRef.current?.(c.path);
+    }).then((u) => subs.push(u));
+
+    listen('disk-cutter://download-error', (e) => {
+      if (!mounted) return;
+      const f = e.payload;
+      pushToast('error', t('url.failed', { code: f.error_code, message: f.error_message }));
+    }).then((u) => subs.push(u));
+
     return () => {
       mounted = false;
       subs.forEach((u) => u());
@@ -254,6 +283,11 @@ function App() {
     }
   }, [t, pushToast]);
 
+  // Mirror addImageFromPath into a ref so the long-lived event listener
+  // for 'download-complete' (mounted once) can reach the latest closure.
+  const addImageFromPathRef = useRef(addImageFromPath);
+  useEffect(() => { addImageFromPathRef.current = addImageFromPath; }, [addImageFromPath]);
+
   const addImage = useCallback(async () => {
     const path = await open({
       multiple: false,
@@ -262,6 +296,24 @@ function App() {
     if (!path) return;
     addImageFromPath(path);
   }, [addImageFromPath]);
+
+  // FROM URL: prompt for a URL, kick off a background download. The
+  // download_complete event handler below will inspect_image + queue
+  // the resulting local file. Progress shows up as a transient toast
+  // so the user has feedback for what's typically a multi-minute fetch.
+  const addImageFromUrl = useCallback(async () => {
+    // eslint-disable-next-line no-alert
+    const url = window.prompt(t('url.prompt'));
+    if (!url) return;
+    const job_id = `dl-${Date.now()}`;
+    try {
+      await invoke('start_download', { jobId: job_id, url });
+      pushToast('info', t('url.started', { url }));
+    } catch (e) {
+      console.error('start_download failed', e);
+      pushToast('error', t('url.start_failed', { error: String(e) }));
+    }
+  }, [t, pushToast]);
 
   // Drag-and-drop disk images onto the window. Track enter/over/leave so we
   // can show a full-window overlay while a drag is in flight — `drop` and
@@ -439,6 +491,7 @@ function App() {
     expanded, setExpanded,
     setPickerJob,
     onAdd: addImage,
+    onAddFromUrl: addImageFromUrl,
     onStart: startQueue,
     onCancelJob: cancelJob,
     onRetry: retryJob,
@@ -506,7 +559,7 @@ function AppBody({
   errorJob, errorMsg,
   expanded, setExpanded,
   setPickerJob,
-  onAdd, onStart, onCancelJob,
+  onAdd, onAddFromUrl, onStart, onCancelJob,
   onRetry, onClearDone, onFlashAnother, onCopyText, onRemoveJob,
 }) {
   const { t } = useTranslation();
@@ -589,6 +642,7 @@ function AppBody({
         {isQueueScene && (
           <Toolbar
             onAdd={onAdd}
+            onAddFromUrl={onAddFromUrl}
             onStart={onStart}
             onClearDone={onClearDone}
             confirmed={confirmed}

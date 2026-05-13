@@ -83,9 +83,17 @@
   },
   "toolbar": {
     "add_image": "ABBILD HINZUFÜGEN",
+    "from_url": "VON URL",
     "clear_done": "FERTIGE LÖSCHEN",
     "start_queue": "WARTESCHLANGE STARTEN",
     "running": "LÄUFT…"
+  },
+  "url": {
+    "prompt": "Http(s)-URL zu einem Datenträgerabbild einfügen:",
+    "started": "Lade {{url}} herunter…",
+    "complete": "Heruntergeladen: {{name}}",
+    "failed": "Download fehlgeschlagen: {{code}} — {{message}}",
+    "start_failed": "Download konnte nicht gestartet werden: {{error}}"
   },
   "banner": {
     "headline_one": "DESTRUKTIVES SCHREIBEN. <1>{{count}}</1> DATENTRÄGER WIRD GELÖSCHT.",

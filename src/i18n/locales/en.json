@@ -83,9 +83,17 @@
   },
   "toolbar": {
     "add_image": "ADD IMAGE",
+    "from_url": "FROM URL",
     "clear_done": "CLEAR DONE",
     "start_queue": "START QUEUE",
     "running": "RUNNING…"
+  },
+  "url": {
+    "prompt": "Paste an http(s) URL to a disk image:",
+    "started": "Downloading {{url}}…",
+    "complete": "Downloaded {{name}}",
+    "failed": "Download failed: {{code}} — {{message}}",
+    "start_failed": "Could not start download: {{error}}"
   },
   "banner": {
     "headline_one": "DESTRUCTIVE WRITE. <1>{{count}}</1> DISK WILL BE ERASED.",

@@ -15,6 +15,7 @@ pub mod qemu;
 pub mod readers;
 pub mod snapshot;
 pub mod sparse;
+pub mod url_fetch;
 pub mod writers;
 
 pub use cli::run_cli;
@@ -36,6 +37,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(CancelRegistry::default())
+        .manage(url_fetch::DownloadRegistry::default())
         .invoke_handler(tauri::generate_handler![
             app_info,
             open_fda_settings,
@@ -60,6 +62,8 @@ pub fn run() {
             doctor::doctor,
             qemu::qemu_check,
             qemu::qemu_test_image,
+            url_fetch::start_download,
+            url_fetch::cancel_download,
         ])
         .setup(|app| {
             match db::open(app.handle()) {
