@@ -105,3 +105,51 @@ describe('defaultTtlMs', () => {
     expect(defaultTtlMs('warn')).toBe(4000);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Gap-fill: malformed/null entries, unknown levels, identity preservation.
+// ---------------------------------------------------------------------------
+
+describe('reapExpired malformed-entry handling', () => {
+  it('drops null entries (treated as expired since they are falsy)', () => {
+    const list = [null, mkToast(1, { expiresAt: 9999 })];
+    expect(reapExpired(list, 0).map((t) => t.id)).toEqual([1]);
+  });
+
+  it('drops entries missing expiresAt (undefined > now is false)', () => {
+    const list = [{ id: 1, level: 'info', message: 'no-ttl' }, mkToast(2, { expiresAt: 9999 })];
+    expect(reapExpired(list, 0).map((t) => t.id)).toEqual([2]);
+  });
+});
+
+describe('dismissToast malformed-entry handling', () => {
+  it('drops null entries while filtering', () => {
+    const list = [null, mkToast(1), mkToast(2)];
+    const after = dismissToast(list, 1);
+    // Null entries are filtered out because the predicate `t && t.id !== id`
+    // is false for null, dropping them.
+    expect(after).toEqual([mkToast(2)]);
+  });
+});
+
+describe('defaultTtlMs additional cases', () => {
+  it('returns 4000 for unknown level strings', () => {
+    expect(defaultTtlMs('debug')).toBe(4000);
+    expect(defaultTtlMs('')).toBe(4000);
+  });
+
+  it('returns 4000 for null/undefined level', () => {
+    expect(defaultTtlMs(null)).toBe(4000);
+    expect(defaultTtlMs(undefined)).toBe(4000);
+  });
+});
+
+describe('addToast purity & identity', () => {
+  it('preserves identity of toasts that are kept', () => {
+    const t1 = mkToast(1);
+    const t2 = mkToast(2);
+    const next = addToast([t1, t2], mkToast(3));
+    expect(next[1]).toBe(t1);
+    expect(next[2]).toBe(t2);
+  });
+});

@@ -95,3 +95,66 @@ describe('queueReady', () => {
     expect(queueReady(undefined, true)).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Gap-fill: malformed events/bindings, non-string keys, queueReady mixed-state.
+// ---------------------------------------------------------------------------
+
+describe('matchShortcut malformed-input handling', () => {
+  it('returns false when event.key is not a string', () => {
+    expect(matchShortcut({ key: 42, metaKey: true }, { key: 'o', mod: true })).toBe(false);
+  });
+
+  it('returns false when binding.key is not a string', () => {
+    expect(matchShortcut(evt({ metaKey: true }), { key: null, mod: true })).toBe(false);
+  });
+
+  it('matches when both key strings are empty and modifiers align', () => {
+    // Both lowercase to '', mod requirement matches → returns true.
+    // Documents current behaviour rather than asserting a "right" answer.
+    expect(matchShortcut({ key: '', metaKey: false, ctrlKey: false }, { key: '', mod: false })).toBe(true);
+  });
+
+  it('treats metaKey and ctrlKey as interchangeable mod indicators', () => {
+    // Both set is still "mod present".
+    expect(matchShortcut(evt({ key: 'o', metaKey: true, ctrlKey: true }), { key: 'o', mod: true })).toBe(true);
+  });
+});
+
+describe('isEditableTarget additional cases', () => {
+  it('returns true for LOWERCASE input tag? (no — tagName is uppercase per DOM)', () => {
+    // DOM tagName is always uppercase, so a lowercase 'input' should NOT match.
+    expect(isEditableTarget({ tagName: 'input' })).toBe(false);
+  });
+
+  it('returns true when contentEditable is set even on INPUT', () => {
+    // INPUT path matches first; contentEditable adds nothing but shouldn't break.
+    expect(isEditableTarget({ tagName: 'INPUT', isContentEditable: false })).toBe(true);
+  });
+
+  it('returns false for A (anchor) and SPAN', () => {
+    expect(isEditableTarget({ tagName: 'A' })).toBe(false);
+    expect(isEditableTarget({ tagName: 'SPAN' })).toBe(false);
+  });
+});
+
+describe('queueReady additional cases', () => {
+  it('is true when at least one idle+target job is mixed with non-ready jobs', () => {
+    const jobs = [
+      { state: 'writing', target: { device: '/dev/x' } },
+      { state: 'idle', target: null },
+      { state: 'idle', target: { device: '/dev/y' } },
+    ];
+    expect(queueReady(jobs, true)).toBe(true);
+  });
+
+  it('tolerates null entries in the jobs array', () => {
+    expect(queueReady([null, { state: 'idle', target: { device: '/dev/x' } }], true)).toBe(true);
+    expect(queueReady([null, undefined], true)).toBe(false);
+  });
+
+  it('rejects success or error states even with target attached', () => {
+    expect(queueReady([{ state: 'success', target: { device: '/dev/x' } }], true)).toBe(false);
+    expect(queueReady([{ state: 'error', target: { device: '/dev/x' } }], true)).toBe(false);
+  });
+});

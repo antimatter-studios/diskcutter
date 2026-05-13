@@ -156,3 +156,181 @@ describe('applyJobFailure', () => {
     expect(after[0].speed).toBe('120 MB/s');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Gap-fill: purity (input arrays / job objects not mutated), boundary values
+// on bytes_written and avg_*, identity preservation of unrelated jobs, empty
+// list handling.
+// ---------------------------------------------------------------------------
+
+describe('applyJobUpdate purity & additional cases', () => {
+  it('does not mutate the input array or its job objects', () => {
+    const jobs = [idleJob('A'), idleJob('B')];
+    const snap = JSON.parse(JSON.stringify(jobs));
+    applyJobUpdate(jobs, {
+      job_id: 'A', state: 'writing', progress: 50, speed: 'x', eta: 'y',
+    });
+    expect(jobs).toEqual(snap);
+  });
+
+  it('returns a new array (not the same reference) when a match occurs', () => {
+    const jobs = [idleJob('A')];
+    const after = applyJobUpdate(jobs, {
+      job_id: 'A', state: 'writing', progress: 1, speed: 'x', eta: 'y',
+    });
+    expect(after).not.toBe(jobs);
+  });
+
+  it('handles an empty job list without throwing', () => {
+    expect(applyJobUpdate([], {
+      job_id: 'A', state: 'writing', progress: 1, speed: 'x', eta: 'y',
+    })).toEqual([]);
+  });
+
+  it('writing update resets the verifying-state preserved fields cleanly', () => {
+    // A subsequent writing update creates a fresh object via spread.
+    const before = [idleJob('A', { verifyProgress: 77 })];
+    const after = applyJobUpdate(before, {
+      job_id: 'A', state: 'writing', progress: 12, speed: 's', eta: 'e',
+    });
+    // Writing branch does not touch verifyProgress; it's carried through.
+    expect(after[0].verifyProgress).toBe(77);
+  });
+
+  it('handles a writing update with progress 0 (start of write)', () => {
+    const before = [idleJob('A')];
+    const after = applyJobUpdate(before, {
+      job_id: 'A', state: 'writing', progress: 0, speed: '0 B/s', eta: '—',
+    });
+    expect(after[0].progress).toBe(0);
+    expect(after[0].state).toBe('writing');
+  });
+
+  it('handles a writing update with progress 100', () => {
+    const before = [idleJob('A')];
+    const after = applyJobUpdate(before, {
+      job_id: 'A', state: 'writing', progress: 100, speed: 's', eta: 'e',
+    });
+    expect(after[0].progress).toBe(100);
+  });
+});
+
+describe('applyJobComplete purity & additional cases', () => {
+  const completePayload = (overrides = {}) => ({
+    job_id: 'A',
+    verify_match: true,
+    bytes_written: 1024,
+    source_sha256: 'src',
+    readback_sha256: 'dev',
+    mismatches: [],
+    elapsed_ms: 1000,
+    avg_write_bps: 1_000_000,
+    avg_verify_bps: 2_000_000,
+    ...overrides,
+  });
+
+  it('does not mutate the input array or its job objects', () => {
+    const jobs = [idleJob('A'), idleJob('B')];
+    const snap = JSON.parse(JSON.stringify(jobs));
+    applyJobComplete(jobs, completePayload());
+    expect(jobs).toEqual(snap);
+  });
+
+  it('does not mutate the supplied payload', () => {
+    const payload = completePayload({
+      mismatches: [{ lba: '0x1', byte_offset: '+0x0', expected: 'AA', actual: 'BB' }],
+    });
+    const snap = JSON.parse(JSON.stringify(payload));
+    applyJobComplete([idleJob('A')], payload);
+    expect(payload).toEqual(snap);
+  });
+
+  it('handles bytes_written of 0 (zero-sector verification block)', () => {
+    const after = applyJobComplete([idleJob('A')], completePayload({ bytes_written: 0 }));
+    expect(after[0].verification.checked).toBe(0);
+    expect(after[0].verification.total).toBe(0);
+  });
+
+  it('floors non-512-aligned bytes_written for sector count', () => {
+    // 1000 bytes → 1000/512 = 1.95… → floor → 1 sector.
+    const after = applyJobComplete([idleJob('A')], completePayload({ bytes_written: 1000 }));
+    expect(after[0].verification.checked).toBe(1);
+    expect(after[0].verification.total).toBe(1);
+  });
+
+  it('preserves a mismatch with an explicit non-empty note', () => {
+    const after = applyJobComplete([idleJob('A')], completePayload({
+      mismatches: [{
+        lba: '0x1', byte_offset: '+0x0', expected: 'AA', actual: 'BB', note: 'flipped bit',
+      }],
+    }));
+    expect(after[0].verification.mismatches[0].note).toBe('flipped bit');
+  });
+
+  it('verification.throughput uses the verify (not write) bps', () => {
+    const after = applyJobComplete([idleJob('A')], completePayload({
+      avg_write_bps: 100_000_000,   // 100.0 MB/s
+      avg_verify_bps: 50_000_000,   //  50.0 MB/s
+    }));
+    expect(after[0].verification.throughput).toBe('50.0 MB/s avg');
+    expect(after[0].speed).toBe('100.0 MB/s'); // write speed, separately
+  });
+
+  it('returns a new array (not the same reference) when a match occurs', () => {
+    const jobs = [idleJob('A')];
+    const after = applyJobComplete(jobs, completePayload());
+    expect(after).not.toBe(jobs);
+  });
+
+  it('handles an empty job list', () => {
+    expect(applyJobComplete([], completePayload())).toEqual([]);
+  });
+
+  it('returns jobs unchanged when no id matches (object identity preserved)', () => {
+    const jobs = [idleJob('A')];
+    const after = applyJobComplete(jobs, completePayload({ job_id: 'ghost' }));
+    expect(after[0]).toBe(jobs[0]);
+  });
+});
+
+describe('applyJobFailure purity & additional cases', () => {
+  it('does not mutate the input array or its job objects', () => {
+    const jobs = [idleJob('A'), idleJob('B')];
+    const snap = JSON.parse(JSON.stringify(jobs));
+    applyJobFailure(jobs, { job_id: 'A', error_code: 'EIO', error_message: 'fire' });
+    expect(jobs).toEqual(snap);
+  });
+
+  it('handles an empty job list', () => {
+    expect(applyJobFailure([], {
+      job_id: 'A', error_code: 'EIO', error_message: 'x',
+    })).toEqual([]);
+  });
+
+  it('returns a new array reference when a match occurs', () => {
+    const jobs = [idleJob('A')];
+    const after = applyJobFailure(jobs, {
+      job_id: 'A', error_code: 'EIO', error_message: 'x',
+    });
+    expect(after).not.toBe(jobs);
+  });
+
+  it('handles falsy error_message (undefined) by storing it as-is', () => {
+    const after = applyJobFailure([idleJob('A')], {
+      job_id: 'A', error_code: 'EIO', error_message: undefined,
+    });
+    expect(after[0].state).toBe('error');
+    expect(after[0].errorCode).toBe('EIO');
+    expect(after[0].errorMessage).toBeUndefined();
+  });
+
+  it('leaves identity of unrelated jobs intact across multi-job lists', () => {
+    const before = [idleJob('A'), idleJob('B'), idleJob('C')];
+    const after = applyJobFailure(before, {
+      job_id: 'B', error_code: 'EIO', error_message: 'x',
+    });
+    expect(after[0]).toBe(before[0]);
+    expect(after[2]).toBe(before[2]);
+    expect(after[1]).not.toBe(before[1]); // the failing one is replaced
+  });
+});

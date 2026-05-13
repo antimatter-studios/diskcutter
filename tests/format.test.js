@@ -101,3 +101,131 @@ describe('makeJob', () => {
     expect(job.target).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Gap-fill: boundary semantics, large values, purity.
+// ---------------------------------------------------------------------------
+
+describe('formatBytes boundary semantics', () => {
+  it('exactly 1000 promotes to kB (>= 1e3 boundary)', () => {
+    expect(formatBytes(1000)).toBe('1 kB');
+  });
+
+  it('999 stays in raw bytes', () => {
+    expect(formatBytes(999)).toBe('999 B');
+  });
+
+  it('exactly 1_000_000 promotes to MB', () => {
+    expect(formatBytes(1_000_000)).toBe('1.0 MB');
+  });
+
+  it('999_999 stays in kB', () => {
+    expect(formatBytes(999_999)).toBe('1000 kB');
+  });
+
+  it('exactly 1_000_000_000 promotes to GB', () => {
+    expect(formatBytes(1_000_000_000)).toBe('1.00 GB');
+  });
+
+  it('999_999_999 stays in MB', () => {
+    expect(formatBytes(999_999_999)).toBe('1000.0 MB');
+  });
+
+  it('handles very large GB values', () => {
+    expect(formatBytes(1_500_000_000_000)).toBe('1500.00 GB');
+  });
+
+  it('handles 1023 (just under historical 1024 boundary — decimal, not binary)', () => {
+    // formatBytes uses decimal (1e3) thresholds, so 1023 is already > 1000 → kB.
+    expect(formatBytes(1023)).toBe('1 kB');
+    expect(formatBytes(1024)).toBe('1 kB');
+  });
+});
+
+describe('formatBps boundary semantics', () => {
+  it('exactly 1000 promotes to kB/s', () => {
+    expect(formatBps(1000)).toBe('1 kB/s');
+  });
+
+  it('999 stays in raw B/s', () => {
+    expect(formatBps(999)).toBe('999 B/s');
+  });
+
+  it('exactly 1_000_000 promotes to MB/s', () => {
+    expect(formatBps(1_000_000)).toBe('1.0 MB/s');
+  });
+
+  it('exactly 1_000_000_000 promotes to GB/s', () => {
+    expect(formatBps(1_000_000_000)).toBe('1.00 GB/s');
+  });
+});
+
+describe('formatDuration edge cases', () => {
+  it('truncates sub-second values toward zero', () => {
+    // 999ms → still 0 seconds total.
+    expect(formatDuration(999)).toBe('00:00:00');
+  });
+
+  it('exactly 1000ms produces 00:00:01', () => {
+    expect(formatDuration(1000)).toBe('00:00:01');
+  });
+
+  it('exactly 60_000ms produces 00:01:00', () => {
+    expect(formatDuration(60_000)).toBe('00:01:00');
+  });
+
+  it('exactly 3_600_000ms produces 01:00:00', () => {
+    expect(formatDuration(3_600_000)).toBe('01:00:00');
+  });
+
+  it('handles very large hour counts without wrapping', () => {
+    // 250h 30m 45s
+    const ms = (250 * 3600 + 30 * 60 + 45) * 1000;
+    expect(formatDuration(ms)).toBe('250:30:45');
+  });
+});
+
+describe('formatSession edge cases', () => {
+  it('treats null/undefined as 0h 00m', () => {
+    expect(formatSession(null)).toBe('0h 00m');
+    expect(formatSession(undefined)).toBe('0h 00m');
+  });
+
+  it('exactly 59 minutes stays in 0h', () => {
+    expect(formatSession(59 * 60_000)).toBe('0h 59m');
+  });
+
+  it('60 minutes flips to 1h 00m', () => {
+    expect(formatSession(60 * 60_000)).toBe('1h 00m');
+  });
+
+  it('handles very long sessions (>24h)', () => {
+    expect(formatSession(48 * 3_600_000 + 7 * 60_000)).toBe('48h 07m');
+  });
+});
+
+describe('makeJob purity & uniqueness', () => {
+  it('does not mutate the image or target objects', () => {
+    const img = { name: 'a.iso', bytes: 100 };
+    const tgt = { device: '/dev/disk5', bytes: 200 };
+    const imgSnap = JSON.parse(JSON.stringify(img));
+    const tgtSnap = JSON.parse(JSON.stringify(tgt));
+    makeJob(1, img, tgt);
+    expect(img).toEqual(imgSnap);
+    expect(tgt).toEqual(tgtSnap);
+  });
+
+  it('different num values produce different ids', () => {
+    const a = makeJob(1, {}, null);
+    const b = makeJob(2, {}, null);
+    expect(a.id).not.toBe(b.id);
+  });
+
+  it('preserves identity of image and target (reference, not copy)', () => {
+    const img = { name: 'x' };
+    const tgt = { device: '/dev/y' };
+    const job = makeJob(0, img, tgt);
+    expect(job.image).toBe(img);
+    expect(job.target).toBe(tgt);
+  });
+});
