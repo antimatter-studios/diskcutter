@@ -29,12 +29,13 @@ export function formatSession(ms) {
   return `${h}h ${String(m).padStart(2, '0')}m`;
 }
 
-export function makeJob(num, image, target) {
+export function makeJob(num, image, target, parentEntryId) {
   return {
     id: `job-${Date.now()}-${num}`,
     num,
     image,
     target,
+    parentEntryId: parentEntryId || null,
     state: 'idle',
     progress: 0,
     verifyProgress: 0,
@@ -45,4 +46,20 @@ export function makeJob(num, image, target) {
     errorMessage: undefined,
     verification: null,
   };
+}
+
+export function makeEntry(image, copies) {
+  const goal = Math.max(1, Math.floor(Number(copies) || 1));
+  return {
+    id: `entry-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    image,
+    copiesGoal: goal,
+    copiesRemaining: goal,
+  };
+}
+
+export function decrementEntry(entry) {
+  if (!entry) return entry;
+  const next = Math.max(0, entry.copiesRemaining - 1);
+  return { ...entry, copiesRemaining: next };
 }

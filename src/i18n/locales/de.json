@@ -87,7 +87,14 @@
     "browse_catalog": "KATALOG",
     "clear_done": "FERTIGE LÖSCHEN",
     "start_queue": "WARTESCHLANGE STARTEN",
-    "running": "LÄUFT…"
+    "running": "LÄUFT…",
+    "copies_label": "KOPIEN",
+    "copies_inc": "Kopien erhöhen",
+    "copies_dec": "Kopien verringern"
+  },
+  "entry": {
+    "remaining": "{{remaining}} / {{goal}} VERBLEIBEND",
+    "dispatch_next": "NÄCHSTE STARTEN"
   },
   "url": {
     "prompt": "Http(s)-URL zu einem Datenträgerabbild einfügen:",

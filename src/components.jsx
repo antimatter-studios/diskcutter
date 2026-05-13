@@ -161,16 +161,36 @@ function DangerBanner({ confirmed, onConfirm, jobs, accent }) {
 
 /* ─────────── Toolbar ─────────── */
 
-function Toolbar({ onAdd, onAddFromUrl, onBrowseCatalog, onStart, onClearDone, confirmed, jobs, accent, busy }) {
+function Toolbar({
+  onAdd, onAddFromUrl, onBrowseCatalog, onStart, onClearDone,
+  confirmed, jobs, accent, busy,
+  copies, onChangeCopies,
+}) {
   const { t } = useTranslation();
   const ready = confirmed && jobs.some(j => j.state === 'idle' && j.target);
   const hasDone = jobs.some(j => j.state === 'success');
+  const copiesValue = Math.max(1, Math.floor(Number(copies) || 1));
+  const setCopies = (n) => onChangeCopies && onChangeCopies(Math.max(1, Math.floor(n)));
   return (
     <div className="toolbar">
       <div className="toolbar-left">
         <button className="btn btn-ghost" onClick={onAdd}>
           <span className="btn-bracket">[</span> {t('toolbar.add_image')} <span className="btn-bracket">]</span>
         </button>
+        {onChangeCopies && (
+          <div className="toolbar-copies mono small" aria-label={t('toolbar.copies_label')}>
+            <span className="copies-label">{t('toolbar.copies_label')}</span>
+            <button className="copies-step" onClick={() => setCopies(copiesValue - 1)} disabled={copiesValue <= 1} aria-label={t('toolbar.copies_dec')}>−</button>
+            <input
+              type="number"
+              className="copies-input mono"
+              min={1}
+              value={copiesValue}
+              onChange={(e) => setCopies(parseInt(e.target.value, 10) || 1)}
+            />
+            <button className="copies-step" onClick={() => setCopies(copiesValue + 1)} aria-label={t('toolbar.copies_inc')}>+</button>
+          </div>
+        )}
         {onAddFromUrl && (
           <button className="btn btn-ghost" onClick={onAddFromUrl}>
             <span className="btn-bracket">[</span> {t('toolbar.from_url')} <span className="btn-bracket">]</span>
@@ -190,6 +210,38 @@ function Toolbar({ onAdd, onAddFromUrl, onBrowseCatalog, onStart, onClearDone, c
           style={{ background: ready ? accent : 'var(--disabled)' }}
           onClick={ready ? onStart : null}>
           {busy ? `▣ ${t('toolbar.running')}` : `▶ ${t('toolbar.start_queue')}`}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ─────────── Entry Row ─────────── */
+
+// EntryRow represents a queue ENTRY — an image with N copies still to be
+// dispatched. Each dispatch spawns a JobRow below; the entry's counter
+// decrements on each successful burn and the row disappears at 0.
+function EntryRow({ entry, accent, onDispatch }) {
+  const { t } = useTranslation();
+  return (
+    <div className="entry" style={{ '--accent': accent }}>
+      <div className="entry-head">
+        <div className="entry-icon mono">⧉</div>
+        <div className="entry-image">
+          <div className="entry-image-name">{entry.image.name}</div>
+          <div className="entry-image-meta mono small">
+            <span>{entry.image.size}</span>
+          </div>
+        </div>
+        <div className="entry-counter mono">
+          {t('entry.remaining', { remaining: entry.copiesRemaining, goal: entry.copiesGoal })}
+        </div>
+        <button
+          className="btn btn-ghost entry-dispatch"
+          onClick={onDispatch}
+          disabled={entry.copiesRemaining <= 0}
+        >
+          <span className="btn-bracket">[</span> {t('entry.dispatch_next')} <span className="btn-bracket">]</span>
         </button>
       </div>
     </div>
@@ -1280,7 +1332,7 @@ function CatalogSheet({ open, onPick, onClose, accent }) {
 
 export {
   WindowChrome, Sidebar, DangerBanner, Toolbar,
-  JobRow, DiskPickerSheet, LogsView,
+  JobRow, EntryRow, DiskPickerSheet, LogsView,
   PrefsView, PREFS_DEFAULTS,
   CatalogSheet,
 };

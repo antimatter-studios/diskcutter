@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { formatBytes, formatBps, formatDuration, formatSession, makeJob } from '../src/format.js';
+import { formatBytes, formatBps, formatDuration, formatSession, makeJob, makeEntry, decrementEntry } from '../src/format.js';
 
 describe('formatBytes', () => {
   it('returns the dash placeholder for null/undefined', () => {
@@ -201,6 +201,70 @@ describe('formatSession edge cases', () => {
 
   it('handles very long sessions (>24h)', () => {
     expect(formatSession(48 * 3_600_000 + 7 * 60_000)).toBe('48h 07m');
+  });
+});
+
+describe('makeJob parentEntryId', () => {
+  it('defaults parentEntryId to null when not supplied', () => {
+    const j = makeJob(1, { name: 'a.iso' }, null);
+    expect(j.parentEntryId).toBeNull();
+  });
+
+  it('preserves a supplied parentEntryId', () => {
+    const j = makeJob(1, { name: 'a.iso' }, null, 'entry-abc');
+    expect(j.parentEntryId).toBe('entry-abc');
+  });
+});
+
+describe('makeEntry', () => {
+  it('produces an entry with copiesGoal === copiesRemaining', () => {
+    const img = { name: 'ubuntu.iso' };
+    const e = makeEntry(img, 5);
+    expect(e.image).toBe(img);
+    expect(e.copiesGoal).toBe(5);
+    expect(e.copiesRemaining).toBe(5);
+  });
+
+  it('generates an entry id with the entry- prefix', () => {
+    const e = makeEntry({}, 2);
+    expect(e.id).toMatch(/^entry-/);
+  });
+
+  it('clamps copies to a minimum of 1 (handles 0 / negative / NaN)', () => {
+    expect(makeEntry({}, 0).copiesGoal).toBe(1);
+    expect(makeEntry({}, -3).copiesGoal).toBe(1);
+    expect(makeEntry({}, NaN).copiesGoal).toBe(1);
+    expect(makeEntry({}, undefined).copiesGoal).toBe(1);
+  });
+
+  it('floors fractional copies', () => {
+    expect(makeEntry({}, 3.9).copiesGoal).toBe(3);
+  });
+
+  it('generates unique ids on rapid successive calls', () => {
+    const a = makeEntry({}, 1);
+    const b = makeEntry({}, 1);
+    expect(a.id).not.toBe(b.id);
+  });
+});
+
+describe('decrementEntry', () => {
+  it('returns a new entry with copiesRemaining - 1', () => {
+    const e = { id: 'x', copiesGoal: 5, copiesRemaining: 5 };
+    const next = decrementEntry(e);
+    expect(next.copiesRemaining).toBe(4);
+    expect(next.copiesGoal).toBe(5);
+    expect(next).not.toBe(e);
+  });
+
+  it('floors at zero', () => {
+    const e = { id: 'x', copiesGoal: 1, copiesRemaining: 0 };
+    expect(decrementEntry(e).copiesRemaining).toBe(0);
+  });
+
+  it('passes through null/undefined unchanged', () => {
+    expect(decrementEntry(null)).toBeNull();
+    expect(decrementEntry(undefined)).toBeUndefined();
   });
 });
 

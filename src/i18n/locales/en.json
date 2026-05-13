@@ -87,7 +87,14 @@
     "browse_catalog": "BROWSE CATALOG",
     "clear_done": "CLEAR DONE",
     "start_queue": "START QUEUE",
-    "running": "RUNNING…"
+    "running": "RUNNING…",
+    "copies_label": "COPIES",
+    "copies_inc": "increase copies",
+    "copies_dec": "decrease copies"
+  },
+  "entry": {
+    "remaining": "{{remaining}} / {{goal}} REMAINING",
+    "dispatch_next": "DISPATCH NEXT"
   },
   "url": {
     "prompt": "Paste an http(s) URL to a disk image:",

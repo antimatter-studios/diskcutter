@@ -6,7 +6,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { open } from '@tauri-apps/plugin-dialog';
 import {
   WindowChrome, Sidebar, DangerBanner, Toolbar,
-  JobRow, DiskPickerSheet, LogsView, PrefsView, PREFS_DEFAULTS, CatalogSheet,
+  JobRow, EntryRow, DiskPickerSheet, LogsView, PrefsView, PREFS_DEFAULTS, CatalogSheet,
 } from './components.jsx';
 import i18n from './i18n/index.js';
 import {
@@ -14,7 +14,7 @@ import {
   TweakRadio, TweakToggle, TweakColor,
 } from './tweaks-panel.jsx';
 import {
-  formatBytes, formatBps, formatDuration, formatSession, makeJob,
+  formatBytes, formatBps, formatDuration, formatSession, makeJob, makeEntry, decrementEntry,
 } from './format.js';
 import {
   applyJobUpdate, applyJobComplete, applyJobFailure,
@@ -56,6 +56,11 @@ function App() {
   const [tw, setTweak] = useTweaks(TWEAK_DEFAULTS);
   const { t } = useTranslation();
   const [jobs, setJobs] = useState([]);
+  const [entries, setEntries] = useState([]);
+  // User-chosen "copies" count for the next ADD IMAGE; sticks across adds so
+  // the operator can queue several different images at the same copy count
+  // without re-setting the stepper each time.
+  const [nextCopies, setNextCopies] = useState(1);
   const [disks, setDisks] = useState([]);
   const [confirmed, setConfirmed] = useState(false);
   const [pickerJob, setPickerJob] = useState(null);
@@ -214,11 +219,24 @@ function App() {
     listen('disk-cutter://job-complete', (e) => {
       if (!mounted) return;
       const finishedAt = Date.now();
-      setJobs((js) => applyJobComplete(js, e.payload).map((j) => (
-        j.id === e.payload.job_id && j.state === 'success'
-          ? { ...j, finishedAt }
-          : j
-      )));
+      let parentEntryId = null;
+      setJobs((js) => {
+        const before = js.find((j) => j.id === e.payload.job_id);
+        if (before) parentEntryId = before.parentEntryId || null;
+        return applyJobComplete(js, e.payload).map((j) => (
+          j.id === e.payload.job_id && j.state === 'success'
+            ? { ...j, finishedAt }
+            : j
+        ));
+      });
+      // Each successful burn from an entry decrements its counter. When the
+      // counter hits zero the entry drops out — the completed jobs remain
+      // in the history portion of the queue until cleared.
+      if (parentEntryId) {
+        setEntries((es) => es
+          .map((entry) => (entry.id === parentEntryId ? decrementEntry(entry) : entry))
+          .filter((entry) => entry.copiesRemaining > 0));
+      }
     }).then((u) => subs.push(u));
 
     listen('disk-cutter://job-error', (e) => {
@@ -282,7 +300,7 @@ function App() {
     };
   }, [pushToast, t]);
 
-  const addImageFromPath = useCallback(async (path) => {
+  const addImageFromPath = useCallback(async (path, copies) => {
     try {
       const details = await invoke('inspect_image', { path });
       const image = {
@@ -294,7 +312,18 @@ function App() {
         format: details.format,
         sha256: details.sha256 || '—',
       };
-      setJobs((js) => [...js, makeJob(js.length + 1, image, null)]);
+      const requested = Math.max(1, Math.floor(Number(copies) || 1));
+      if (requested === 1) {
+        // Classic single-burn flow: no entry, just a job. Preserves today's UX.
+        setJobs((js) => [...js, makeJob(js.length + 1, image, null)]);
+        return;
+      }
+      // Bulk flow: one entry holds the copies counter; the first job is
+      // dispatched immediately so the queue isn't empty after ADD IMAGE.
+      // Subsequent copies are dispatched manually from the entry row.
+      const entry = makeEntry(image, requested);
+      setEntries((es) => [...es, { ...entry, copiesRemaining: entry.copiesRemaining - 1 }]);
+      setJobs((js) => [...js, makeJob(js.length + 1, image, null, entry.id)]);
     } catch (e) {
       console.error('inspect_image failed', e);
       pushToast('error', t('error.could_not_add_image', { error: e }));
@@ -312,8 +341,20 @@ function App() {
       filters: [{ name: 'Disk images', extensions: ['iso', 'img', 'bin', 'raw'] }],
     });
     if (!path) return;
-    addImageFromPath(path);
-  }, [addImageFromPath]);
+    addImageFromPath(path, nextCopies);
+  }, [addImageFromPath, nextCopies]);
+
+  // Dispatch the next copy from an entry: spawn an idle job for the same
+  // image and decrement the entry's "remaining" counter. Operator still
+  // picks the target on the new job in the usual way.
+  const dispatchFromEntry = useCallback((entryId) => {
+    const entry = entries.find((en) => en.id === entryId);
+    if (!entry || entry.copiesRemaining <= 0) return;
+    setEntries((es) => es
+      .map((en) => (en.id === entryId ? decrementEntry(en) : en))
+      .filter((en) => en.copiesRemaining > 0));
+    setJobs((js) => [...js, makeJob(js.length + 1, entry.image, null, entry.id)]);
+  }, [entries]);
 
   // FROM URL: prompt for a URL, kick off a background download. The
   // download_complete event handler below will inspect_image + queue
@@ -524,6 +565,8 @@ function App() {
     errorJob, errorMsg,
     expanded, setExpanded,
     setPickerJob,
+    entries, nextCopies, onChangeNextCopies: setNextCopies,
+    onDispatchFromEntry: dispatchFromEntry,
     onAdd: addImage,
     onAddFromUrl: addImageFromUrl,
     onBrowseCatalog: () => setCatalogOpen(true),
@@ -607,6 +650,7 @@ function AppBody({
   errorJob, errorMsg,
   expanded, setExpanded,
   setPickerJob,
+  entries, nextCopies, onChangeNextCopies, onDispatchFromEntry,
   onAdd, onAddFromUrl, onBrowseCatalog, onStart, onCancelJob,
   onRetry, onClearDone, onFlashAnother, onCopyText, onRemoveJob,
 }) {
@@ -698,6 +742,8 @@ function AppBody({
             jobs={jobs}
             accent={accent}
             busy={scene === 'writing' || scene === 'verifying'}
+            copies={nextCopies}
+            onChangeCopies={onChangeNextCopies}
           />
         )}
 
@@ -707,10 +753,22 @@ function AppBody({
           </div>
         ) : onLogs ? (
           <LogsView accent={accent} />
-        ) : visibleJobs.length === 0 ? (
+        ) : visibleJobs.length === 0 && entries.length === 0 ? (
           <EmptyState accent={accent} />
         ) : (
           <div className="queue">
+            {entries.length > 0 && (
+              <div className="queue-entries">
+                {entries.map((entry) => (
+                  <EntryRow
+                    key={entry.id}
+                    entry={entry}
+                    accent={accent}
+                    onDispatch={() => onDispatchFromEntry(entry.id)}
+                  />
+                ))}
+              </div>
+            )}
             <div className="queue-head mono small">
               <span>{t('queue.head.num')}</span>
               <span>{t('queue.head.image')}</span>

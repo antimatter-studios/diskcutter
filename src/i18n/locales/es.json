@@ -87,7 +87,14 @@
     "browse_catalog": "CATÁLOGO",
     "clear_done": "LIMPIAR HECHO",
     "start_queue": "INICIAR COLA",
-    "running": "EJECUTANDO…"
+    "running": "EJECUTANDO…",
+    "copies_label": "COPIAS",
+    "copies_inc": "aumentar copias",
+    "copies_dec": "disminuir copias"
+  },
+  "entry": {
+    "remaining": "{{remaining}} / {{goal}} RESTANTES",
+    "dispatch_next": "ENVIAR SIGUIENTE"
   },
   "url": {
     "prompt": "Pega una URL http(s) a una imagen de disco:",
