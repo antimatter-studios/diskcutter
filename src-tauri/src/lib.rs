@@ -22,6 +22,7 @@ pub mod pipeline;
 pub mod proc;
 pub mod qemu;
 pub mod readers;
+mod smart;
 pub mod snapshot;
 pub mod source;
 pub mod sparse;
@@ -137,6 +138,7 @@ pub fn run() {
             start_capture,
             cancel_capture,
             eject::eject_disk,
+            smart::smart_check,
         ])
         .setup(|app| {
             // Persistence is load-bearing: burn_jobs is the source of truth

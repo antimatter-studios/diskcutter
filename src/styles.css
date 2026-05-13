@@ -877,6 +877,15 @@ input,select{font:inherit;color:inherit}
 .disk-icon{font-family:var(--mono);font-size:18px;color:var(--ink);text-align:center}
 .disk-row1{display:flex;gap:10px;align-items:baseline;font-family:var(--display);font-weight:700;font-size:14.5px}
 .disk-flag{font-family:var(--mono);font-size:10px;letter-spacing:.08em;font-weight:700;color:var(--mute)}
+.disk-smart-chip{
+  font-family:var(--mono);font-size:9.5px;letter-spacing:.08em;font-weight:700;
+  padding:1px 6px;border:1.5px solid var(--mute);background:var(--bone);color:var(--mute);
+  text-transform:uppercase;
+}
+.disk-smart-detail{
+  margin-top:4px;letter-spacing:.03em;font-weight:600;
+  font-family:var(--mono);font-size:10.5px;
+}
 .disk-row2{display:flex;gap:6px;align-items:center;color:var(--ink-2);margin-top:4px;letter-spacing:.03em}
 .disk-row2 .dot{opacity:.4}
 .disk-pick{font-family:var(--mono);font-size:11px;letter-spacing:.08em;font-weight:700;color:var(--ink)}

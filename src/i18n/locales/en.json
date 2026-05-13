@@ -546,5 +546,11 @@
     "step_reboot": "If it’s still frozen, restart your computer to clear the stuck device.",
     "dismiss": "[ DISMISS ]",
     "handle_myself": "I’ll handle it myself"
+  },
+  "smart": {
+    "chip": {
+      "failing": "SMART FAILING",
+      "warn": "SMART WARN"
+    }
   }
 }

@@ -1096,17 +1096,59 @@ function DiskLoading({ accent }) {
   );
 }
 
+// SMART status chip rendered inline on each disk row in the picker.
+// Hidden when the report is missing (still loading) or "verified with no
+// warnings" — only surfaces when there's something the user should know.
+function SmartChip({ report, accent }) {
+  const { t } = useTranslation();
+  if (!report) return null;
+  const status = report.status || 'unknown';
+  const concerning = status === 'failing' || (report.warnings && report.warnings.length > 0);
+  if (status === 'verified' && !concerning) return null; // clean — show nothing
+  if (status === 'not_supported') return null; // many USB sticks; not worth the noise
+  if (status === 'unknown') return null;
+  const style = concerning ? { background: accent, color: 'var(--on-accent)', borderColor: accent } : {};
+  const label = status === 'failing' ? t('smart.chip.failing') : t('smart.chip.warn');
+  return <span className="disk-smart-chip" style={style}>{label}</span>;
+}
+
 function DiskPickerSheet({ open, disks, loading, jobImage, onPick, onClose, onRefresh, accent }) {
+
   const { t } = useTranslation();
   const [refreshedAt, setRefreshedAt] = React.useState(Date.now());
   const [, tick] = React.useState(0);
+  // SMART preflight: lazy-fetch per device when the sheet opens or disks change.
+  // Cached by device so re-opening the sheet doesn't re-hit diskutil.
+  const [smart, setSmart] = React.useState({});
   React.useEffect(() => {
     if (!open) return;
     const i = setInterval(() => tick(n => n + 1), 1000);
     return () => clearInterval(i);
   }, [open]);
+  React.useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    const need = disks.filter((d) => d.device && !(d.device in smart));
+    if (!need.length) return;
+    Promise.all(need.map(async (d) => {
+      try {
+        const report = await invoke('disk_smart', { device: d.device });
+        return [d.device, report];
+      } catch (e) {
+        return [d.device, { device: d.device, status: 'unknown', warnings: [], raw_status: '' }];
+      }
+    })).then((entries) => {
+      if (cancelled) return;
+      setSmart((prev) => {
+        const next = { ...prev };
+        for (const [dev, rep] of entries) next[dev] = rep;
+        return next;
+      });
+    });
+    return () => { cancelled = true; };
+  }, [open, disks, smart]);
   const onRefreshClick = async () => {
-    if (onRefresh) { await onRefresh(); setRefreshedAt(Date.now()); }
+    if (onRefresh) { await onRefresh(); setRefreshedAt(Date.now()); setSmart({}); }
   };
   if (!open) return null;
   const seconds = Math.floor((Date.now() - refreshedAt) / 1000);
@@ -1155,6 +1197,7 @@ function DiskPickerSheet({ open, disks, loading, jobImage, onPick, onClose, onRe
                     <span className="disk-model">{d.model}</span>
                     {isInternal && <span className="disk-flag">{t('picker.system_disk')}</span>}
                     {tooSmall && <span className="disk-flag" style={{ color: accent }}>{t('picker.too_small')}</span>}
+                    <SmartChip report={smart[d.device]} accent={accent} />
                   </div>
                   <div className="disk-row2 mono small">
                     <span>{d.device}</span>
@@ -1165,6 +1208,11 @@ function DiskPickerSheet({ open, disks, loading, jobImage, onPick, onClose, onRe
                     <span className="dot">·</span>
                     <span>{d.partitions}</span>
                   </div>
+                  {smart[d.device] && smart[d.device].warnings.length > 0 && (
+                    <div className="disk-smart-detail mono small" style={{ color: accent }}>
+                      {smart[d.device].warnings.join(' · ')}
+                    </div>
+                  )}
                 </div>
                 <div className="disk-pick">{isInternal || tooSmall ? '—' : `[ ${t('picker.pick')} ]`}</div>
               </button>

@@ -546,5 +546,11 @@
     "step_reboot": "Wenn es weiterhin hängt, starte deinen Computer neu, um das blockierte Gerät zu lösen.",
     "dismiss": "[ SCHLIESSEN ]",
     "handle_myself": "Ich kümmere mich selbst darum"
+  },
+  "smart": {
+    "chip": {
+      "failing": "SMART KRITISCH",
+      "warn": "SMART WARNUNG"
+    }
   }
 }

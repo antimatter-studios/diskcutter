@@ -546,5 +546,11 @@
     "step_reboot": "Si sigue congelado, reinicia el equipo para liberar el dispositivo bloqueado.",
     "dismiss": "[ CERRAR ]",
     "handle_myself": "Lo gestiono yo mismo"
+  },
+  "smart": {
+    "chip": {
+      "failing": "SMART FALLANDO",
+      "warn": "AVISO SMART"
+    }
   }
 }
