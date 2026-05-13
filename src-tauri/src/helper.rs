@@ -1,12 +1,14 @@
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::Path;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
 
 use serde::Serialize;
 
 use crate::hash::HashAlgo;
-use crate::pipeline::{self, VerifyMismatch};
+use crate::pipeline::{self, BurnError, VerifyMismatch};
 use crate::readers::ImageReaderRegistry;
 #[cfg(unix)]
 use crate::writers::{BlockDeviceIo, PipelinedRawDeviceIo, RawDeviceIo};
@@ -50,6 +52,9 @@ pub fn run_helper(args: &[String]) -> i32 {
         Some(v) => v,
         None => return 2,
     };
+    // --job= drives the cancel sentinel path. Missing it disables cross-process
+    // cancel (older parents won't pass it); the burn still runs.
+    let job_id = arg_value(args, "--job=").unwrap_or_default();
     // Writer choice priority: --writer= CLI arg → DISKCUTTER_WRITER env → None (helper default).
     let writer_choice = arg_value(args, "--writer=")
         .or_else(|| std::env::var("DISKCUTTER_WRITER").ok())
@@ -157,7 +162,22 @@ pub fn run_helper(args: &[String]) -> i32 {
         }
     };
 
-    let cancel = AtomicBool::new(false);
+    let cancel = Arc::new(AtomicBool::new(false));
+    // Watch the parent-controlled sentinel file. The parent (running as the
+    // invoking user) writes `/tmp/disk-cutter-cancel-<job>.flag`; the helper
+    // runs as root via osascript, so signals are not an option — file polling
+    // is the only reliable cross-process channel here.
+    if !job_id.is_empty() {
+        let sentinel = std::path::PathBuf::from(format!("/tmp/disk-cutter-cancel-{job_id}.flag"));
+        let cancel_watch = Arc::clone(&cancel);
+        std::thread::spawn(move || loop {
+            if sentinel.exists() {
+                cancel_watch.store(true, Ordering::Relaxed);
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        });
+    }
     let burn = match pipeline::burn_with_hash(
         &mut *reader,
         dev_writer,
@@ -175,8 +195,12 @@ pub fn run_helper(args: &[String]) -> i32 {
     ) {
         Ok(b) => b,
         Err(e) => {
+            let code = match e {
+                BurnError::Cancelled => "ECANCELLED",
+                _ => "EIO",
+            };
             emit(&HelperMessage::Error {
-                error_code: "EIO".into(),
+                error_code: code.into(),
                 error_message: format!("{e:?}"),
             });
             return 1;
@@ -228,8 +252,12 @@ pub fn run_helper(args: &[String]) -> i32 {
     ) {
         Ok(v) => v,
         Err(e) => {
+            let code = match e {
+                BurnError::Cancelled => "ECANCELLED",
+                _ => "EIO",
+            };
             emit(&HelperMessage::Error {
-                error_code: "EIO".into(),
+                error_code: code.into(),
                 error_message: format!("{e:?}"),
             });
             return 1;
@@ -292,8 +320,12 @@ pub fn run_helper(args: &[String]) -> i32 {
     ) {
         Ok(v) => v,
         Err(e) => {
+            let code = match e {
+                BurnError::Cancelled => "ECANCELLED",
+                _ => "EIO",
+            };
             emit(&HelperMessage::Error {
-                error_code: "EIO".into(),
+                error_code: code.into(),
                 error_message: format!("{e:?}"),
             });
             return 1;

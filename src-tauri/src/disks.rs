@@ -619,6 +619,7 @@ pub fn start_write(
 
     std::thread::spawn(move || {
         let outcome = run_job(&app, &id, &image, &target, &flag);
+        let _ = std::fs::remove_file(cancel_sentinel_path(&id));
         let db = app.state::<Db>();
         match outcome {
             Ok(complete) => {
@@ -663,6 +664,8 @@ fn spawn_elevated_burn(
     })?;
     let progress_path = format!("/tmp/disk-cutter-progress-{job_id}.jsonl");
     let _ = std::fs::remove_file(&progress_path);
+    // Clear any stale cancel sentinel from a previous job with the same id.
+    let _ = std::fs::remove_file(cancel_sentinel_path(&job_id));
 
     // Look up the configured writer impl + perf tunables, if any. The DB may
     // not have been initialised (see lib.rs "continuing without persistence");
@@ -841,6 +844,7 @@ fn tail_helper(app: AppHandle, job_id: String, path: String, mut child: std::pro
         std::thread::sleep(Duration::from_millis(250));
     }
     let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(cancel_sentinel_path(&job_id));
 }
 
 enum HelperEvent {
@@ -966,11 +970,22 @@ fn emit_helper_line(app: &AppHandle, job_id: &str, line: &str) -> Option<&'stati
     }
 }
 
+/// Cross-process cancel sentinel path. The elevated helper subprocess runs as
+/// root via osascript and can't be reached through the parent's in-memory
+/// `CancelRegistry`; it polls this file instead.
+pub fn cancel_sentinel_path(job_id: &str) -> std::path::PathBuf {
+    std::path::PathBuf::from(format!("/tmp/disk-cutter-cancel-{job_id}.flag"))
+}
+
 #[tauri::command]
 pub fn cancel_write(cancel: State<'_, CancelRegistry>, job_id: String) -> Result<(), String> {
     if let Some(flag) = cancel.0.lock().unwrap().get(&job_id) {
         flag.store(true, Ordering::Relaxed);
     }
+    // Elevated jobs don't appear in the registry — write a sentinel the helper
+    // polls. Harmless for in-process jobs (no helper looks for it; tail_helper
+    // or run_job cleanup removes any stragglers).
+    let _ = std::fs::write(cancel_sentinel_path(&job_id), b"1");
     Ok(())
 }
 
