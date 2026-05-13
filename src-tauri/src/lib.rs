@@ -11,6 +11,7 @@ pub mod hash;
 mod helper;
 pub mod inspect;
 pub mod pipeline;
+pub mod qemu;
 pub mod readers;
 pub mod snapshot;
 pub mod sparse;
@@ -57,6 +58,8 @@ pub fn run() {
             commands::export_burn_report,
             commands::run_backup,
             doctor::doctor,
+            qemu::qemu_check,
+            qemu::qemu_test_image,
         ])
         .setup(|app| {
             match db::open(app.handle()) {
