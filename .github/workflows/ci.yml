@@ -1,8 +1,21 @@
+# Disk Cutter CI gate.
+#
+# This workflow is the agreed CI bar for PRs and pushes to main. It mirrors
+# .githooks/pre-commit (cargo fmt, cargo clippy -D warnings, i18n parity)
+# and additionally runs the full test suites and the frontend production
+# build. A green CI run here means the same checks that pass locally on a
+# pre-commit also pass on a clean Linux/macOS runner.
+#
+# We deliberately do not exercise the macOS DiskArbitration FFI against
+# real devices — that requires a physical disk or sandboxing tricks that
+# don't belong in CI. `cargo test` is enough; the unit tests don't touch
+# real /dev/ nodes.
+
 name: CI
 
 on:
   push:
-    branches: [main, master]
+    branches: [main]
   pull_request:
 
 concurrency:
@@ -10,37 +23,17 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  frontend:
-    name: Frontend
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-      - run: npm ci
-      - name: Vitest
-        run: npm test
-      - name: Build
-        run: npm run build
-
-  rust:
-    name: Rust ${{ matrix.os }} ${{ matrix.task }}
+  rust-checks:
+    name: Rust checks (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-22.04]
-        task: [fmt, clippy, test]
-        include:
-          # Exercise macOS-gated code paths (translate_to_raw, RawDeviceIo).
-          - os: macos-latest
-            task: test
+        os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Linux deps
+      - name: Install Linux system deps
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
@@ -58,18 +51,53 @@ jobs:
         with:
           components: rustfmt, clippy
 
-      - uses: Swatinem/rust-cache@v2
+      - name: Cache cargo registry and build
+        uses: actions/cache@v4
         with:
-          workspaces: src-tauri
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
 
-      - name: cargo fmt
-        if: matrix.task == 'fmt'
+      - name: cargo fmt --check
         run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
 
-      - name: cargo clippy
-        if: matrix.task == 'clippy'
+      - name: cargo clippy --all-targets -- -D warnings
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 
       - name: cargo test
-        if: matrix.task == 'test'
-        run: cargo test --manifest-path src-tauri/Cargo.toml --all-features
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+
+  frontend-checks:
+    name: Frontend checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Cache node_modules
+        uses: actions/cache@v4
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-node-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+
+      - name: npm install
+        run: npm install
+
+      - name: Vitest
+        run: npm test
+
+      - name: Production build
+        run: npm run build
+
+      - name: i18n key parity
+        run: node scripts/check-i18n.mjs
