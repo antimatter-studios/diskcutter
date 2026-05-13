@@ -69,6 +69,9 @@ function App() {
   // PREFS_DEFAULTS so the UI never renders an empty <select>.
   const [prefs, setPrefs] = useState(() => ({ ...PREFS_DEFAULTS }));
   const [dragActive, setDragActive] = useState(false);
+  // Set when the user requests window close while burns are still active.
+  // Shape: { active: [{ job_id, target }], phase?: 'cancelling' | 'exiting' }
+  const [closeBlocked, setCloseBlocked] = useState(null);
   const [toasts, setToasts] = useState([]);
   const toastIdRef = useRef(0);
   const sessionStartRef = useRef(Date.now());
@@ -257,6 +260,20 @@ function App() {
       if (!mounted) return;
       const f = e.payload;
       pushToast('error', t('url.failed', { code: f.error_code, message: f.error_message }));
+    }).then((u) => subs.push(u));
+
+    // Window close requested while burn(s) active — show abort/cancel dialog.
+    listen('disk-cutter://close-blocked', (e) => {
+      if (!mounted) return;
+      setCloseBlocked({ active: e.payload?.active || [], phase: null });
+    }).then((u) => subs.push(u));
+
+    // Progress through the abort-and-quit sequence so the dialog can
+    // disable Cancel and show "Stopping burn…" before the window dies.
+    listen('disk-cutter://shutdown-progress', (e) => {
+      if (!mounted) return;
+      const phase = e.payload?.phase || null;
+      setCloseBlocked((prev) => (prev ? { ...prev, phase } : prev));
     }).then((u) => subs.push(u));
 
     return () => {
@@ -550,6 +567,12 @@ function App() {
 
       {dragActive && <DragOverlay />}
 
+      <CloseBlockedDialog
+        state={closeBlocked}
+        accent={accent}
+        onCancel={() => setCloseBlocked(null)}
+      />
+
       <ToastLayer toasts={toasts} onDismiss={handleDismissToast} />
 
       <TweaksPanel>
@@ -755,6 +778,52 @@ function DragOverlay() {
         <span className="drag-overlay-bracket">[</span>
         <span className="drag-overlay-label">{t('drag.drop_here')}</span>
         <span className="drag-overlay-bracket">]</span>
+      </div>
+    </div>
+  );
+}
+
+function CloseBlockedDialog({ state, accent, onCancel }) {
+  const { t } = useTranslation();
+  if (!state) return null;
+  const aborting = state.phase === 'cancelling' || state.phase === 'exiting';
+  const count = state.active?.length || 0;
+  const handleAbort = () => {
+    invoke('abort_and_quit').catch((e) => {
+      console.error('abort_and_quit failed', e);
+    });
+  };
+  return (
+    <div className="sheet-backdrop" role="alertdialog" aria-modal="true">
+      <div className="sheet" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 460 }}>
+        <div className="sheet-head">
+          <div>
+            <div className="sheet-eyebrow" style={{ color: accent }}>{t('close_blocked.eyebrow')}</div>
+            <div className="sheet-title">{t('close_blocked.title', { count })}</div>
+          </div>
+        </div>
+        <div className="sheet-warning">
+          <span style={{ color: accent }}>⚠</span>
+          {aborting ? t('close_blocked.aborting') : t('close_blocked.body', { count })}
+        </div>
+        <div className="disk-list" style={{ padding: '0 18px' }}>
+          {(state.active || []).map((b) => (
+            <div key={b.job_id} className="mono small" style={{ padding: '4px 0' }}>{b.target}</div>
+          ))}
+        </div>
+        <div style={{ display: 'flex', gap: 10, padding: 18, justifyContent: 'flex-end' }}>
+          <button className="btn" onClick={onCancel} disabled={aborting}>
+            {t('close_blocked.cancel')}
+          </button>
+          <button
+            className="btn"
+            onClick={handleAbort}
+            disabled={aborting}
+            style={{ background: accent, color: '#fff', borderColor: accent }}
+          >
+            {aborting ? t('close_blocked.stopping') : t('close_blocked.abort')}
+          </button>
+        </div>
       </div>
     </div>
   );

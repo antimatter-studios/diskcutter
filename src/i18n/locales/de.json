@@ -222,6 +222,15 @@
   "drag": {
     "drop_here": "ABBILD HIER ABLEGEN"
   },
+  "close_blocked": {
+    "eyebrow": "BRENNVORGANG LÄUFT",
+    "title": "{{count}} Brennvorgang stoppen und beenden?",
+    "body": "Beim Schließen werden {{count}} aktive Schreibvorgänge abgebrochen. Der Zieldatenträger wird wahrscheinlich unbrauchbar, bis ein neuer Brennvorgang gestartet wird.",
+    "aborting": "Brennvorgang wird sauber gestoppt. Die App schließt sich, sobald der Helper beendet ist.",
+    "cancel": "[ WEITER BRENNEN ]",
+    "abort": "[ ABBRECHEN UND BEENDEN ]",
+    "stopping": "[ STOPPE … ]"
+  },
   "empty": {
     "default_label": "ABBILD WÄHLEN, UM ZU BEGINNEN",
     "no_done": "NOCH KEINE ABGESCHLOSSENEN AUFGABEN.",

@@ -222,6 +222,15 @@
   "drag": {
     "drop_here": "SUELTA LA IMAGEN AQUÍ"
   },
+  "close_blocked": {
+    "eyebrow": "GRABACIÓN EN CURSO",
+    "title": "¿Detener {{count}} grabación y salir?",
+    "body": "Cerrar ahora abortará {{count}} escritura(s) activa(s). Es probable que el disco de destino quede inutilizable hasta que inicies una nueva grabación.",
+    "aborting": "Deteniendo la grabación de forma limpia. La app se cerrará cuando el ayudante termine.",
+    "cancel": "[ SEGUIR GRABANDO ]",
+    "abort": "[ ABORTAR Y SALIR ]",
+    "stopping": "[ DETENIENDO… ]"
+  },
   "empty": {
     "default_label": "ELIGE UNA IMAGEN DE DISCO PARA EMPEZAR",
     "no_done": "AÚN NO HAY TRABAJOS COMPLETADOS.",

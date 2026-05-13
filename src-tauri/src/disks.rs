@@ -93,6 +93,52 @@ pub struct JobFailure {
 #[derive(Default)]
 pub struct CancelRegistry(pub Mutex<HashMap<String, Arc<AtomicBool>>>);
 
+/// Tracks burns currently in flight so a window-close request can ask "is
+/// anything writing right now?" without round-tripping through the DB. Both
+/// the in-process and the elevated-helper paths register here on entry to
+/// `start_write` and deregister on terminal event.
+#[derive(Default)]
+pub struct ActiveBurns(pub Mutex<HashMap<String, ActiveBurn>>);
+
+#[derive(Clone, Debug)]
+pub struct ActiveBurn {
+    pub job_id: String,
+    pub target: String,
+    #[allow(dead_code)]
+    pub kind: BurnKind,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BurnKind {
+    /// Same-process: cancel via the `CancelRegistry` atomic flag.
+    InProcess,
+    /// Out-of-process root helper: cancel via filesystem marker the helper
+    /// polls. The helper itself runs as root and cannot be signalled by us.
+    Elevated,
+}
+
+impl ActiveBurns {
+    pub fn insert(&self, burn: ActiveBurn) {
+        if let Ok(mut g) = self.0.lock() {
+            g.insert(burn.job_id.clone(), burn);
+        }
+    }
+    pub fn remove(&self, job_id: &str) {
+        if let Ok(mut g) = self.0.lock() {
+            g.remove(job_id);
+        }
+    }
+    pub fn snapshot(&self) -> Vec<ActiveBurn> {
+        self.0
+            .lock()
+            .map(|g| g.values().cloned().collect())
+            .unwrap_or_default()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.0.lock().map(|g| g.is_empty()).unwrap_or(true)
+    }
+}
+
 #[derive(Serialize, Clone)]
 pub struct AppInfo {
     pub version: String,
@@ -573,6 +619,7 @@ fn derive_partitions(dict: &plist::Dictionary) -> String {
 pub fn start_write(
     app: AppHandle,
     cancel: State<'_, CancelRegistry>,
+    active: State<'_, ActiveBurns>,
     job_id: String,
     image_path: String,
     target_device: String,
@@ -602,6 +649,11 @@ pub fn start_write(
 
     let needs_elevation = target_device.starts_with("/dev/") && !is_privileged();
     if needs_elevation {
+        active.insert(ActiveBurn {
+            job_id: job_id.clone(),
+            target: target_device.clone(),
+            kind: BurnKind::Elevated,
+        });
         return spawn_elevated_burn(app, job_id, image_path, target_device);
     }
 
@@ -611,6 +663,11 @@ pub fn start_write(
         .lock()
         .unwrap()
         .insert(job_id.clone(), flag.clone());
+    active.insert(ActiveBurn {
+        job_id: job_id.clone(),
+        target: target_device.clone(),
+        kind: BurnKind::InProcess,
+    });
 
     let app = app.clone();
     let id = job_id;
@@ -634,6 +691,7 @@ pub fn start_write(
                     complete.avg_write_bps,
                     complete.avg_verify_bps,
                 );
+                app.state::<ActiveBurns>().remove(&complete.job_id);
                 let _ = app.emit("disk-cutter://job-complete", complete);
             }
             Err(failure) => {
@@ -643,6 +701,7 @@ pub fn start_write(
                     &failure.error_code,
                     &failure.error_message,
                 );
+                app.state::<ActiveBurns>().remove(&failure.job_id);
                 let _ = app.emit("disk-cutter://job-error", failure);
             }
         }
@@ -660,6 +719,7 @@ fn spawn_elevated_burn(
     let exe = std::env::current_exe().map_err(|e| {
         let msg = e.to_string();
         db::record_burn_failed(&app.state::<Db>(), &job_id, "EHELPER", &msg);
+        app.state::<ActiveBurns>().remove(&job_id);
         msg
     })?;
     let progress_path = format!("/tmp/disk-cutter-progress-{job_id}.jsonl");
@@ -715,6 +775,7 @@ fn spawn_elevated_burn(
         .map_err(|e| {
             let msg = format!("osascript spawn failed: {e}");
             db::record_burn_failed(&app.state::<Db>(), &job_id, "EHELPER", &msg);
+            app.state::<ActiveBurns>().remove(&job_id);
             msg
         })?;
 
@@ -824,6 +885,7 @@ fn tail_helper(app: AppHandle, job_id: String, path: String, mut child: std::pro
                         "authorization cancelled or helper failed".to_string()
                     };
                     db::record_burn_failed(&app.state::<Db>(), &job_id, code, &msg);
+                    app.state::<ActiveBurns>().remove(&job_id);
                     let _ = app.emit(
                         "disk-cutter://job-error",
                         JobFailure {
@@ -954,6 +1016,7 @@ fn emit_helper_line(app: &AppHandle, job_id: &str, line: &str) -> Option<&'stati
                 complete.avg_write_bps,
                 complete.avg_verify_bps,
             );
+            app.state::<ActiveBurns>().remove(&complete.job_id);
             let _ = app.emit("disk-cutter://job-complete", complete);
             Some("complete")
         }
@@ -964,6 +1027,7 @@ fn emit_helper_line(app: &AppHandle, job_id: &str, line: &str) -> Option<&'stati
                 &failure.error_code,
                 &failure.error_message,
             );
+            app.state::<ActiveBurns>().remove(&failure.job_id);
             let _ = app.emit("disk-cutter://job-error", failure);
             Some("error")
         }
@@ -986,6 +1050,70 @@ pub fn cancel_write(cancel: State<'_, CancelRegistry>, job_id: String) -> Result
     // polls. Harmless for in-process jobs (no helper looks for it; tail_helper
     // or run_job cleanup removes any stragglers).
     let _ = std::fs::write(cancel_sentinel_path(&job_id), b"1");
+    Ok(())
+}
+
+/// Cancel every active burn at once. Used by the window-close handler so a
+/// quit request gracefully unwinds every in-flight write before the process
+/// exits. Returns the count signalled (snapshot at time of call) so the
+/// caller can pick a sensible grace window.
+pub fn cancel_all_burns(active: &ActiveBurns, cancel: &CancelRegistry) -> usize {
+    let snap = active.snapshot();
+    let count = snap.len();
+    if let Ok(reg) = cancel.0.lock() {
+        for burn in &snap {
+            if let Some(flag) = reg.get(&burn.job_id) {
+                flag.store(true, Ordering::Relaxed);
+            }
+        }
+    }
+    for burn in &snap {
+        let _ = std::fs::write(cancel_sentinel_path(&burn.job_id), b"1");
+    }
+    count
+}
+
+/// Polls `ActiveBurns` until empty or `timeout` elapses. Returns true if all
+/// burns cleared cleanly, false if the timeout fired with some still active.
+pub fn wait_for_burns_to_clear(active: &ActiveBurns, timeout: std::time::Duration) -> bool {
+    let deadline = std::time::Instant::now() + timeout;
+    while std::time::Instant::now() < deadline {
+        if active.is_empty() {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    active.is_empty()
+}
+
+#[tauri::command]
+pub fn has_active_burns(active: State<'_, ActiveBurns>) -> bool {
+    !active.is_empty()
+}
+
+/// Cancel every active burn, wait briefly for cooperative shutdown, then
+/// quit the app. Returns immediately; the frontend listens for
+/// `disk-cutter://shutdown-progress` to track the wait. If helpers don't
+/// exit within the grace window, the orphan-sweep at next launch picks up
+/// any survivors (see `find_orphan_helpers`/`kill_orphan_helpers`).
+#[tauri::command]
+pub fn abort_and_quit(app: AppHandle) -> Result<(), String> {
+    let app2 = app.clone();
+    std::thread::spawn(move || {
+        let active = app2.state::<ActiveBurns>();
+        let cancel = app2.state::<CancelRegistry>();
+        let count = cancel_all_burns(&active, &cancel);
+        let _ = app2.emit(
+            "disk-cutter://shutdown-progress",
+            serde_json::json!({ "phase": "cancelling", "count": count }),
+        );
+        let cleared = wait_for_burns_to_clear(&active, std::time::Duration::from_secs(8));
+        let _ = app2.emit(
+            "disk-cutter://shutdown-progress",
+            serde_json::json!({ "phase": "exiting", "cleared": cleared }),
+        );
+        app2.exit(0);
+    });
     Ok(())
 }
 
@@ -1177,6 +1305,76 @@ fn format_eta(done: u64, total: u64, bps: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn mk_burn(id: &str, kind: BurnKind) -> ActiveBurn {
+        ActiveBurn {
+            job_id: id.into(),
+            target: "/dev/disk5".into(),
+            kind,
+        }
+    }
+
+    #[test]
+    fn active_burns_insert_remove_snapshot_roundtrip() {
+        let reg = ActiveBurns::default();
+        assert!(reg.is_empty());
+        reg.insert(mk_burn("j1", BurnKind::Elevated));
+        reg.insert(mk_burn("j2", BurnKind::InProcess));
+        assert!(!reg.is_empty());
+        let snap = reg.snapshot();
+        assert_eq!(snap.len(), 2);
+        reg.remove("j1");
+        let snap = reg.snapshot();
+        assert_eq!(snap.len(), 1);
+        assert_eq!(snap[0].job_id, "j2");
+        reg.remove("j2");
+        assert!(reg.is_empty());
+    }
+
+    #[test]
+    fn cancel_all_burns_writes_markers_for_every_active_job() {
+        let reg = ActiveBurns::default();
+        let cancel = CancelRegistry::default();
+        let id1 = format!("test-cancel-all-{}-a", std::process::id());
+        let id2 = format!("test-cancel-all-{}-b", std::process::id());
+        // Flag exists only for the in-process job — cancel_all_burns must still
+        // write a marker for the elevated one even when no flag is registered.
+        let flag1 = Arc::new(AtomicBool::new(false));
+        cancel.0.lock().unwrap().insert(id1.clone(), flag1.clone());
+        reg.insert(mk_burn(&id1, BurnKind::InProcess));
+        reg.insert(mk_burn(&id2, BurnKind::Elevated));
+
+        let count = cancel_all_burns(&reg, &cancel);
+        assert_eq!(count, 2);
+        assert!(flag1.load(Ordering::Relaxed), "in-process flag flipped");
+        let m1 = cancel_sentinel_path(&id1);
+        let m2 = cancel_sentinel_path(&id2);
+        assert!(m1.exists(), "sentinel for in-process burn");
+        assert!(m2.exists(), "sentinel for elevated burn");
+        let _ = std::fs::remove_file(&m1);
+        let _ = std::fs::remove_file(&m2);
+    }
+
+    #[test]
+    fn wait_for_burns_to_clear_returns_false_on_timeout() {
+        let reg = ActiveBurns::default();
+        reg.insert(mk_burn("stuck", BurnKind::Elevated));
+        let cleared = wait_for_burns_to_clear(&reg, std::time::Duration::from_millis(150));
+        assert!(!cleared);
+    }
+
+    #[test]
+    fn wait_for_burns_to_clear_returns_true_when_drained() {
+        let reg = std::sync::Arc::new(ActiveBurns::default());
+        reg.insert(mk_burn("j1", BurnKind::Elevated));
+        let reg2 = reg.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            reg2.remove("j1");
+        });
+        let cleared = wait_for_burns_to_clear(&reg, std::time::Duration::from_secs(2));
+        assert!(cleared);
+    }
 
     #[test]
     fn is_whole_disk_accepts_disk_with_trailing_digits() {

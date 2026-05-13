@@ -222,6 +222,15 @@
   "drag": {
     "drop_here": "DROP DISK IMAGE HERE"
   },
+  "close_blocked": {
+    "eyebrow": "BURN IN PROGRESS",
+    "title": "Stop {{count}} burn and quit?",
+    "body": "Closing now will abort {{count}} active write. The destination disk will likely be unusable until you start a new burn.",
+    "aborting": "Stopping burn cleanly. The app will close once the helper exits.",
+    "cancel": "[ KEEP BURNING ]",
+    "abort": "[ ABORT AND QUIT ]",
+    "stopping": "[ STOPPING… ]"
+  },
   "empty": {
     "default_label": "PICK A DISK IMAGE TO BEGIN",
     "no_done": "NO COMPLETED JOBS YET.",

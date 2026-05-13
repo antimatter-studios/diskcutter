@@ -26,19 +26,44 @@ use db::{
     burn_history_clear, burn_history_list, burn_logs_list, config_all, config_get, config_set, Db,
 };
 use disks::{
-    app_info, cancel_write, find_orphan_helpers, inspect_image, kill_orphan_helpers, list_disks,
-    open_fda_settings, start_write, verify_image, CancelRegistry,
+    abort_and_quit, app_info, cancel_write, find_orphan_helpers, has_active_burns, inspect_image,
+    kill_orphan_helpers, list_disks, open_fda_settings, start_write, verify_image, ActiveBurns,
+    CancelRegistry,
 };
 use std::sync::Mutex;
 use tauri::menu::{AboutMetadataBuilder, MenuBuilder, SubmenuBuilder};
-use tauri::Manager;
+use tauri::{Emitter, Manager, WindowEvent};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(CancelRegistry::default())
+        .manage(ActiveBurns::default())
         .manage(url_fetch::DownloadRegistry::default())
+        .on_window_event(|window, event| {
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                let app = window.app_handle();
+                let active = app.state::<ActiveBurns>();
+                if !active.is_empty() {
+                    api.prevent_close();
+                    let snapshot = active.snapshot();
+                    let payload: Vec<_> = snapshot
+                        .iter()
+                        .map(|b| {
+                            serde_json::json!({
+                                "job_id": b.job_id,
+                                "target": b.target,
+                            })
+                        })
+                        .collect();
+                    let _ = window.emit(
+                        "disk-cutter://close-blocked",
+                        serde_json::json!({ "active": payload }),
+                    );
+                }
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             app_info,
             open_fda_settings,
@@ -48,6 +73,8 @@ pub fn run() {
             inspect_image,
             start_write,
             cancel_write,
+            has_active_burns,
+            abort_and_quit,
             verify_image,
             config_get,
             config_set,
