@@ -712,6 +712,40 @@ input,select{font:inherit;color:inherit}
   min-width:32px;text-align:left;
 }
 
+/* ─────────── Doctor (diagnostics) panel ─────────── */
+
+.doctor-block{display:flex;flex-direction:column;gap:10px}
+.doctor-head{
+  display:flex;align-items:center;justify-content:space-between;gap:12px;
+}
+.doctor-status{
+  font-size:11.5px;letter-spacing:.04em;color:var(--mute);padding:4px 0;
+}
+.doctor-status--err{color:var(--hazard)}
+.doctor-rows{display:flex;flex-direction:column;gap:6px;padding-top:4px}
+.doctor-row{
+  display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;
+  font-size:11.5px;line-height:1.45;color:var(--ink);
+}
+.doctor-row--overall{
+  padding-bottom:8px;margin-bottom:4px;
+  border-bottom:1px dashed rgba(12,12,11,.18);
+}
+:root[data-theme="dark"] .doctor-row--overall{border-bottom-color:rgba(237,232,216,.18)}
+.doctor-row-label{font-weight:600;letter-spacing:.02em}
+.doctor-row-note{color:var(--mute);word-break:break-word;flex:1;min-width:0}
+.doctor-pill{
+  display:inline-block;font-size:10.5px;letter-spacing:.08em;font-weight:700;
+  padding:1px 6px;border:1.5px solid var(--ink);
+  background:var(--bone);color:var(--ink);
+  min-width:54px;text-align:center;
+}
+.doctor-pill--pass{background:#d6f0c8;color:#1c4a0c;border-color:#1c4a0c}
+.doctor-pill--warn{background:var(--warn-bg);color:#7a5a00;border-color:#7a5a00}
+.doctor-pill--fail{background:var(--hazard);color:var(--on-accent);border-color:var(--ink)}
+:root[data-theme="dark"] .doctor-pill--pass{background:#1a3a10;color:#9ad57c;border-color:#9ad57c}
+:root[data-theme="dark"] .doctor-pill--warn{background:var(--warn-bg);color:#e6c870;border-color:#e6c870}
+
 /* ─────────── Logs view ─────────── */
 
 .logs{

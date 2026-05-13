@@ -311,6 +311,25 @@
       "off": "NO"
     }
   },
+  "doctor": {
+    "title": "DIAGNÓSTICO",
+    "overall": "Resultado general",
+    "rerun": "VOLVER A COMPROBAR",
+    "running": "Comprobando…",
+    "invoke_failed": "No se pudieron ejecutar los diagnósticos",
+    "status": {
+      "pass": "OK",
+      "warn": "AVISO",
+      "fail": "ERROR"
+    },
+    "check": {
+      "tmpdir": "Directorio temporal escribible",
+      "tempdir_resolved": "Directorio temporal resuelto",
+      "eject": "Sistema de expulsión",
+      "fda": "Acceso total al disco",
+      "qemu": "Prueba de arranque QEMU"
+    }
+  },
   "logs": {
     "title": "REGISTROS DE GRABACIÓN.",
     "sub": "CADA GRABACIÓN, ALMACENADA LOCALMENTE.",

@@ -673,6 +673,83 @@ function PrefsView({ values, onChange }) {
           </div>
         </div>
       ))}
+      <DoctorPanel />
+    </div>
+  );
+}
+
+// Stable id → i18n key. Unknown ids fall back to the backend's English
+// `check.name`, which keeps the panel forward-compatible when new
+// checks land before the locales catch up.
+const DOCTOR_CHECK_LABELS = {
+  'tmpdir': 'doctor.check.tmpdir',
+  'tempdir-resolved': 'doctor.check.tempdir_resolved',
+  'eject': 'doctor.check.eject',
+  'fda': 'doctor.check.fda',
+  'qemu': 'doctor.check.qemu',
+};
+
+function DoctorPill({ status }) {
+  const { t } = useTranslation();
+  const cls = 'doctor-pill doctor-pill--' + status;
+  return <span className={cls + ' mono'}>[{t('doctor.status.' + status)}]</span>;
+}
+
+function DoctorPanel() {
+  const { t } = useTranslation();
+  const [report, setReport] = React.useState(null);
+  const [loading, setLoading] = React.useState(true);
+  const [error, setError] = React.useState(null);
+
+  const run = React.useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const r = await invoke('doctor');
+      setReport(r);
+    } catch (e) {
+      setError(String(e));
+      setReport(null);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  React.useEffect(() => { run(); }, [run]);
+
+  return (
+    <div className="detail-block prefs-block doctor-block">
+      <div className="doctor-head">
+        <div className="detail-label">▌ {t('doctor.title')}</div>
+        <button className="btn btn-ghost" onClick={run} disabled={loading}>
+          <span className="btn-bracket">[</span> R <span className="btn-bracket">]</span> {t('doctor.rerun')}
+        </button>
+      </div>
+      {loading && !report && (
+        <div className="doctor-status mono">{t('doctor.running')}</div>
+      )}
+      {error && (
+        <div className="doctor-status doctor-status--err mono">{t('doctor.invoke_failed')}: {error}</div>
+      )}
+      {report && (
+        <div className="doctor-rows">
+          <div className="doctor-row doctor-row--overall">
+            <span className="doctor-row-label mono">{t('doctor.overall')}</span>
+            <DoctorPill status={report.overall} />
+          </div>
+          {report.checks.map((c) => {
+            const labelKey = DOCTOR_CHECK_LABELS[c.id];
+            const label = labelKey ? t(labelKey) : c.name;
+            return (
+              <div key={c.id} className="doctor-row">
+                <DoctorPill status={c.status} />
+                <span className="doctor-row-label">{label}</span>
+                {c.note && <span className="doctor-row-note mono">— {c.note}</span>}
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

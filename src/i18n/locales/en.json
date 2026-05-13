@@ -311,6 +311,25 @@
       "off": "OFF"
     }
   },
+  "doctor": {
+    "title": "DIAGNOSTICS",
+    "overall": "Overall",
+    "rerun": "RE-RUN",
+    "running": "Running checks…",
+    "invoke_failed": "Could not run diagnostics",
+    "status": {
+      "pass": "PASS",
+      "warn": "WARN",
+      "fail": "FAIL"
+    },
+    "check": {
+      "tmpdir": "Temp directory writable",
+      "tempdir_resolved": "Temp directory resolves",
+      "eject": "Eject backend",
+      "fda": "Full Disk Access",
+      "qemu": "QEMU boot test"
+    }
+  },
   "logs": {
     "title": "BURN LOGS.",
     "sub": "EVERY BURN, PERSISTED IN THE LOCAL DB.",

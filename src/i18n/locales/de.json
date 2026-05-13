@@ -311,6 +311,25 @@
       "off": "AUS"
     }
   },
+  "doctor": {
+    "title": "DIAGNOSE",
+    "overall": "Gesamt",
+    "rerun": "ERNEUT PRÜFEN",
+    "running": "Prüfung läuft…",
+    "invoke_failed": "Diagnose fehlgeschlagen",
+    "status": {
+      "pass": "OK",
+      "warn": "WARN",
+      "fail": "FEHLER"
+    },
+    "check": {
+      "tmpdir": "Temp-Verzeichnis beschreibbar",
+      "tempdir_resolved": "Temp-Verzeichnis aufgelöst",
+      "eject": "Auswurf-Backend",
+      "fda": "Voller Festplattenzugriff",
+      "qemu": "QEMU-Boot-Test"
+    }
+  },
   "logs": {
     "title": "BRENN-LOGS.",
     "sub": "JEDER BRENNVORGANG, LOKAL GESPEICHERT.",
