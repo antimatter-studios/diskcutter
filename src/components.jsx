@@ -355,7 +355,7 @@ function JobDetail({ job, accent, onCancel, onRetry }) {
 
       <div className="detail-actions">
         {job.state === 'writing' || job.state === 'verifying' ? (
-          <button className="btn btn-danger" style={{ borderColor: accent, color: accent }} onClick={onCancel}>
+          <button className="btn btn-danger" style={{ '--accent': accent, borderColor: accent, color: accent }} onClick={onCancel}>
             [ {t('detail.actions.abort')} ]
           </button>
         ) : null}

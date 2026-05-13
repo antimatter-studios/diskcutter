@@ -367,7 +367,9 @@ input,select{font:inherit;color:inherit}
   background:transparent;border:2px solid var(--ink);
   font-family:var(--mono);font-weight:700;font-size:11px;letter-spacing:.08em;
   padding:8px 14px;cursor:pointer;
+  transition:background-color .12s ease, color .12s ease;
 }
+.btn-danger:hover{background:var(--accent,var(--hazard));color:var(--on-accent)}
 
 .density-toggle{display:flex;border:1.5px solid var(--ink)}
 .density-toggle button{
