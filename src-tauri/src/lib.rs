@@ -3,6 +3,7 @@ mod db;
 #[cfg(target_os = "macos")]
 mod disk_arb;
 mod disks;
+pub mod forensic;
 mod helper;
 pub mod inspect;
 pub mod pipeline;
