@@ -10,8 +10,8 @@ fn main() {
             // Recognised CLI subcommands route to the headless runner.
             // Anything else (or no arg) falls through to the GUI so a
             // double-click still launches normally.
-            "help" | "-h" | "--help" | "version" | "-v" | "--version" | "formats"
-            | "inspect" | "backup" | "snapshot" | "restore" => {
+            "help" | "-h" | "--help" | "version" | "-v" | "--version" | "formats" | "inspect"
+            | "backup" | "snapshot" | "restore" => {
                 std::process::exit(disk_cutter_lib::run_cli(&args[1..]));
             }
             _ => {}

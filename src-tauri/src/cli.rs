@@ -225,7 +225,10 @@ fn run_inspect(path: &std::path::Path) -> i32 {
             0
         }
         None => {
-            eprintln!("disk-cutter: no partition table found in {}", path.display());
+            eprintln!(
+                "disk-cutter: no partition table found in {}",
+                path.display()
+            );
             1
         }
     }

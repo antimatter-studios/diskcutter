@@ -217,10 +217,7 @@ pub fn to_markdown(report: &ForensicReport) -> String {
     s.push_str("\n## Source image\n");
     s.push_str(&format!("- Name: `{}`\n", report.burn.image_name));
     s.push_str(&format!("- Path: `{}`\n", report.burn.image_path));
-    s.push_str(&format!(
-        "- Size: {} bytes\n",
-        report.burn.image_size_bytes
-    ));
+    s.push_str(&format!("- Size: {} bytes\n", report.burn.image_size_bytes));
     if let Some(h) = &report.burn.source_sha256 {
         s.push_str(&format!("- sha256: `{h}`\n"));
     }
@@ -237,10 +234,7 @@ pub fn to_markdown(report: &ForensicReport) -> String {
         s.push_str(&format!("- readback sha256: `{rh}`\n"));
     }
     if let Some(m) = report.burn.verify_match {
-        s.push_str(&format!(
-            "- Verify match: {}\n",
-            if m { "✓" } else { "✗" }
-        ));
+        s.push_str(&format!("- Verify match: {}\n", if m { "✓" } else { "✗" }));
     }
     if let Some(code) = &report.burn.error_code {
         s.push_str(&format!("- Error code: `{code}`\n"));
@@ -304,8 +298,8 @@ mod tests {
             state: "completed".into(),
             error_code: None,
             error_message: None,
-            started_at: 1715600000_000,
-            finished_at: Some(1715600120_000),
+            started_at: 1_715_600_000_000,
+            finished_at: Some(1_715_600_120_000),
         }
     }
 

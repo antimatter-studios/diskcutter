@@ -117,8 +117,8 @@ fn run_one(label: &str, io: &dyn DeviceIo, source: &mut MemImageReader) -> Row {
     source.rewind();
     let writer = io.open_write(&target).expect("open_write");
     let write_started = Instant::now();
-    let burn_result = pipeline::burn(source, writer, DEFAULT_CHUNK, &cancel, |_| {})
-        .expect("burn succeeds");
+    let burn_result =
+        pipeline::burn(source, writer, DEFAULT_CHUNK, &cancel, |_| {}).expect("burn succeeds");
     let write_elapsed = write_started.elapsed();
 
     // Verify (hash-only read-back through the same impl).
@@ -149,11 +149,7 @@ fn throughput_mb_s(bytes: u64, elapsed: Duration) -> f64 {
 
 fn print_table(rows: &[Row]) {
     println!("Disk Cutter benchmark — synthetic 256 MiB image");
-    println!(
-        "host: {}/{}",
-        std::env::consts::OS,
-        std::env::consts::ARCH
-    );
+    println!("host: {}/{}", std::env::consts::OS, std::env::consts::ARCH);
     println!("chunk size: 1 MiB");
     println!();
     println!(
