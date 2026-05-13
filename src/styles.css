@@ -623,6 +623,11 @@ input,select{font:inherit;color:inherit}
 .disk--small,.disk--system{opacity:.55;cursor:not-allowed}
 .disk--small:hover,.disk--system:hover{background:transparent}
 .disk--small .disk-pick,.disk--system .disk-pick{color:var(--mute)}
+.disk-group-header{
+  padding:8px 20px;background:var(--sidebar-bg);
+  border-top:1.5px solid var(--ink);border-bottom:1.5px solid rgba(12,12,11,.15);
+  letter-spacing:.12em;font-weight:700;color:var(--ink-2);text-transform:uppercase;
+}
 .sheet-foot{
   padding:10px 20px;border-top:1.5px solid var(--ink);
   background:var(--sidebar-bg);display:flex;gap:8px;align-items:center;

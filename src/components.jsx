@@ -523,10 +523,18 @@ function DiskPickerSheet({ open, disks, jobImage, onPick, onClose, onRefresh, ac
         </div>
 
         <div className="disk-list">
-          {disks.map((d, i) => {
-            const tooSmall = jobImage && d.bytes < jobImage.bytes;
-            const isInternal = d.bus.includes('NVME') || d.flags?.includes('INTERNAL');
-            return (
+          {(() => {
+            const decorated = disks.map((d) => {
+              const tooSmall = jobImage && d.bytes < jobImage.bytes;
+              const isInternal = d.bus.includes('NVME') || d.flags?.includes('INTERNAL');
+              return { d, tooSmall, isInternal };
+            });
+            // Order: internal disks are "not permitted" regardless of size; among
+            // non-internal disks, those that are too small for the image are split off.
+            const allowed = decorated.filter((x) => !x.isInternal && !x.tooSmall);
+            const tooSmall = decorated.filter((x) => !x.isInternal && x.tooSmall);
+            const notPermitted = decorated.filter((x) => x.isInternal);
+            const renderRow = ({ d, tooSmall, isInternal }) => (
               <button key={d.device} className={"disk" + (tooSmall ? " disk--small" : "") + (isInternal ? " disk--system" : "")}
                       onClick={() => !tooSmall && !isInternal && onPick(d)}>
                 <div className="disk-icon">{isInternal ? '⛔' : '⬚'}</div>
@@ -549,7 +557,23 @@ function DiskPickerSheet({ open, disks, jobImage, onPick, onClose, onRefresh, ac
                 <div className="disk-pick">{isInternal || tooSmall ? '—' : `[ ${t('picker.pick')} ]`}</div>
               </button>
             );
-          })}
+            return (
+              <>
+                {allowed.length > 0 && (
+                  <div className="disk-group-header mono small">{t('picker.allowed')}</div>
+                )}
+                {allowed.map(renderRow)}
+                {tooSmall.length > 0 && (
+                  <div className="disk-group-header mono small">{t('picker.too_small_header')}</div>
+                )}
+                {tooSmall.map(renderRow)}
+                {notPermitted.length > 0 && (
+                  <div className="disk-group-header mono small">{t('picker.not_permitted')}</div>
+                )}
+                {notPermitted.map(renderRow)}
+              </>
+            );
+          })()}
         </div>
 
         <div className="sheet-foot mono small">
