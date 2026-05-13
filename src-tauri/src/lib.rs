@@ -5,6 +5,7 @@ mod db;
 #[cfg(target_os = "macos")]
 mod disk_arb;
 mod disks;
+pub mod doctor;
 pub mod forensic;
 pub mod hash;
 mod helper;
@@ -55,6 +56,7 @@ pub fn run() {
             commands::restore_snapshot,
             commands::export_burn_report,
             commands::run_backup,
+            doctor::doctor,
         ])
         .setup(|app| {
             match db::open(app.handle()) {
