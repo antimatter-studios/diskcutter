@@ -27,27 +27,12 @@ flate2 = "1"
 xz2 = "0.1"
 bzip2 = "0.6"
 zstd = "0.13"
-am-img-qcow2 = "0.2"
+am-img-qcow2 = "0.3"
 am-img-vhd = "0.2"
 am-img-vhdx = "0.2"
 am-img-vmdk = "0.2"
 am-fs-core = "0.2"
 am-partitions = "0.2"
-
-# Tonight's overnight build points am-img-qcow2 at a sibling working
-# tree so the new allocated_extents API (feat/allocated-extents,
-# 85c59e5) is available. When that branch is published to crates.io
-# (likely as 0.3.0), drop these patch overrides and bump am-img-qcow2.
-# am-fs-core / am-partitions / am-img-vhd / vhdx / vmdk also get
-# patched so trait identity stays consistent — all the sibling crates
-# share a single am-fs-core working tree.
-[patch.crates-io]
-am-fs-core = { path = "../../rust-fs-core" }
-am-partitions = { path = "../../rust-partitions" }
-am-img-qcow2 = { path = "../../rust-img-qcow2" }
-am-img-vhd = { path = "../../rust-img-vhd" }
-am-img-vhdx = { path = "../../rust-img-vhdx" }
-am-img-vmdk = { path = "../../rust-img-vmdk" }
 
 [dev-dependencies]
 tempfile = "3"
