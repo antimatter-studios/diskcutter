@@ -23,6 +23,9 @@ import {
   computeScene, sceneToTitleKey, computeSessionStats, planStart,
 } from './app-derive.js';
 import { matchShortcut, isEditableTarget, queueReady } from './keymap.js';
+import {
+  addToast, reapExpired, dismissToast, defaultTtlMs,
+} from './toast.js';
 
 // Theme palette is sourced from CSS :root vars (--accent-1..4), so theme switching is just a CSS swap.
 function readThemeAccent(n, fallback) {
@@ -65,6 +68,8 @@ function App() {
   // PREFS_DEFAULTS so the UI never renders an empty <select>.
   const [prefs, setPrefs] = useState(() => ({ ...PREFS_DEFAULTS }));
   const [dragActive, setDragActive] = useState(false);
+  const [toasts, setToasts] = useState([]);
+  const toastIdRef = useRef(0);
   const sessionStartRef = useRef(Date.now());
   const [, forceTick] = useState(0);
 
@@ -73,13 +78,46 @@ function App() {
     return () => clearInterval(i);
   }, []);
 
+  // Push a transient toast. `level` is 'info' | 'warn' | 'error'.
+  // Errors linger 8s; info/warn 4s. Stable callback identity so it can be
+  // referenced from other useCallback deps without churning.
+  const pushToast = useCallback((level, message) => {
+    toastIdRef.current += 1;
+    const id = toastIdRef.current;
+    const ttl = defaultTtlMs(level);
+    const toast = { id, level, message: String(message ?? ''), expiresAt: Date.now() + ttl };
+    setToasts((list) => addToast(list, toast));
+  }, []);
+
+  const handleDismissToast = useCallback((id) => {
+    setToasts((list) => dismissToast(list, id));
+  }, []);
+
+  // Single ticking interval reaps expired toasts. Cheap to keep running —
+  // the filter is a no-op when nothing is queued.
   useEffect(() => {
-    invoke('list_disks').then(setDisks).catch((e) => console.error('list_disks failed', e));
+    const id = setInterval(() => {
+      const now = Date.now();
+      setToasts((list) => (list.some((tt) => tt.expiresAt <= now) ? reapExpired(list, now) : list));
+    }, 500);
+    return () => clearInterval(id);
+  }, []);
+
+  useEffect(() => {
+    invoke('list_disks').then(setDisks).catch((e) => {
+      console.error('list_disks failed', e);
+      pushToast('error', `Could not list disks: ${e}`);
+    });
     invoke('app_info').then((info) => {
       const osShort = { macos: 'darwin', windows: 'win32', linux: 'linux' }[info.os] || info.os;
       const archShort = { aarch64: 'arm64', x86_64: 'x64' }[info.arch] || info.arch;
       setBuildInfo(`${info.version} · ${osShort}/${archShort}${info.is_privileged ? ' · root' : ''}`);
-    }).catch((e) => console.error('app_info failed', e));
+    }).catch((e) => {
+      console.error('app_info failed', e);
+      pushToast('warn', 'App info unavailable');
+    });
+    // find_orphan_helpers is expected to fail on non-macOS — keep console.error
+    // for devtools visibility but suppress the user-facing toast.
     invoke('find_orphan_helpers').then(setOrphanPids).catch((e) => console.error('find_orphan_helpers failed', e));
     // Hydrate every pref in one round-trip. Missing/empty keys fall through
     // to PREFS_DEFAULTS so the UI shows a sensible value until the user
@@ -95,15 +133,21 @@ function App() {
         if (!next.language) next.language = i18n.language;
         return next;
       });
-    }).catch((e) => console.error('config_all failed', e));
-  }, []);
+    }).catch((e) => {
+      console.error('config_all failed', e);
+      pushToast('warn', 'Preferences could not be loaded');
+    });
+  }, [pushToast]);
 
   // Persist + apply a single pref change. Side effects (language, theme) are
   // handled inline so the UI updates in lockstep with the DB write.
   const setPref = useCallback((key, value) => {
     const v = String(value);
     setPrefs((prev) => ({ ...prev, [key]: v }));
-    invoke('config_set', { key, value: v }).catch((e) => console.error('config_set failed', key, e));
+    invoke('config_set', { key, value: v }).catch((e) => {
+      console.error('config_set failed', key, e);
+      pushToast('error', `Could not save preference: ${key}`);
+    });
     if (key === 'language') {
       i18n.changeLanguage(v).catch(() => {});
     }
@@ -111,7 +155,7 @@ function App() {
       // TODO: invoke('eject_disk', { device }) once the backend ships it.
       console.warn('auto.eject enabled, but eject_disk command is not implemented yet');
     }
-  }, []);
+  }, [pushToast]);
 
   // Theme: data-theme attribute on <html> drives the dark palette swap.
   useEffect(() => {
@@ -150,8 +194,9 @@ function App() {
       }, 500);
     } catch (e) {
       console.error('kill_orphan_helpers failed', e);
+      pushToast('warn', 'Cleanup did not complete');
     }
-  }, [orphanPids]);
+  }, [orphanPids, pushToast]);
 
   useEffect(() => {
     let mounted = true;
@@ -177,7 +222,10 @@ function App() {
       const f = e.payload;
       setJobs((js) => applyJobFailure(js, f));
       if (f.error_code === 'ENEEDS_FDA') {
-        invoke('open_fda_settings').catch((err) => console.error('open_fda_settings failed', err));
+        invoke('open_fda_settings').catch((err) => {
+          console.error('open_fda_settings failed', err);
+          pushToast('warn', 'Could not open System Settings');
+        });
       }
     }).then((u) => subs.push(u));
 
@@ -185,7 +233,7 @@ function App() {
       mounted = false;
       subs.forEach((u) => u());
     };
-  }, []);
+  }, [pushToast]);
 
   const addImageFromPath = useCallback(async (path) => {
     try {
@@ -202,9 +250,9 @@ function App() {
       setJobs((js) => [...js, makeJob(js.length + 1, image, null)]);
     } catch (e) {
       console.error('inspect_image failed', e);
-      alert(t('error.could_not_add_image', { error: e }));
+      pushToast('error', t('error.could_not_add_image', { error: e }));
     }
-  }, [t]);
+  }, [t, pushToast]);
 
   const addImage = useCallback(async () => {
     const path = await open({
@@ -259,9 +307,10 @@ function App() {
         });
       } catch (e) {
         console.error('start_write failed', e);
+        pushToast('error', `Burn could not start: ${e}`);
       }
     }
-  }, [jobs]);
+  }, [jobs, pushToast]);
 
   // Global keyboard shortcuts. Skip when focus is in a text-entry surface so
   // we don't eat keystrokes the user expects to land in a form field. Cmd+Q
@@ -300,8 +349,9 @@ function App() {
       await invoke('cancel_write', { jobId });
     } catch (e) {
       console.error('cancel_write failed', e);
+      pushToast('warn', 'Cancel did not complete cleanly');
     }
-  }, []);
+  }, [pushToast]);
 
   const retryJob = useCallback(async (jobId) => {
     const job = jobs.find((j) => j.id === jobId);
@@ -317,8 +367,9 @@ function App() {
       });
     } catch (e) {
       console.error('retry start_write failed', e);
+      pushToast('error', `Retry failed: ${e}`);
     }
-  }, [jobs]);
+  }, [jobs, pushToast]);
 
   const clearDone = useCallback(() => {
     setJobs((js) => js.filter((j) => j.state !== 'success'));
@@ -347,8 +398,11 @@ function App() {
 
   const refreshDisks = useCallback(async () => {
     try { setDisks(await invoke('list_disks')); }
-    catch (e) { console.error('list_disks failed', e); }
-  }, []);
+    catch (e) {
+      console.error('list_disks failed', e);
+      pushToast('error', `Could not list disks: ${e}`);
+    }
+  }, [pushToast]);
 
   const accent = tw.accent;
   const platform = tw.platform;
@@ -417,6 +471,8 @@ function App() {
       />
 
       {dragActive && <DragOverlay />}
+
+      <ToastLayer toasts={toasts} onDismiss={handleDismissToast} />
 
       <TweaksPanel>
         <TweakSection label="TAURI">
@@ -620,6 +676,27 @@ function DragOverlay() {
         <span className="drag-overlay-label">{t('drag.drop_here')}</span>
         <span className="drag-overlay-bracket">]</span>
       </div>
+    </div>
+  );
+}
+
+function ToastLayer({ toasts, onDismiss }) {
+  if (!toasts || toasts.length === 0) return null;
+  return (
+    <div className="toast-layer" role="status" aria-live="polite">
+      {toasts.map((toast) => (
+        <div key={toast.id} className={`toast toast--${toast.level} mono`}>
+          <span className="toast-message">{toast.message}</span>
+          <button
+            type="button"
+            className="toast-dismiss"
+            onClick={() => onDismiss(toast.id)}
+            aria-label="dismiss"
+          >
+            ✕
+          </button>
+        </div>
+      ))}
     </div>
   );
 }
