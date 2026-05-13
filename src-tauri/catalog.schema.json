@@ -1,0 +1,96 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://diskcutter.app/catalog.schema.json",
+  "title": "Disk Cutter image catalog",
+  "description": "Curated list of disk-image downloads, grouped by category, consumed by the Disk Cutter app's catalog picker.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "groups"],
+  "properties": {
+    "$schema": { "type": "string", "format": "uri" },
+    "schema_version": {
+      "type": "integer",
+      "const": 1,
+      "description": "Bumped on breaking changes. The app rejects catalogs whose major version it doesn't understand."
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When the publishing pipeline produced this file. Stamped by the GitHub Action; ignored by the app."
+    },
+    "source_commit": {
+      "type": "string",
+      "description": "The git SHA of the catalog source at publish time (or 'bundled' for the in-binary fallback)."
+    },
+    "groups": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/group" }
+    }
+  },
+  "$defs": {
+    "group": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "images"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]*$",
+          "description": "Stable identifier; React key on the frontend. Lowercase alphanumeric plus hyphens."
+        },
+        "name": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "description": { "type": "string", "maxLength": 240 },
+        "images": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/image" }
+        }
+      }
+    },
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "description", "download_url", "homepage"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]*$",
+          "description": "Stable identifier; React key. Globally unique across all groups."
+        },
+        "name": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "description": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "download_url": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https?://",
+          "description": "Direct ISO/IMG URL. The app's URL-fetch pipeline rejects non-http(s) schemes."
+        },
+        "sha256sums_url": {
+          "type": "string",
+          "description": "URL to the project's SHA256SUMS file, or empty when none exists. Empty string is allowed; null is not."
+        },
+        "homepage": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https?://"
+        },
+        "size_bytes": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "Optional. Lets the picker show '5.8 GB' before any download begins."
+        },
+        "published_at": {
+          "type": ["string", "null"],
+          "format": "date",
+          "description": "Optional ISO date the upstream release was published."
+        },
+        "arch": {
+          "type": "string",
+          "enum": ["x86_64", "aarch64", "i386", "armv7", "riscv64"],
+          "description": "Target architecture. Influences which hardware the user can boot the result on."
+        }
+      }
+    }
+  }
+}

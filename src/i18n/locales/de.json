@@ -84,6 +84,7 @@
   "toolbar": {
     "add_image": "ABBILD HINZUFÜGEN",
     "from_url": "VON URL",
+    "browse_catalog": "KATALOG",
     "clear_done": "FERTIGE LÖSCHEN",
     "start_queue": "WARTESCHLANGE STARTEN",
     "running": "LÄUFT…"
@@ -94,6 +95,24 @@
     "complete": "Heruntergeladen: {{name}}",
     "failed": "Download fehlgeschlagen: {{code}} — {{message}}",
     "start_failed": "Download konnte nicht gestartet werden: {{error}}"
+  },
+  "catalog": {
+    "eyebrow": "KURATIERTER KATALOG",
+    "title": "Wähle ein Datenträgerabbild zum Herunterladen.",
+    "warning": "Heruntergeladene Dateien landen im lokalen Cache. Das gewählte Abbild wird anschließend zum Brennen vorgemerkt.",
+    "loading": "KATALOG WIRD GELADEN…",
+    "empty": "KATALOG IST LEER.",
+    "pick": "WÄHLEN",
+    "homepage": "Projektseite",
+    "refresh": "[ R ] AKTUALISIEREN",
+    "refreshing": "AKTUALISIERT…",
+    "start_failed": "Download konnte nicht starten — ist das URL-Fetch-Backend installiert?\n\n{{error}}",
+    "source": {
+      "cached": "AUS CACHE",
+      "bundled": "MITGELIEFERT (in der App eingebaut)",
+      "remote": "FRISCH GELADEN",
+      "unknown": "—"
+    }
   },
   "banner": {
     "headline_one": "DESTRUKTIVES SCHREIBEN. <1>{{count}}</1> DATENTRÄGER WIRD GELÖSCHT.",
@@ -281,7 +300,8 @@
     "section": {
       "performance": "LEISTUNG",
       "display": "ANZEIGE",
-      "behavior": "VERHALTEN"
+      "behavior": "VERHALTEN",
+      "catalog": "KATALOG"
     },
     "label": {
       "writer_impl": "SCHREIBER",
@@ -295,7 +315,15 @@
       "theme": "DESIGN",
       "density": "DICHTE",
       "auto_eject": "AUTO-AUSWURF",
-      "auto_clear_done_seconds": "AUTO. FERTIGE LÖSCHEN"
+      "auto_clear_done_seconds": "AUTO. FERTIGE LÖSCHEN",
+      "catalog_url": "KATALOG-URL",
+      "catalog_refresh_hours": "KATALOG-AKTUALISIERUNG"
+    },
+    "catalog_refresh": {
+      "off": "NUR MANUELL",
+      "1h": "STÜNDLICH",
+      "24h": "TÄGLICH",
+      "7d": "WÖCHENTLICH"
     },
     "writer_impl": {
       "raw": "ROH",

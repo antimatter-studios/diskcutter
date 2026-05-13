@@ -84,6 +84,7 @@
   "toolbar": {
     "add_image": "AÑADIR IMAGEN",
     "from_url": "DESDE URL",
+    "browse_catalog": "CATÁLOGO",
     "clear_done": "LIMPIAR HECHO",
     "start_queue": "INICIAR COLA",
     "running": "EJECUTANDO…"
@@ -94,6 +95,24 @@
     "complete": "Descargado: {{name}}",
     "failed": "Descarga fallida: {{code}} — {{message}}",
     "start_failed": "No se pudo iniciar la descarga: {{error}}"
+  },
+  "catalog": {
+    "eyebrow": "CATÁLOGO CURADO",
+    "title": "Elige una imagen de disco para descargar.",
+    "warning": "Las descargas se guardan en la caché local. La imagen elegida se añade a la cola de grabación.",
+    "loading": "CARGANDO CATÁLOGO…",
+    "empty": "EL CATÁLOGO ESTÁ VACÍO.",
+    "pick": "ELEGIR",
+    "homepage": "página oficial",
+    "refresh": "[ R ] ACTUALIZAR",
+    "refreshing": "ACTUALIZANDO…",
+    "start_failed": "No se pudo iniciar la descarga — ¿está instalado el backend de descarga por URL?\n\n{{error}}",
+    "source": {
+      "cached": "EN CACHÉ",
+      "bundled": "INCLUIDO (integrado en la app)",
+      "remote": "RECIÉN OBTENIDO",
+      "unknown": "—"
+    }
   },
   "banner": {
     "headline_one": "ESCRITURA DESTRUCTIVA. <1>{{count}}</1> DISCO SERÁ BORRADO.",
@@ -281,7 +300,8 @@
     "section": {
       "performance": "RENDIMIENTO",
       "display": "PANTALLA",
-      "behavior": "COMPORTAMIENTO"
+      "behavior": "COMPORTAMIENTO",
+      "catalog": "CATÁLOGO"
     },
     "label": {
       "writer_impl": "ESCRITOR",
@@ -295,7 +315,15 @@
       "theme": "TEMA",
       "density": "DENSIDAD",
       "auto_eject": "AUTO EXPULSAR",
-      "auto_clear_done_seconds": "AUTO LIMPIAR HECHO"
+      "auto_clear_done_seconds": "AUTO LIMPIAR HECHO",
+      "catalog_url": "URL DEL CATÁLOGO",
+      "catalog_refresh_hours": "ACTUALIZAR CATÁLOGO"
+    },
+    "catalog_refresh": {
+      "off": "SOLO MANUAL",
+      "1h": "CADA HORA",
+      "24h": "CADA DÍA",
+      "7d": "CADA SEMANA"
     },
     "writer_impl": {
       "raw": "CRUDO",

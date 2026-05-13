@@ -66,6 +66,7 @@ pub fn run() {
             url_fetch::start_download,
             url_fetch::cancel_download,
             catalog::catalog_list,
+            catalog::catalog_refresh,
         ])
         .setup(|app| {
             match db::open(app.handle()) {

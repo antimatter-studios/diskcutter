@@ -84,6 +84,7 @@
   "toolbar": {
     "add_image": "ADD IMAGE",
     "from_url": "FROM URL",
+    "browse_catalog": "BROWSE CATALOG",
     "clear_done": "CLEAR DONE",
     "start_queue": "START QUEUE",
     "running": "RUNNING…"
@@ -94,6 +95,24 @@
     "complete": "Downloaded {{name}}",
     "failed": "Download failed: {{code}} — {{message}}",
     "start_failed": "Could not start download: {{error}}"
+  },
+  "catalog": {
+    "eyebrow": "CURATED CATALOG",
+    "title": "Pick a disk image to download.",
+    "warning": "Downloads land in your local cache. The picked image is then queued for burning.",
+    "loading": "LOADING CATALOG…",
+    "empty": "CATALOG IS EMPTY.",
+    "pick": "PICK",
+    "homepage": "homepage",
+    "refresh": "[ R ] REFRESH",
+    "refreshing": "REFRESHING…",
+    "start_failed": "Could not start download — is the URL fetch backend installed?\n\n{{error}}",
+    "source": {
+      "cached": "CACHED",
+      "bundled": "BUNDLED (built into the app)",
+      "remote": "FRESHLY FETCHED",
+      "unknown": "—"
+    }
   },
   "banner": {
     "headline_one": "DESTRUCTIVE WRITE. <1>{{count}}</1> DISK WILL BE ERASED.",
@@ -281,7 +300,8 @@
     "section": {
       "performance": "PERFORMANCE",
       "display": "DISPLAY",
-      "behavior": "BEHAVIOR"
+      "behavior": "BEHAVIOR",
+      "catalog": "CATALOG"
     },
     "label": {
       "writer_impl": "WRITER IMPL",
@@ -295,7 +315,15 @@
       "theme": "THEME",
       "density": "DENSITY",
       "auto_eject": "AUTO EJECT",
-      "auto_clear_done_seconds": "AUTO CLEAR DONE"
+      "auto_clear_done_seconds": "AUTO CLEAR DONE",
+      "catalog_url": "CATALOG URL",
+      "catalog_refresh_hours": "CATALOG REFRESH"
+    },
+    "catalog_refresh": {
+      "off": "MANUAL ONLY",
+      "1h": "EVERY HOUR",
+      "24h": "EVERY DAY",
+      "7d": "EVERY WEEK"
     },
     "writer_impl": {
       "raw": "RAW",

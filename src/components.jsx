@@ -161,7 +161,7 @@ function DangerBanner({ confirmed, onConfirm, jobs, accent }) {
 
 /* ─────────── Toolbar ─────────── */
 
-function Toolbar({ onAdd, onAddFromUrl, onStart, onClearDone, confirmed, jobs, accent, busy }) {
+function Toolbar({ onAdd, onAddFromUrl, onBrowseCatalog, onStart, onClearDone, confirmed, jobs, accent, busy }) {
   const { t } = useTranslation();
   const ready = confirmed && jobs.some(j => j.state === 'idle' && j.target);
   const hasDone = jobs.some(j => j.state === 'success');
@@ -174,6 +174,11 @@ function Toolbar({ onAdd, onAddFromUrl, onStart, onClearDone, confirmed, jobs, a
         {onAddFromUrl && (
           <button className="btn btn-ghost" onClick={onAddFromUrl}>
             <span className="btn-bracket">[</span> {t('toolbar.from_url')} <span className="btn-bracket">]</span>
+          </button>
+        )}
+        {onBrowseCatalog && (
+          <button className="btn btn-ghost" onClick={onBrowseCatalog}>
+            <span className="btn-bracket">[</span> {t('toolbar.browse_catalog')} <span className="btn-bracket">]</span>
           </button>
         )}
         <div className="tb-sep" />
@@ -660,6 +665,19 @@ const PREFS_SECTIONS = [
         ] },
     ],
   },
+  {
+    key: 'catalog',
+    fields: [
+      { key: 'catalog.url', type: 'text', placeholder: 'https://diskcutter.app/catalog.json' },
+      { key: 'catalog.refresh_hours', type: 'select',
+        options: [
+          { value: '0',   labelKey: 'prefs.catalog_refresh.off' },
+          { value: '1',   labelKey: 'prefs.catalog_refresh.1h' },
+          { value: '24',  labelKey: 'prefs.catalog_refresh.24h' },
+          { value: '168', labelKey: 'prefs.catalog_refresh.7d' },
+        ] },
+    ],
+  },
 ];
 
 // Keep this in sync with App.jsx — both consult the same defaults when
@@ -677,6 +695,8 @@ const PREFS_DEFAULTS = {
   'density': 'comfy',
   'auto.eject': 'false',
   'auto.clear_done.seconds': '0',
+  'catalog.url': 'https://diskcutter.app/catalog.json',
+  'catalog.refresh_hours': '24',
 };
 
 function prefsLabelKey(configKey) {
@@ -829,6 +849,17 @@ function PrefsControl({ field, value, onChange }) {
           <option key={l.code} value={l.code}>{l.name}</option>
         ))}
       </select>
+    );
+  }
+  if (field.type === 'text') {
+    return (
+      <input
+        type="text"
+        className="prefs-text mono"
+        value={value}
+        placeholder={field.placeholder || ''}
+        onChange={(e) => onChange(e.target.value)}
+      />
     );
   }
   return (
@@ -1099,8 +1130,157 @@ function BurnStateBadge({ state, accent }) {
   );
 }
 
+/* ─────────── Catalog sheet ─────────── */
+
+// Field shape from `catalog_list`:
+//   { catalog: { schema_version, generated_at?, source_commit?, groups: [
+//       { id, name, description?, images: [
+//         { id, name, description, download_url, sha256sums_url, homepage,
+//           size_bytes?, published_at?, arch? }
+//       ] }
+//     ] },
+//     source: 'cached' | 'bundled' | 'remote',
+//     loaded_at_ms, url }
+//
+// Fetched once when the sheet mounts. Click an entry → fires onPick(entry)
+// which the parent wires to `start_download` from feat/url-fetch. If that
+// command isn't registered (catalog branch merged before url-fetch), the
+// invoke will reject and the parent should toast the failure.
+
+function CatalogSheet({ open, onPick, onClose, accent }) {
+  const { t } = useTranslation();
+  const [response, setResponse] = React.useState(null);
+  const [loading, setLoading] = React.useState(false);
+  const [error, setError] = React.useState(null);
+  const [refreshing, setRefreshing] = React.useState(false);
+
+  React.useEffect(() => {
+    if (!open) return;
+    setLoading(true);
+    setError(null);
+    invoke('catalog_list')
+      .then((r) => setResponse(r))
+      .catch((e) => setError(String(e)))
+      .finally(() => setLoading(false));
+  }, [open]);
+
+  React.useEffect(() => {
+    if (!open) return;
+    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open, onClose]);
+
+  const onRefresh = async () => {
+    setRefreshing(true);
+    setError(null);
+    try {
+      const r = await invoke('catalog_refresh');
+      setResponse(r);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  if (!open) return null;
+  const groups = response?.catalog?.groups || [];
+  const source = response?.source;
+
+  return (
+    <div className="sheet-backdrop" onClick={onClose}>
+      <div className="sheet sheet--wide" onClick={(e) => e.stopPropagation()}>
+        <div className="sheet-head">
+          <div>
+            <div className="sheet-eyebrow">{t('catalog.eyebrow')}</div>
+            <div className="sheet-title">{t('catalog.title')}</div>
+          </div>
+          <button className="sheet-x" onClick={onClose}>✕</button>
+        </div>
+
+        <div className="sheet-warning">
+          <span style={{ color: accent }}>⚠</span>
+          {t('catalog.warning')}
+        </div>
+
+        {error && (
+          <div className="catalog-error mono small" style={{ background: accent }}>
+            {error}
+          </div>
+        )}
+
+        <div className="catalog-list">
+          {loading ? (
+            <div className="catalog-empty mono small">{t('catalog.loading')}</div>
+          ) : groups.length === 0 ? (
+            <div className="catalog-empty mono small">{t('catalog.empty')}</div>
+          ) : (
+            groups.map((g) => (
+              <div key={g.id} className="catalog-group">
+                <div className="catalog-group-head">
+                  <div className="catalog-group-name">{g.name}</div>
+                  {g.description && (
+                    <div className="catalog-group-desc mono small">{g.description}</div>
+                  )}
+                </div>
+                {g.images.map((img) => (
+                  <button
+                    key={img.id}
+                    className="catalog-row"
+                    onClick={() => onPick(img)}
+                  >
+                    <div className="catalog-row-body">
+                      <div className="catalog-row-name">{img.name}</div>
+                      <div className="catalog-row-desc mono small">{img.description}</div>
+                      <div className="catalog-row-meta mono small">
+                        {img.arch && <><span>{img.arch}</span><span className="dot">·</span></>}
+                        {img.size_bytes != null && (
+                          <><span>{formatBytes(img.size_bytes) || ''}</span><span className="dot">·</span></>
+                        )}
+                        {img.published_at && (
+                          <><span>{img.published_at}</span><span className="dot">·</span></>
+                        )}
+                        <a
+                          href={img.homepage}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          onClick={(e) => e.stopPropagation()}
+                        >{t('catalog.homepage')}</a>
+                      </div>
+                    </div>
+                    <div className="catalog-row-pick">[ {t('catalog.pick')} ]</div>
+                  </button>
+                ))}
+              </div>
+            ))
+          )}
+        </div>
+
+        <div className="sheet-foot mono small">
+          <span>{t('catalog.source.' + (source || 'unknown'))}</span>
+          {response?.url && (
+            <>
+              <span className="dot">·</span>
+              <span title={response.url} className="catalog-foot-url">{response.url}</span>
+            </>
+          )}
+          <span style={{ marginLeft: 'auto' }}>
+            <button className="picker-link" onClick={onRefresh} disabled={refreshing}>
+              {refreshing ? t('catalog.refreshing') : t('catalog.refresh')}
+            </button>
+            &nbsp;&nbsp;
+            <button className="picker-link" onClick={onClose}>{t('picker.cancel')}</button>
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export {
   WindowChrome, Sidebar, DangerBanner, Toolbar,
   JobRow, DiskPickerSheet, LogsView,
   PrefsView, PREFS_DEFAULTS,
+  CatalogSheet,
 };

@@ -634,6 +634,71 @@ input,select{font:inherit;color:inherit}
   color:var(--ink-2);letter-spacing:.05em;
 }
 
+/* Wide sheet variant for the catalog picker (more horizontal room for
+   multi-line image descriptions and meta rows). */
+.sheet--wide{ width:min(880px, 100%); max-height:86vh; }
+
+/* ─────────── Catalog sheet ─────────── */
+
+.catalog-list{flex:1;min-height:0;overflow:auto}
+.catalog-empty{padding:32px;text-align:center;color:var(--mute)}
+.catalog-error{
+  margin:10px 20px 0;padding:8px 12px;color:var(--on-accent);
+  border:1.5px solid var(--ink);
+}
+.catalog-group{
+  border-bottom:1.5px solid var(--ink);
+}
+.catalog-group:last-child{border-bottom:0}
+.catalog-group-head{
+  padding:14px 20px 6px;background:var(--paper);
+  position:sticky;top:0;
+  border-bottom:1px dashed rgba(12,12,11,.18);
+}
+:root[data-theme="dark"] .catalog-group-head{
+  border-bottom-color:rgba(237,232,216,.22);
+}
+.catalog-group-name{
+  font-family:var(--display);font-weight:800;font-size:13px;letter-spacing:.04em;
+  text-transform:uppercase;color:var(--ink);
+}
+.catalog-group-desc{margin-top:3px;color:var(--mute);letter-spacing:.03em}
+.catalog-row{
+  display:grid;grid-template-columns:1fr auto;gap:14px;align-items:center;
+  width:100%;padding:14px 20px;background:transparent;border:0;
+  border-bottom:1px solid rgba(12,12,11,.10);cursor:pointer;text-align:left;
+}
+:root[data-theme="dark"] .catalog-row{border-bottom-color:rgba(237,232,216,.10)}
+.catalog-row:hover{background:rgba(12,12,11,.04)}
+.catalog-row:last-child{border-bottom:0}
+.catalog-row-name{
+  font-family:var(--display);font-weight:700;font-size:14.5px;letter-spacing:-.005em;
+}
+.catalog-row-desc{margin-top:4px;color:var(--ink-2);letter-spacing:.03em;line-height:1.4}
+.catalog-row-meta{
+  display:flex;gap:6px;align-items:center;margin-top:6px;
+  color:var(--mute);letter-spacing:.04em;
+}
+.catalog-row-meta .dot{opacity:.4}
+.catalog-row-meta a{color:var(--ink-2);text-decoration:underline}
+.catalog-row-meta a:hover{color:var(--ink)}
+.catalog-row-pick{
+  font-family:var(--mono);font-size:11px;letter-spacing:.08em;font-weight:700;color:var(--ink);
+  white-space:nowrap;
+}
+.catalog-foot-url{
+  max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-family:var(--mono);font-size:10.5px;color:var(--ink-2);
+}
+
+/* Text input for prefs (e.g. catalog.url). */
+.prefs-text{
+  background:var(--bone);border:1.5px solid var(--ink);color:var(--ink);
+  font-family:var(--mono);font-size:11px;letter-spacing:.04em;
+  padding:6px 10px;border-radius:0;min-width:280px;
+}
+.prefs-text:focus{outline:0;background:var(--paper)}
+
 /* ─────────── Empty state ─────────── */
 
 .empty-state{

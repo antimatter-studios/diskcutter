@@ -6,7 +6,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { open } from '@tauri-apps/plugin-dialog';
 import {
   WindowChrome, Sidebar, DangerBanner, Toolbar,
-  JobRow, DiskPickerSheet, LogsView, PrefsView, PREFS_DEFAULTS,
+  JobRow, DiskPickerSheet, LogsView, PrefsView, PREFS_DEFAULTS, CatalogSheet,
 } from './components.jsx';
 import i18n from './i18n/index.js';
 import {
@@ -63,6 +63,7 @@ function App() {
   const [activeNav, setActiveNav] = useState('queue');
   const [buildInfo, setBuildInfo] = useState('—');
   const [orphanPids, setOrphanPids] = useState([]);
+  const [catalogOpen, setCatalogOpen] = useState(false);
   // Prefs are mirrored from the SQLite-backed config_all() at mount. Empty
   // string from the DB means "never set" → use the default from
   // PREFS_DEFAULTS so the UI never renders an empty <select>.
@@ -315,6 +316,22 @@ function App() {
     }
   }, [t, pushToast]);
 
+  // Catalog pick: hand the chosen entry's URL to the URL-fetch backend.
+  // Same start_download command as the FROM URL prompt above, just
+  // sourced from the curated catalog instead of a free-form input.
+  const onCatalogPick = useCallback(async (entry) => {
+    if (!entry?.download_url) return;
+    setCatalogOpen(false);
+    const jobId = `dl-${Date.now()}`;
+    try {
+      await invoke('start_download', { jobId, url: entry.download_url });
+      pushToast('info', t('url.started', { url: entry.download_url }));
+    } catch (e) {
+      console.error('start_download failed', e);
+      pushToast('error', t('catalog.start_failed', { error: String(e) }));
+    }
+  }, [t, pushToast]);
+
   // Drag-and-drop disk images onto the window. Track enter/over/leave so we
   // can show a full-window overlay while a drag is in flight — `drop` and
   // `leave` both clear it.
@@ -492,6 +509,7 @@ function App() {
     setPickerJob,
     onAdd: addImage,
     onAddFromUrl: addImageFromUrl,
+    onBrowseCatalog: () => setCatalogOpen(true),
     onStart: startQueue,
     onCancelJob: cancelJob,
     onRetry: retryJob,
@@ -520,6 +538,13 @@ function App() {
         onPick={pickTarget}
         onClose={() => setPickerJob(null)}
         onRefresh={refreshDisks}
+        accent={accent}
+      />
+
+      <CatalogSheet
+        open={catalogOpen}
+        onPick={onCatalogPick}
+        onClose={() => setCatalogOpen(false)}
         accent={accent}
       />
 
@@ -559,7 +584,7 @@ function AppBody({
   errorJob, errorMsg,
   expanded, setExpanded,
   setPickerJob,
-  onAdd, onAddFromUrl, onStart, onCancelJob,
+  onAdd, onAddFromUrl, onBrowseCatalog, onStart, onCancelJob,
   onRetry, onClearDone, onFlashAnother, onCopyText, onRemoveJob,
 }) {
   const { t } = useTranslation();
@@ -643,6 +668,7 @@ function AppBody({
           <Toolbar
             onAdd={onAdd}
             onAddFromUrl={onAddFromUrl}
+            onBrowseCatalog={onBrowseCatalog}
             onStart={onStart}
             onClearDone={onClearDone}
             confirmed={confirmed}
