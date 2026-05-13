@@ -47,14 +47,10 @@ dependencies = [
 [[package]]
 name = "am-fs-core"
 version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b39d11cb296ca7e9426a5a8ad63ea7c272400aebfdca978e7baed809058206fc"
 
 [[package]]
 name = "am-img-qcow2"
 version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c33c1af54c4c00d4f0509739d83677a80dec8111bf5831f08761a72afda43415"
 dependencies = [
  "am-fs-core",
  "flate2",
@@ -64,8 +60,6 @@ dependencies = [
 [[package]]
 name = "am-img-vhd"
 version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ca17ccc90be0dd909d87cea6cca635be413368e23d144a8a3a9ae9d1bb2c9309"
 dependencies = [
  "am-fs-core",
 ]
@@ -73,8 +67,6 @@ dependencies = [
 [[package]]
 name = "am-img-vhdx"
 version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3ed98d37185f5bb567437dbeaf4db9559038525885ac1694c4003017059ab50a"
 dependencies = [
  "am-fs-core",
  "crc32c",
@@ -83,8 +75,6 @@ dependencies = [
 [[package]]
 name = "am-img-vmdk"
 version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cbf2777ac4bc1e2a4f98a79ffbe221107f04afb6ddffd0be831b99c3d8a481c0"
 dependencies = [
  "am-fs-core",
 ]
@@ -92,8 +82,6 @@ dependencies = [
 [[package]]
 name = "am-partitions"
 version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "58b64e59d23e749e640cebe0f6855b52c9dc62f62907ace12f236ba02690e93d"
 dependencies = [
  "am-fs-core",
  "crc32fast",

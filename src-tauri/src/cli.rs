@@ -267,7 +267,16 @@ fn run_backup(
             }
         }
     };
-    match backup::run_to_file(&options, &cancel, on_progress) {
+    let ext = source
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|s| s.to_ascii_lowercase());
+    let outcome = if matches!(ext.as_deref(), Some("qcow2") | Some("qcow")) {
+        backup::run_qcow2_to_file(&options, &cancel, on_progress)
+    } else {
+        backup::run_to_file(&options, &cancel, on_progress)
+    };
+    match outcome {
         Ok(r) => {
             println!("backup complete");
             println!("  bytes_read:      {}", r.bytes_read);

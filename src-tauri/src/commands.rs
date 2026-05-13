@@ -115,8 +115,20 @@ pub fn run_backup(
         sparse,
     };
     let cancel = AtomicBool::new(false);
-    let result =
-        backup::run_to_file(&options, &cancel, |_| {}).map_err(|e| format!("backup: {e:?}"))?;
+    // Sparse-aware fast path for qcow2 sources — skips reading zero/
+    // unallocated clusters entirely. Detected by extension; the
+    // allocated_extents() API in am-img-qcow2 0.3+ powers it.
+    let ext = src
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|s| s.to_ascii_lowercase());
+    let result = if matches!(ext.as_deref(), Some("qcow2") | Some("qcow")) {
+        backup::run_qcow2_to_file(&options, &cancel, |_| {})
+            .map_err(|e| format!("backup: {e:?}"))?
+    } else {
+        backup::run_to_file(&options, &cancel, |_| {})
+            .map_err(|e| format!("backup: {e:?}"))?
+    };
     Ok(BackupResultJson {
         bytes_read: result.bytes_read,
         bytes_written: result.bytes_written,
