@@ -1,4 +1,5 @@
 pub mod backup;
+pub mod catalog;
 pub mod cli;
 pub mod commands;
 mod db;
@@ -64,6 +65,7 @@ pub fn run() {
             qemu::qemu_test_image,
             url_fetch::start_download,
             url_fetch::cancel_download,
+            catalog::catalog_list,
         ])
         .setup(|app| {
             match db::open(app.handle()) {
