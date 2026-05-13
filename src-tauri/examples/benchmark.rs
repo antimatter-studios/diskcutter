@@ -21,12 +21,12 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 
-use disk_cutter_lib::pipeline::{self, DEFAULT_CHUNK};
-use disk_cutter_lib::readers::{ImageInfo, ImageReader};
-use disk_cutter_lib::writers::{DeviceIo, PlainFileDeviceIo};
+use diskcutter_lib::pipeline::{self, DEFAULT_CHUNK};
+use diskcutter_lib::readers::{ImageInfo, ImageReader};
+use diskcutter_lib::writers::{DeviceIo, PlainFileDeviceIo};
 
 #[cfg(unix)]
-use disk_cutter_lib::writers::{BlockDeviceIo, PipelinedRawDeviceIo};
+use diskcutter_lib::writers::{BlockDeviceIo, PipelinedRawDeviceIo};
 
 use tempfile::tempdir;
 

@@ -15,13 +15,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
 
-use disk_cutter_lib::hash::HashAlgo;
-use disk_cutter_lib::pipeline::{
+use diskcutter_lib::hash::HashAlgo;
+use diskcutter_lib::pipeline::{
     burn, burn_with_hash, verify, verify_hash_only, verify_hash_only_with_hash, BurnError,
     DEFAULT_CHUNK,
 };
-use disk_cutter_lib::readers::{ImageInfo, ImageReader};
-use disk_cutter_lib::writers::{DeviceIo, PlainFileDeviceIo};
+use diskcutter_lib::readers::{ImageInfo, ImageReader};
+use diskcutter_lib::writers::{DeviceIo, PlainFileDeviceIo};
 
 use sha2::{Digest, Sha256};
 use tempfile::tempdir;

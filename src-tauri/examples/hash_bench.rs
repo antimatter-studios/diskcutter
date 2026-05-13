@@ -16,7 +16,7 @@
 use std::num::Wrapping;
 use std::time::{Duration, Instant};
 
-use disk_cutter_lib::hash::{self, HashAlgo};
+use diskcutter_lib::hash::{self, HashAlgo};
 
 const BUFFER_BYTES: usize = 512 * 1024 * 1024;
 const CHUNK_BYTES: usize = 1024 * 1024;
