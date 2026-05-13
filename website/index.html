@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Disk Cutter — write disk images, verify every sector</title>
+<meta name="description" content="A brutalist disk image writer for macOS, Windows, and Linux. Queue many images, verify every sector, never trust a flash.">
+
+<!-- Open Graph -->
+<meta property="og:title" content="Disk Cutter">
+<meta property="og:description" content="Write disk images. Verify every sector. Never trust a flash.">
+<meta property="og:type" content="website">
+
+<link rel="icon" type="image/svg+xml" href="icon.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<!-- ─────────── Top bar ─────────── -->
+<header class="topbar">
+  <div class="topbar-inner">
+    <a href="#top" class="brand">
+      <img src="icon.svg" alt="" class="brand-mark" width="28" height="28">
+      Disk Cutter
+    </a>
+    <nav class="topbar-nav">
+      <a href="#features">Features</a>
+      <a href="#download">Download</a>
+      <a href="#about">About</a>
+      <a href="https://github.com/yourname/disk-cutter">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<!-- ─────────── Hero ─────────── -->
+<section class="hero" id="top">
+  <div class="section-inner hero-inner">
+    <div>
+      <p class="eyebrow">v0.4.0 · macOS / Windows / Linux</p>
+      <h1>Write<br>the disk.<br>Verify it.</h1>
+      <p class="lede hero-tag">
+        A brutalist disk-image writer. Queue many images, write to many disks,
+        and prove every sector matches the source.
+      </p>
+      <div class="hero-actions">
+        <a href="#download" class="btn btn-primary">[ Download ]</a>
+        <a href="https://github.com/yourname/disk-cutter" class="btn btn-ghost">[ Source on GitHub ]</a>
+      </div>
+    </div>
+    <div>
+      <img src="icon.svg" alt="Disk Cutter blade icon" class="hero-mark">
+    </div>
+  </div>
+</section>
+
+<!-- ─────────── Destructive-write warning strip ─────────── -->
+<div class="warning">
+  <div class="warning-stripes"></div>
+  <div class="warning-inner">
+    <div class="warning-icon">⚠</div>
+    <div class="warning-text">
+      <b>Disk Cutter writes raw bytes to physical disks.</b> Picking the wrong
+      target erases it. Read the confirm banner before you click.
+    </div>
+  </div>
+  <div class="warning-stripes"></div>
+</div>
+
+<!-- ─────────── Features ─────────── -->
+<section class="features" id="features">
+  <div class="section-inner">
+    <p class="eyebrow">What it does</p>
+    <h2>Built to flash<br>without lying.</h2>
+    <p class="lede">
+      Most flashers stop the moment the bytes leave the buffer. Disk Cutter
+      reads them back, hashes every sector, and shows you what didn't match.
+    </p>
+
+    <div class="feature-grid">
+      <div class="feature">
+        <div class="feature-num">01</div>
+        <h3>Queue many writes</h3>
+        <p>Drop a list of ISOs and disks. Disk Cutter writes them in parallel or sequence — your call. Survive interruptions, resume on relaunch.</p>
+      </div>
+
+      <div class="feature">
+        <div class="feature-num">02</div>
+        <h3>Sector-level verify</h3>
+        <p>SHA-256 the source. Re-read the target. Hash again. If they don't match, you get the offending LBA, the offset, expected bytes, and what was actually there.</p>
+      </div>
+
+      <div class="feature">
+        <div class="feature-num">03</div>
+        <h3>System disks are locked</h3>
+        <p>The internal SSD never appears in the picker unmarked. You'd have to explicitly override — and we make you confirm twice.</p>
+      </div>
+
+      <div class="feature">
+        <div class="feature-num">04</div>
+        <h3>Every format</h3>
+        <p>ISO, IMG, DMG, raw. Hybrid boot images, EFI, MBR, GPT. If <code>dd</code> can read it, Disk Cutter can write it.</p>
+      </div>
+
+      <div class="feature">
+        <div class="feature-num">05</div>
+        <h3>Cross-platform, one binary</h3>
+        <p>Same Rust core on every OS. Same UI. No "Linux is a second-class citizen." 12 MB download.</p>
+      </div>
+
+      <div class="feature">
+        <div class="feature-num">06</div>
+        <h3>Reads like a forensic tool</h3>
+        <p>Detailed logs for every job. Copy the SHA, copy the mismatch report, attach it to a bug. Built to be referenced.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ─────────── Screenshot ─────────── -->
+<section class="screenshot">
+  <div class="section-inner">
+    <p class="eyebrow">What it looks like</p>
+    <h2>Dense. Honest.<br>No bullshit.</h2>
+    <p>One window. The queue is the screen. Expand a row to see the verification panel: source hash, readback hash, sectors checked, sector map. Drag the corner to make it more compact if you live in the terminal.</p>
+
+    <div class="screenshot-frame">
+      <!-- Drop a real screenshot here once you've grabbed one:
+           <img src="screenshot.png" alt="Disk Cutter writing two disks in parallel"> -->
+      <div class="screenshot-placeholder">
+        <b>Screenshot goes here.</b><br>Drop site/screenshot.png and uncomment the &lt;img&gt; tag.
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ─────────── Download ─────────── -->
+<section class="download" id="download">
+  <div class="section-inner">
+    <p class="eyebrow">Get it</p>
+    <h2>Pick your<br>poison.</h2>
+    <p>Signed, notarized binaries. ~12&nbsp;MB. No telemetry, no install wizard.</p>
+
+    <div class="download-grid">
+      <div class="dl-card">
+        <div class="dl-os">macOS</div>
+        <div class="dl-arch">12.0+ · arm64 / x86_64</div>
+        <a class="btn" href="#" download>[ .dmg ]</a>
+      </div>
+      <div class="dl-card">
+        <div class="dl-os">Windows</div>
+        <div class="dl-arch">10+ · x86_64</div>
+        <a class="btn" href="#" download>[ .msi ]</a>
+      </div>
+      <div class="dl-card">
+        <div class="dl-os">Linux</div>
+        <div class="dl-arch">.deb · .AppImage</div>
+        <a class="btn" href="#" download>[ .AppImage ]</a>
+      </div>
+      <div class="dl-card">
+        <div class="dl-os">Source</div>
+        <div class="dl-arch">Rust + Tauri 2</div>
+        <a class="btn" href="https://github.com/yourname/disk-cutter">[ git clone ]</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ─────────── About / FAQ ─────────── -->
+<section id="about">
+  <div class="section-inner">
+    <p class="eyebrow">About</p>
+    <h2>Why?</h2>
+
+    <div class="about-grid">
+      <h3>The pitch</h3>
+      <div>
+        <p>Most disk writers tell you "done" the second the bytes leave the OS write buffer. That's the wrong place to stop. The interesting failures happen <em>between the buffer and the silicon</em> — bad sectors, cheap flash, USB-C cables that drop bits every gigabyte.</p>
+        <p>Disk Cutter assumes the write will lie to you and re-reads everything to prove otherwise.</p>
+      </div>
+    </div>
+
+    <div class="about-grid">
+      <h3>Stack</h3>
+      <div>
+        <p>Rust + Tauri 2 for the shell. React for the UI. Brutalist type — Space Grotesk and JetBrains Mono. The blade icon is hand-drawn SVG. No frameworks, no telemetry, no analytics.</p>
+      </div>
+    </div>
+
+    <div class="about-grid">
+      <h3>License</h3>
+      <div>
+        <p>MIT. Fork it, ship a competitor, do what you want. If you write a better verifier, please <a class="link" href="https://github.com/yourname/disk-cutter/issues">tell us</a>.</p>
+      </div>
+    </div>
+
+    <div class="about-grid">
+      <h3>Inspired by</h3>
+      <div>
+        <p>balenaEtcher set the bar for "this UI doesn't make me anxious." Disk Cutter keeps that posture and adds the verification step we always wanted.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ─────────── Footer ─────────── -->
+<footer class="site-foot">
+  <div class="foot-inner">
+    <div>Disk Cutter · v0.4.0-alpha · MIT</div>
+    <div class="foot-links">
+      <a href="https://github.com/yourname/disk-cutter">Source</a>
+      <a href="https://github.com/yourname/disk-cutter/releases">Releases</a>
+      <a href="https://github.com/yourname/disk-cutter/issues">Issues</a>
+      <a href="mailto:hello@example.com">Contact</a>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>
