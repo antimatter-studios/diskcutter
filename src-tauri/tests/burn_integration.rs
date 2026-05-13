@@ -15,7 +15,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
 
-use disk_cutter_lib::pipeline::{burn, verify, verify_hash_only, BurnError, DEFAULT_CHUNK};
+use disk_cutter_lib::hash::HashAlgo;
+use disk_cutter_lib::pipeline::{
+    burn, burn_with_hash, verify, verify_hash_only, verify_hash_only_with_hash, BurnError,
+    DEFAULT_CHUNK,
+};
 use disk_cutter_lib::readers::{ImageInfo, ImageReader};
 use disk_cutter_lib::writers::{DeviceIo, PlainFileDeviceIo};
 
@@ -233,6 +237,51 @@ fn cancel_mid_burn_returns_cancelled_error() {
         Err(e) => panic!("expected Cancelled, got {e:?}"),
         Ok(_) => panic!("expected Cancelled error, burn completed successfully"),
     }
+}
+
+#[test]
+fn burn_then_verify_hash_only_round_trips_with_xxhash_on_real_file() {
+    // Same shape as `burn_then_verify_hash_only_matches`, but using
+    // HashAlgo::Xxhash end-to-end against a real on-disk target via
+    // PlainFileDeviceIo. Locks the helper-side wiring against regressions.
+    let dir = tempdir().unwrap();
+    let target = dir.path().join("target.img");
+
+    let data = deterministic_bytes(4 * 1024 * 1024, 0xABAD_1DEA_DEAD_BEEF);
+    let mut reader = TestImageReader::new(data.clone());
+
+    let io = PlainFileDeviceIo;
+    let writer = io.open_write(&target).unwrap();
+    let cancel = AtomicBool::new(false);
+
+    let burn_result = burn_with_hash(
+        &mut reader,
+        writer,
+        DEFAULT_CHUNK,
+        HashAlgo::Xxhash,
+        &cancel,
+        |_| {},
+    )
+    .expect("burn ok");
+
+    // xxh64 hex is exactly 16 chars — sanity-check we didn't get a 64-char SHA-256.
+    assert_eq!(burn_result.source_sha256.len(), 16);
+    assert_eq!(burn_result.bytes_written, data.len() as u64);
+
+    let mut device_reader = io.open_read(&target).unwrap();
+    let cancel = AtomicBool::new(false);
+    let hash_result = verify_hash_only_with_hash(
+        device_reader.as_mut(),
+        data.len() as u64,
+        DEFAULT_CHUNK,
+        HashAlgo::Xxhash,
+        &cancel,
+        |_| {},
+    )
+    .expect("verify_hash_only ok");
+
+    assert_eq!(hash_result.readback_sha256, burn_result.source_sha256);
+    assert_eq!(hash_result.bytes_checked, data.len() as u64);
 }
 
 #[test]

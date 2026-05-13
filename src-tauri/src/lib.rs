@@ -5,6 +5,7 @@ mod db;
 mod disk_arb;
 mod disks;
 pub mod forensic;
+pub mod hash;
 mod helper;
 pub mod inspect;
 pub mod pipeline;

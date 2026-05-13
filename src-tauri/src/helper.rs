@@ -5,6 +5,7 @@ use std::sync::atomic::AtomicBool;
 
 use serde::Serialize;
 
+use crate::hash::HashAlgo;
 use crate::pipeline::{self, VerifyMismatch};
 use crate::readers::ImageReaderRegistry;
 #[cfg(unix)]
@@ -69,6 +70,13 @@ pub fn run_helper(args: &[String]) -> i32 {
     let skip_verify: bool = arg_value(args, "--skip-verify=")
         .map(|v| v == "true")
         .unwrap_or(false);
+    // TODO: once disks.rs is no longer hot, propagate config `hash.algo` via
+    // spawn_elevated_burn's helper command line. Until then the helper defaults
+    // to SHA-256 regardless of UI pref.
+    let hash_algo: HashAlgo = arg_value(args, "--hash-algo=")
+        .as_deref()
+        .map(HashAlgo::parse)
+        .unwrap_or(HashAlgo::Sha256);
 
     let file = match File::create(&progress_path) {
         Ok(f) => f,
@@ -150,14 +158,21 @@ pub fn run_helper(args: &[String]) -> i32 {
     };
 
     let cancel = AtomicBool::new(false);
-    let burn = match pipeline::burn(&mut *reader, dev_writer, chunk_size, &cancel, |p| {
-        emit(&HelperMessage::Progress {
-            state: "writing".into(),
-            bytes_done: p.bytes_done,
-            bytes_total: p.bytes_total,
-            bytes_per_sec: p.bytes_per_sec,
-        });
-    }) {
+    let burn = match pipeline::burn_with_hash(
+        &mut *reader,
+        dev_writer,
+        chunk_size,
+        hash_algo,
+        &cancel,
+        |p| {
+            emit(&HelperMessage::Progress {
+                state: "writing".into(),
+                bytes_done: p.bytes_done,
+                bytes_total: p.bytes_total,
+                bytes_per_sec: p.bytes_per_sec,
+            });
+        },
+    ) {
         Ok(b) => b,
         Err(e) => {
             emit(&HelperMessage::Error {
@@ -196,10 +211,11 @@ pub fn run_helper(args: &[String]) -> i32 {
         }
     };
 
-    let fast = match pipeline::verify_hash_only(
+    let fast = match pipeline::verify_hash_only_with_hash(
         &mut *dev_reader,
         burn.bytes_written,
         chunk_size,
+        hash_algo,
         &cancel,
         |p| {
             emit(&HelperMessage::Progress {
@@ -259,24 +275,30 @@ pub fn run_helper(args: &[String]) -> i32 {
         }
     };
 
-    let verify =
-        match pipeline::verify(&mut *reader2, &mut *dev_reader2, chunk_size, &cancel, |p| {
+    let verify = match pipeline::verify_with_hash(
+        &mut *reader2,
+        &mut *dev_reader2,
+        chunk_size,
+        hash_algo,
+        &cancel,
+        |p| {
             emit(&HelperMessage::Progress {
                 state: "verifying".into(),
                 bytes_done: p.bytes_done,
                 bytes_total: p.bytes_total,
                 bytes_per_sec: p.bytes_per_sec,
             });
-        }) {
-            Ok(v) => v,
-            Err(e) => {
-                emit(&HelperMessage::Error {
-                    error_code: "EIO".into(),
-                    error_message: format!("{e:?}"),
-                });
-                return 1;
-            }
-        };
+        },
+    ) {
+        Ok(v) => v,
+        Err(e) => {
+            emit(&HelperMessage::Error {
+                error_code: "EIO".into(),
+                error_message: format!("{e:?}"),
+            });
+            return 1;
+        }
+    };
 
     let elapsed_ms =
         (burn.elapsed.as_millis() + fast.elapsed.as_millis() + verify.elapsed.as_millis()) as u64;
@@ -499,5 +521,46 @@ mod tests {
     fn pick_device_io_dev_path_with_none_picks_pipelined() {
         let io = pick_device_io("/dev/disk0", None, 4, 15);
         assert_eq!(io.name(), "raw-pipelined");
+    }
+
+    #[test]
+    fn arg_value_recognises_hash_algo_xxhash() {
+        // The helper parses `--hash-algo=xxhash` straight via `arg_value`,
+        // then routes through `HashAlgo::parse`. Both halves must hold.
+        let a = args(&["--image=/tmp/x.iso", "--hash-algo=xxhash"]);
+        assert_eq!(arg_value(&a, "--hash-algo="), Some("xxhash".into()));
+        assert_eq!(HashAlgo::parse("xxhash"), HashAlgo::Xxhash);
+    }
+
+    #[test]
+    fn arg_value_hash_algo_defaults_to_sha256_when_missing() {
+        // Absent flag → helper falls back to SHA-256.
+        let a = args(&["--image=/tmp/x.iso", "--target=/dev/disk5"]);
+        assert_eq!(arg_value(&a, "--hash-algo="), None);
+        let algo = arg_value(&a, "--hash-algo=")
+            .as_deref()
+            .map(HashAlgo::parse)
+            .unwrap_or(HashAlgo::Sha256);
+        assert_eq!(algo, HashAlgo::Sha256);
+    }
+
+    #[test]
+    fn arg_value_hash_algo_unknown_value_falls_back_to_sha256() {
+        let a = args(&["--hash-algo=blake3"]);
+        let algo = arg_value(&a, "--hash-algo=")
+            .as_deref()
+            .map(HashAlgo::parse)
+            .unwrap_or(HashAlgo::Sha256);
+        assert_eq!(algo, HashAlgo::Sha256);
+    }
+
+    #[test]
+    fn arg_value_hash_algo_accepts_xxh64_alias() {
+        let a = args(&["--hash-algo=xxh64"]);
+        let algo = arg_value(&a, "--hash-algo=")
+            .as_deref()
+            .map(HashAlgo::parse)
+            .unwrap_or(HashAlgo::Sha256);
+        assert_eq!(algo, HashAlgo::Xxhash);
     }
 }

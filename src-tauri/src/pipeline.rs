@@ -2,8 +2,7 @@ use std::io::Read;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use sha2::{Digest, Sha256};
-
+use crate::hash::{self, HashAlgo};
 use crate::readers::ImageReader;
 use crate::writers::{DeviceReader, DeviceWriter};
 
@@ -43,16 +42,43 @@ pub struct BurnResult {
     pub avg_bytes_per_sec: u64,
 }
 
+/// Burn an image to a writer using SHA-256 source-hashing.
+///
+/// Backward-compatible wrapper around `burn_with_hash`; existing call sites
+/// (disks.rs, tests) keep their current signature. New call sites that want
+/// to pick the algorithm at runtime should call `burn_with_hash` directly.
 pub fn burn(
     reader: &mut dyn ImageReader,
     writer: Box<dyn DeviceWriter>,
     chunk_size: usize,
     cancel: &AtomicBool,
+    on_progress: impl FnMut(BurnProgress),
+) -> Result<BurnResult, BurnError> {
+    burn_with_hash(
+        reader,
+        writer,
+        chunk_size,
+        HashAlgo::Sha256,
+        cancel,
+        on_progress,
+    )
+}
+
+/// Burn an image to a writer, hashing the source stream with the chosen
+/// algorithm. The returned hash hex is stored in `BurnResult::source_sha256`
+/// regardless of algorithm (the field name is historical; for xxh64 it
+/// holds a 16-char hex u64).
+pub fn burn_with_hash(
+    reader: &mut dyn ImageReader,
+    writer: Box<dyn DeviceWriter>,
+    chunk_size: usize,
+    hash_algo: HashAlgo,
+    cancel: &AtomicBool,
     mut on_progress: impl FnMut(BurnProgress),
 ) -> Result<BurnResult, BurnError> {
     let total = reader.info().uncompressed_bytes;
     let mut writer = writer;
-    let mut hasher = Sha256::new();
+    let mut hasher = hash::new(hash_algo);
     let mut buf = vec![0u8; chunk_size];
     let mut done: u64 = 0;
     let started = Instant::now();
@@ -99,7 +125,7 @@ pub fn burn(
     });
     Ok(BurnResult {
         bytes_written: done,
-        source_sha256: hex(hasher.finalize()),
+        source_sha256: hasher.finalize_hex(),
         elapsed,
         avg_bytes_per_sec: avg,
     })
@@ -143,14 +169,36 @@ pub struct HashOnlyResult {
     pub avg_bytes_per_sec: u64,
 }
 
+/// SHA-256 variant kept for backward compatibility — see `verify_hash_only_with_hash`.
 pub fn verify_hash_only(
     device: &mut dyn DeviceReader,
     expected_bytes: u64,
     chunk_size: usize,
     cancel: &AtomicBool,
+    on_progress: impl FnMut(VerifyProgress),
+) -> Result<HashOnlyResult, BurnError> {
+    verify_hash_only_with_hash(
+        device,
+        expected_bytes,
+        chunk_size,
+        HashAlgo::Sha256,
+        cancel,
+        on_progress,
+    )
+}
+
+/// Read back `expected_bytes` from `device`, hashing as we go with the
+/// chosen algorithm. The resulting hex digest sits in
+/// `HashOnlyResult::readback_sha256` regardless of algorithm.
+pub fn verify_hash_only_with_hash(
+    device: &mut dyn DeviceReader,
+    expected_bytes: u64,
+    chunk_size: usize,
+    hash_algo: HashAlgo,
+    cancel: &AtomicBool,
     mut on_progress: impl FnMut(VerifyProgress),
 ) -> Result<HashOnlyResult, BurnError> {
-    let mut hasher = Sha256::new();
+    let mut hasher = hash::new(hash_algo);
     let mut buf = vec![0u8; chunk_size];
     let mut done: u64 = 0;
     let started = Instant::now();
@@ -196,7 +244,7 @@ pub fn verify_hash_only(
         elapsed,
     });
     Ok(HashOnlyResult {
-        readback_sha256: hex(hasher.finalize()),
+        readback_sha256: hasher.finalize_hex(),
         bytes_checked: done,
         bytes_total: expected_bytes.max(done),
         elapsed,
@@ -204,16 +252,38 @@ pub fn verify_hash_only(
     })
 }
 
+/// SHA-256 variant kept for backward compatibility — see `verify_with_hash`.
 pub fn verify(
     source: &mut dyn ImageReader,
     device: &mut dyn DeviceReader,
     chunk_size: usize,
     cancel: &AtomicBool,
+    on_progress: impl FnMut(VerifyProgress),
+) -> Result<VerifyResult, BurnError> {
+    verify_with_hash(
+        source,
+        device,
+        chunk_size,
+        HashAlgo::Sha256,
+        cancel,
+        on_progress,
+    )
+}
+
+/// Byte-compare-and-hash verify path using the chosen algorithm for the
+/// source/readback digests. The byte-level mismatch collection is
+/// algorithm-independent — it always inspects raw bytes.
+pub fn verify_with_hash(
+    source: &mut dyn ImageReader,
+    device: &mut dyn DeviceReader,
+    chunk_size: usize,
+    hash_algo: HashAlgo,
+    cancel: &AtomicBool,
     mut on_progress: impl FnMut(VerifyProgress),
 ) -> Result<VerifyResult, BurnError> {
     let total = source.info().uncompressed_bytes;
-    let mut src_hasher = Sha256::new();
-    let mut dev_hasher = Sha256::new();
+    let mut src_hasher = hash::new(hash_algo);
+    let mut dev_hasher = hash::new(hash_algo);
     let mut src_buf = vec![0u8; chunk_size];
     let mut dev_buf = vec![0u8; chunk_size];
     let mut mismatches: Vec<VerifyMismatch> = Vec::new();
@@ -269,8 +339,8 @@ pub fn verify(
 
     let elapsed = started.elapsed();
     let avg = (done as f64 / elapsed.as_secs_f64().max(0.001)) as u64;
-    let src_hash = hex(src_hasher.finalize());
-    let dev_hash = hex(dev_hasher.finalize());
+    let src_hash = src_hasher.finalize_hex();
+    let dev_hash = dev_hasher.finalize_hex();
     Ok(VerifyResult {
         match_: src_hash == dev_hash && mismatches.is_empty(),
         source_sha256: src_hash,
@@ -323,6 +393,7 @@ fn push_mismatch(out: &mut Vec<VerifyMismatch>, byte_pos: u64, expected: &[u8], 
     });
 }
 
+#[cfg(test)]
 fn hex(bytes: impl AsRef<[u8]>) -> String {
     let mut s = String::with_capacity(bytes.as_ref().len() * 2);
     for b in bytes.as_ref() {
@@ -347,6 +418,7 @@ mod tests {
     use super::*;
     use crate::readers::{ImageInfo, ImageReader};
     use crate::writers::{DeviceReader, DeviceWriter};
+    use sha2::{Digest, Sha256};
     use std::cell::RefCell;
     use std::io::{Cursor, Read as IoRead, Write as IoWrite};
     use std::path::PathBuf;
@@ -448,6 +520,106 @@ mod tests {
         assert_eq!(result.source_sha256, sha256_of(&data));
         assert_eq!(*sink.lock().unwrap(), data);
         assert!(finished.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn burn_with_xxhash_emits_xxh64_hex_in_source_field() {
+        // 10 KiB of structured data exercises both stripe-loop + tail-byte
+        // paths of xxh64. Compare against the standalone hash::new(Xxhash)
+        // applied to the same buffer — should match byte for byte.
+        let data: Vec<u8> = (0..10_000u32).map(|i| (i % 256) as u8).collect();
+        let mut reader = MockImageReader::new(data.clone());
+        let (writer, sink, _) = make_writer();
+        let cancel = AtomicBool::new(false);
+
+        let result = burn_with_hash(
+            &mut reader,
+            writer,
+            DEFAULT_CHUNK,
+            HashAlgo::Xxhash,
+            &cancel,
+            |_| {},
+        )
+        .expect("burn ok");
+
+        // Independent xxh64 of the same data — both paths must agree.
+        let mut h = hash::new(HashAlgo::Xxhash);
+        h.update(&data);
+        let expected_hex = h.finalize_hex();
+
+        assert_eq!(result.bytes_written, data.len() as u64);
+        assert_eq!(
+            result.source_sha256, expected_hex,
+            "burn_with_hash(Xxhash) should produce xxh64 hex in source_sha256"
+        );
+        assert_eq!(result.source_sha256.len(), 16, "xxh64 hex is 16 chars");
+        assert_eq!(*sink.lock().unwrap(), data);
+    }
+
+    #[test]
+    fn burn_then_verify_hash_only_round_trips_with_xxhash() {
+        // End-to-end: burn with xxhash, read back with xxhash, hashes match.
+        // Uses the in-memory CollectingWriter + CursorDeviceReader so we
+        // don't need a real disk to assert the algorithm threads through.
+        let data: Vec<u8> = (0..32_768u32).map(|i| ((i * 7) % 256) as u8).collect();
+        let mut reader = MockImageReader::new(data.clone());
+        let (writer, sink, _) = make_writer();
+        let cancel = AtomicBool::new(false);
+
+        let burn_res = burn_with_hash(
+            &mut reader,
+            writer,
+            DEFAULT_CHUNK,
+            HashAlgo::Xxhash,
+            &cancel,
+            |_| {},
+        )
+        .expect("burn ok");
+
+        // Reopen the "device" by handing the collected bytes to a cursor
+        // reader, then verify_hash_only_with_hash should produce the same digest.
+        let written = sink.lock().unwrap().clone();
+        let mut dev = CursorDeviceReader {
+            inner: Cursor::new(written),
+        };
+        let cancel = AtomicBool::new(false);
+        let verify_res = verify_hash_only_with_hash(
+            &mut dev,
+            burn_res.bytes_written,
+            DEFAULT_CHUNK,
+            HashAlgo::Xxhash,
+            &cancel,
+            |_| {},
+        )
+        .expect("verify ok");
+
+        assert_eq!(verify_res.readback_sha256, burn_res.source_sha256);
+        assert_eq!(verify_res.bytes_checked, data.len() as u64);
+    }
+
+    #[test]
+    fn verify_with_hash_xxhash_matches_identical_streams() {
+        let data: Vec<u8> = (0..4096u32).map(|i| (i % 256) as u8).collect();
+        let mut src = MockImageReader::new(data.clone());
+        let mut dev = CursorDeviceReader {
+            inner: Cursor::new(data),
+        };
+        let cancel = AtomicBool::new(false);
+
+        let result = verify_with_hash(
+            &mut src,
+            &mut dev,
+            DEFAULT_CHUNK,
+            HashAlgo::Xxhash,
+            &cancel,
+            |_| {},
+        )
+        .unwrap();
+
+        assert!(result.match_);
+        assert!(result.mismatches.is_empty());
+        assert_eq!(result.source_sha256, result.readback_sha256);
+        assert_eq!(result.source_sha256.len(), 16, "xxh64 hex is 16 chars");
     }
 
     #[test]
