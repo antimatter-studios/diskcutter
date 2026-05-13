@@ -1,4 +1,4 @@
-mod migrations;
+pub mod migrations;
 
 use std::collections::HashMap;
 use std::sync::Mutex;

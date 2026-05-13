@@ -1,5 +1,6 @@
 pub mod backup;
 pub mod cli;
+pub mod commands;
 mod db;
 #[cfg(target_os = "macos")]
 mod disk_arb;
@@ -49,6 +50,11 @@ pub fn run() {
             burn_history_list,
             burn_history_clear,
             burn_logs_list,
+            commands::inspect_partitions,
+            commands::capture_snapshot,
+            commands::restore_snapshot,
+            commands::export_burn_report,
+            commands::run_backup,
         ])
         .setup(|app| {
             match db::open(app.handle()) {

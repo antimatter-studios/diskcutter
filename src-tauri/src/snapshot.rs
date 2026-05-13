@@ -47,13 +47,13 @@ pub struct SnapshotHeader {
     pub sha256: String,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct SnapshotResult {
     pub recovery_path: std::path::PathBuf,
     pub header: SnapshotHeader,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct RestoreResult {
     pub device_path: std::path::PathBuf,
     pub bytes_written: u64,
