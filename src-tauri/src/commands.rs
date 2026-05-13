@@ -29,8 +29,7 @@ use crate::snapshot::{self, RestoreResult, SnapshotResult, DEFAULT_SNAPSHOT_BYTE
 #[tauri::command]
 pub fn inspect_partitions(path: String) -> Result<PartitionSummary, String> {
     let p = Path::new(&path);
-    inspect::inspect_any(p)
-        .ok_or_else(|| format!("no partition table found in {path}"))
+    inspect::inspect_any(p).ok_or_else(|| format!("no partition table found in {path}"))
 }
 
 /// Capture the first N bytes of `device` into a recovery file at
@@ -78,7 +77,9 @@ pub fn export_burn_report(
     match fmt {
         "json" => Ok(forensic::to_pretty_json(&report)),
         "markdown" | "md" => Ok(forensic::to_markdown(&report)),
-        other => Err(format!("unknown format: {other} (want 'json' or 'markdown')")),
+        other => Err(format!(
+            "unknown format: {other} (want 'json' or 'markdown')"
+        )),
     }
 }
 
@@ -100,13 +101,11 @@ pub fn run_backup(
 
     let compression = match compression.as_deref() {
         None => Compression::None,
-        Some(s) => Compression::parse(s)
-            .ok_or_else(|| format!("unknown compression: {s}"))?,
+        Some(s) => Compression::parse(s).ok_or_else(|| format!("unknown compression: {s}"))?,
     };
     let sparse = sparse.unwrap_or(false);
     let src = Path::new(&source);
-    let source_bytes = backup::probe_source_size(src)
-        .map_err(|e| format!("probe source: {e}"))?;
+    let source_bytes = backup::probe_source_size(src).map_err(|e| format!("probe source: {e}"))?;
     let options = BackupOptions {
         source_path: src.to_path_buf(),
         output_path: Path::new(&output).to_path_buf(),
@@ -116,8 +115,8 @@ pub fn run_backup(
         sparse,
     };
     let cancel = AtomicBool::new(false);
-    let result = backup::run_to_file(&options, &cancel, |_| {})
-        .map_err(|e| format!("backup: {e:?}"))?;
+    let result =
+        backup::run_to_file(&options, &cancel, |_| {}).map_err(|e| format!("backup: {e:?}"))?;
     Ok(BackupResultJson {
         bytes_read: result.bytes_read,
         bytes_written: result.bytes_written,
