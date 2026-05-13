@@ -145,10 +145,9 @@ Hash algorithm used for source and read-back integrity check.
   more than sufficient.
 - **When to change it:** if the burn is CPU-bound (rare, but possible
   on slow ARM machines burning fast NVMe), xxhash will close the gap.
-- **Caveat:** xxhash plumbing is not fully wired through the pipeline
-  yet — see `docs/CHANGELOG.md`. The pref selector is present so the
-  UI is forward-compatible, but for now both values produce SHA-256
-  in the helper.
+- **Caveat:** xxhash plumbing is wired through the pipeline (vendored
+  xxh64, selectable via `--hash-algo`). See [CHANGELOG.md](../CHANGELOG.md)
+  for the rollout note.
 
 ### `max.mismatches`
 
