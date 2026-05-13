@@ -1,7 +1,7 @@
 //! Command-line surface for Disk Cutter.
 //!
 //! Lives alongside the Tauri GUI: when the binary is invoked with a
-//! subcommand argv (e.g. `disk-cutter inspect foo.qcow2`), main.rs
+//! subcommand argv (e.g. `diskcutter inspect foo.qcow2`), main.rs
 //! routes here instead of launching the GUI. This lets us run Disk
 //! Cutter scriptably from a shell, a CI job, or a make target,
 //! reusing the exact same readers / backup engine / partition probe
@@ -143,7 +143,7 @@ fn parse_snapshot(rest: &[String]) -> Command {
 
 const USAGE: &str = r#"Disk Cutter — brutalist disk-image writer
 
-usage: disk-cutter <command> [args]
+usage: diskcutter <command> [args]
 
 commands:
   inspect  <path>                     partition + filesystem probe of an image
@@ -202,7 +202,7 @@ pub fn run_cli(args: &[String]) -> i32 {
         } => run_snapshot(&device, &output, bytes),
         Command::Restore { recovery, device } => run_restore(&recovery, &device),
         Command::Invalid(msg) => {
-            eprintln!("disk-cutter: {msg}");
+            eprintln!("diskcutter: {msg}");
             eprintln!();
             eprintln!("{USAGE}");
             2
@@ -226,7 +226,7 @@ fn run_inspect(path: &std::path::Path) -> i32 {
         }
         None => {
             eprintln!(
-                "disk-cutter: no partition table found in {}",
+                "diskcutter: no partition table found in {}",
                 path.display()
             );
             1
@@ -243,7 +243,7 @@ fn run_backup(
     let source_bytes = match backup::probe_source_size(source) {
         Ok(n) => n,
         Err(e) => {
-            eprintln!("disk-cutter: probe source: {e}");
+            eprintln!("diskcutter: probe source: {e}");
             return 1;
         }
     };
@@ -281,7 +281,7 @@ fn run_backup(
             0
         }
         Err(e) => {
-            eprintln!("disk-cutter: backup: {e:?}");
+            eprintln!("diskcutter: backup: {e:?}");
             1
         }
     }
@@ -298,7 +298,7 @@ fn run_snapshot(device: &std::path::Path, output: &std::path::Path, bytes: u64) 
             0
         }
         Err(e) => {
-            eprintln!("disk-cutter: snapshot: {e:?}");
+            eprintln!("diskcutter: snapshot: {e:?}");
             1
         }
     }
@@ -314,7 +314,7 @@ fn run_restore(recovery: &std::path::Path, device: &std::path::Path) -> i32 {
             0
         }
         Err(e) => {
-            eprintln!("disk-cutter: restore: {e:?}");
+            eprintln!("diskcutter: restore: {e:?}");
             1
         }
     }

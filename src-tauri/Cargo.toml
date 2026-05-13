@@ -1,5 +1,5 @@
 [package]
-name = "disk-cutter"
+name = "diskcutter"
 version = "0.4.0-alpha"
 description = "Brutalist disk-image writer"
 authors = ["Chris Thomas <chris.alex.thomas@gmail.com>"]
@@ -8,7 +8,7 @@ license = "MIT"
 repository = "https://github.com/antimatter-studios/diskcutter"
 
 [lib]
-name = "disk_cutter_lib"
+name = "diskcutter_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
