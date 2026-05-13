@@ -1,4 +1,5 @@
 pub mod backup;
+pub mod cli;
 mod db;
 #[cfg(target_os = "macos")]
 mod disk_arb;
@@ -12,6 +13,7 @@ pub mod snapshot;
 pub mod sparse;
 pub mod writers;
 
+pub use cli::run_cli;
 pub use helper::run_helper;
 
 use db::{

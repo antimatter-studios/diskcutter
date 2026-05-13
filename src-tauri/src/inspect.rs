@@ -56,6 +56,42 @@ pub fn inspect_raw_image(path: &Path) -> Option<PartitionSummary> {
     summarise(&dev).ok()
 }
 
+/// Inspect any supported image format. For raw / iso the file is
+/// opened directly; for container formats (qcow2 / vhd / vhdx / vmdk)
+/// the upstream reader's `BlockRead` view of the virtual disk is
+/// passed to the partition probe. Compressed formats can't be probed
+/// without decompressing — caller gets `None`.
+pub fn inspect_any(path: &Path) -> Option<PartitionSummary> {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|s| s.to_ascii_lowercase());
+    match ext.as_deref() {
+        Some("qcow2") | Some("qcow") => {
+            let r = qcow2::Qcow2Reader::open(path).ok()?;
+            inspect_block_read(&r)
+        }
+        Some("vhd") => {
+            let r = vhd::VhdReader::open(path).ok()?;
+            inspect_block_read(&r)
+        }
+        Some("vhdx") => {
+            let r = vhdx::VhdxReader::open(path).ok()?;
+            inspect_block_read(&r)
+        }
+        Some("vmdk") => {
+            let r = vmdk::VmdkReader::open(path).ok()?;
+            inspect_block_read(&r)
+        }
+        Some("gz") | Some("xz") | Some("bz2") | Some("bzip2") | Some("zst") | Some("zstd") => {
+            // Compressed sources need decompression before partition
+            // probe — outside the cheap-inspect scope.
+            None
+        }
+        _ => inspect_raw_image(path),
+    }
+}
+
 /// Inspect any source that already implements `BlockRead`. Use this
 /// for container-format virtual disks (qcow2 / vhd / vhdx / vmdk) —
 /// the caller passes the already-opened reader so we don't re-parse
@@ -380,6 +416,25 @@ mod tests {
     /// Construct a minimal valid MBR with one Linux filesystem partition
     /// and inspect it end-to-end. Exercises the file-backed
     /// `BlockRead` path without needing external tools.
+    #[test]
+    fn inspect_any_routes_to_raw_for_iso_extension() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("e.iso");
+        std::fs::write(&p, vec![0u8; 4096]).unwrap();
+        // No partition table → None.
+        assert!(inspect_any(&p).is_none());
+    }
+
+    #[test]
+    fn inspect_any_returns_none_for_compressed_extensions() {
+        let dir = tempfile::tempdir().unwrap();
+        for ext in &["gz", "xz", "bz2", "zst"] {
+            let p = dir.path().join(format!("img.iso.{ext}"));
+            std::fs::write(&p, b"would need decompression").unwrap();
+            assert!(inspect_any(&p).is_none(), "ext {ext} should be skipped");
+        }
+    }
+
     #[test]
     fn inspect_raw_image_reads_synthetic_mbr() {
         let dir = tempfile::tempdir().unwrap();
