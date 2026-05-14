@@ -250,7 +250,7 @@ function EntryRow({ entry, accent, onDispatch }) {
 
 /* ─────────── Job Row ─────────── */
 
-function JobRow({ job, accent, expanded, onToggle, onSelectTarget, onCancel, onRetry, onCopyHash, onCopyError, onFlashAnother, onRemove, density }) {
+function JobRow({ job, accent, expanded, onToggle, onSelectTarget, onCancel, onRetry, onCopyHash, onCopyError, onFlashAnother, onRemove, density, fdaBlocked }) {
   const { t } = useTranslation();
   const state = job.state;
   const danger = state === 'error';
@@ -325,7 +325,7 @@ function JobRow({ job, accent, expanded, onToggle, onSelectTarget, onCancel, onR
         )}
       </div>
 
-      {expanded && <JobDetail job={job} accent={accent} onCancel={onCancel} onRetry={onRetry} onCopyHash={onCopyHash} onCopyError={onCopyError} onFlashAnother={onFlashAnother} />}
+      {expanded && <JobDetail job={job} accent={accent} fdaBlocked={fdaBlocked} onCancel={onCancel} onRetry={onRetry} onCopyHash={onCopyHash} onCopyError={onCopyError} onFlashAnother={onFlashAnother} />}
     </div>
   );
 }
@@ -375,8 +375,9 @@ function SuccessReadout({ job }) {
 
 /* ─────────── Job Detail (expanded drawer) ─────────── */
 
-function JobDetail({ job, accent, onCancel, onRetry }) {
+function JobDetail({ job, accent, onCancel, onRetry, fdaBlocked }) {
   const { t } = useTranslation();
+  const retryDisabled = !!job.retrying || (job.errorCode === 'ENEEDS_FDA' && fdaBlocked);
   return (
     <div className="job-detail">
       <div className="detail-grid">
@@ -413,7 +414,17 @@ function JobDetail({ job, accent, onCancel, onRetry }) {
         ) : null}
         {job.state === 'error' && (
           <>
-            <button className="btn btn-ghost" onClick={onRetry}>[ {t('detail.actions.retry')} ]</button>
+            <button
+              className={"btn btn-ghost" + (retryDisabled ? " is-disabled" : "")}
+              onClick={retryDisabled ? null : onRetry}
+              aria-disabled={retryDisabled || undefined}
+            >
+              [ {job.retrying
+                  ? t('detail.actions.retrying', { defaultValue: 'RETRYING…' })
+                  : (job.errorCode === 'ENEEDS_FDA' && fdaBlocked)
+                    ? t('detail.actions.retry_waiting_fda', { defaultValue: 'WAITING FOR FDA' })
+                    : t('detail.actions.retry')} ]
+            </button>
             <button className="btn btn-ghost">[ {t('detail.actions.copy_error')} ]</button>
             <button className="btn btn-ghost">[ {t('detail.actions.open_log')} ]</button>
           </>

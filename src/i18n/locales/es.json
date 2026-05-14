@@ -179,6 +179,8 @@
     "actions": {
       "abort": "ABORTAR ESCRITURA",
       "retry": "REINTENTAR",
+      "retrying": "REINTENTANDO…",
+      "retry_waiting_fda": "ESPERANDO FDA",
       "copy_error": "COPIAR ERROR",
       "open_log": "ABRIR LOG",
       "eject": "EXPULSAR",

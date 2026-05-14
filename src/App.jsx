@@ -78,8 +78,16 @@ function App() {
   // Shape: { active: [{ job_id, target }], phase?: 'cancelling' | 'exiting' }
   const [closeBlocked, setCloseBlocked] = useState(null);
   const [toasts, setToasts] = useState([]);
+  const [fdaBlocked, setFdaBlocked] = useState(false);
   const toastIdRef = useRef(0);
   const sessionStartRef = useRef(Date.now());
+  // True once we've kicked System Settings open for the current FDA outage.
+  // Reset when check_fda reports granted again, so the next outage opens it.
+  const fdaSettingsOpenedRef = useRef(false);
+  // Per-job retry debounce: prevents a second click while the start_write
+  // round-trip is still pending. Without this, every extra click stacks
+  // another osascript prompt + helper.
+  const retryInFlightRef = useRef(new Set());
   const [, forceTick] = useState(0);
 
   useEffect(() => {
@@ -128,6 +136,10 @@ function App() {
     // find_orphan_helpers is expected to fail on non-macOS — keep console.error
     // for devtools visibility but suppress the user-facing toast.
     invoke('find_orphan_helpers').then(setOrphanPids).catch((e) => console.error('find_orphan_helpers failed', e));
+    // Initial FDA probe. The window-focus listener (separate effect below)
+    // re-runs the probe whenever the user comes back to us, e.g. after they
+    // toggle Full Disk Access in System Settings.
+    invoke('check_fda').then((granted) => setFdaBlocked(!granted)).catch(() => {});
     // Hydrate every pref in one round-trip. Missing/empty keys fall through
     // to PREFS_DEFAULTS so the UI shows a sensible value until the user
     // touches the control for the first time.
@@ -165,6 +177,31 @@ function App() {
       console.warn('auto.eject enabled, but eject_disk command is not implemented yet');
     }
   }, [pushToast, t]);
+
+  // FDA re-probe on window focus. The user toggles Full Disk Access in
+  // System Settings (a separate app), so we don't get a direct signal — we
+  // re-check whenever they come back to us. When the state flips to granted,
+  // clear stale ENEEDS_FDA errors back to idle so the banner disappears
+  // without requiring a Retry click. Also re-arm the once-per-outage flag
+  // for open_fda_settings.
+  useEffect(() => {
+    const probe = () => {
+      invoke('check_fda').then((granted) => {
+        setFdaBlocked(!granted);
+        if (granted) {
+          fdaSettingsOpenedRef.current = false;
+          setJobs((js) => js.map((j) => (
+            j.state === 'error' && j.errorCode === 'ENEEDS_FDA'
+              ? { ...j, state: 'idle', errorCode: undefined, errorMessage: undefined }
+              : j
+          )));
+        }
+      }).catch(() => {});
+    };
+    const onFocus = () => probe();
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+  }, []);
 
   // Theme: data-theme attribute on <html> drives the dark palette swap.
   useEffect(() => {
@@ -244,10 +281,17 @@ function App() {
       const f = e.payload;
       setJobs((js) => applyJobFailure(js, f));
       if (f.error_code === 'ENEEDS_FDA') {
-        invoke('open_fda_settings').catch((err) => {
-          console.error('open_fda_settings failed', err);
-          pushToast('warn', t('error.could_not_open_system_settings'));
-        });
+        setFdaBlocked(true);
+        // Only open System Settings once per FDA outage — repeat opens on
+        // every retry click are pure noise. fdaSettingsOpenedRef resets back
+        // to false in the focus-probe effect when check_fda reports granted.
+        if (!fdaSettingsOpenedRef.current) {
+          fdaSettingsOpenedRef.current = true;
+          invoke('open_fda_settings').catch((err) => {
+            console.error('open_fda_settings failed', err);
+            pushToast('warn', t('error.could_not_open_system_settings'));
+          });
+        }
       }
     }).then((u) => subs.push(u));
 
@@ -481,10 +525,22 @@ function App() {
   }, [pushToast, t]);
 
   const retryJob = useCallback(async (jobId) => {
+    // Debounce: ignore extra clicks while the previous start_write is still
+    // pending. Without this, every click stacks another osascript+helper for
+    // the same job — the FDA retry-storm we're fixing.
+    if (retryInFlightRef.current.has(jobId)) return;
     const job = jobs.find((j) => j.id === jobId);
     if (!job || !job.target) return;
+    // Don't bother the backend if we already know FDA is blocked. The user
+    // can still trigger an explicit prompt via the banner action; this just
+    // keeps the click from being a no-op storm.
+    if (fdaBlocked) {
+      invoke('open_fda_settings').catch(() => {});
+      return;
+    }
+    retryInFlightRef.current.add(jobId);
     setJobs((js) => js.map((j) => (
-      j.id !== jobId ? j : { ...j, state: 'idle', progress: 0, verifyProgress: 0, errorCode: undefined, errorMessage: undefined, verification: null }
+      j.id !== jobId ? j : { ...j, state: 'idle', progress: 0, verifyProgress: 0, errorCode: undefined, errorMessage: undefined, verification: null, retrying: true }
     )));
     try {
       await invoke('start_write', {
@@ -493,10 +549,17 @@ function App() {
         targetDevice: job.target.device,
       });
     } catch (e) {
-      console.error('retry start_write failed', e);
-      pushToast('error', `Retry failed: ${e}`);
+      // "already in flight" is the registry rejecting a duplicate spawn —
+      // expected when a click slips past the ref guard. Silent.
+      if (!String(e).includes('already in flight')) {
+        console.error('retry start_write failed', e);
+        pushToast('error', `Retry failed: ${e}`);
+      }
+    } finally {
+      retryInFlightRef.current.delete(jobId);
+      setJobs((js) => js.map((j) => (j.id === jobId ? { ...j, retrying: false } : j)));
     }
-  }, [jobs, pushToast]);
+  }, [jobs, fdaBlocked, pushToast]);
 
   const clearDone = useCallback(() => {
     setJobs((js) => js.filter((j) => j.state !== 'success'));
@@ -564,6 +627,7 @@ function App() {
     confirmed, setConfirmed,
     errorJob, errorMsg,
     expanded, setExpanded,
+    fdaBlocked,
     setPickerJob,
     entries, nextCopies, onChangeNextCopies: setNextCopies,
     onDispatchFromEntry: dispatchFromEntry,
@@ -649,6 +713,7 @@ function AppBody({
   confirmed, setConfirmed,
   errorJob, errorMsg,
   expanded, setExpanded,
+  fdaBlocked,
   setPickerJob,
   entries, nextCopies, onChangeNextCopies, onDispatchFromEntry,
   onAdd, onAddFromUrl, onBrowseCatalog, onStart, onCancelJob,
@@ -785,6 +850,7 @@ function AppBody({
                 job={job}
                 accent={accent}
                 density={density}
+                fdaBlocked={fdaBlocked}
                 expanded={!!expanded[job.id]}
                 onToggle={() => setExpanded((e) => ({ ...e, [job.id]: !e[job.id] }))}
                 onSelectTarget={() => setPickerJob(jobs.indexOf(job))}

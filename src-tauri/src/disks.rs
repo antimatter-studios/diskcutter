@@ -139,6 +139,13 @@ impl ActiveBurns {
     }
 }
 
+/// Tracks elevated-burn jobs currently in flight. Used to reject duplicate
+/// `start_write` calls for the same job_id — otherwise every Retry click
+/// spawns a fresh osascript + helper, racing for the same /dev/diskN,
+/// stacking password prompts, and clobbering the progress JSONL file.
+#[derive(Default)]
+pub struct ElevatedJobs(pub Mutex<HashMap<String, u32>>);
+
 #[derive(Serialize, Clone)]
 pub struct AppInfo {
     pub version: String,
@@ -228,6 +235,28 @@ pub fn kill_orphan_helpers(pids: Vec<u32>) -> Result<(), String> {
         let _ = pids;
         Err("not implemented on this platform".to_string())
     }
+}
+
+/// Heuristic FDA probe: stat a TCC-protected file. macOS only grants `stat`
+/// on TCC.db to processes with Full Disk Access. Mirrors the doctor check
+/// but lives here so we can run it on the burn hot-path without pulling in
+/// the doctor module. Returns `true` when FDA appears to be granted.
+pub fn fda_granted() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        std::path::Path::new("/Library/Application Support/com.apple.TCC/TCC.db")
+            .metadata()
+            .is_ok()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        true
+    }
+}
+
+#[tauri::command]
+pub fn check_fda() -> bool {
+    fda_granted()
 }
 
 #[tauri::command]
@@ -620,6 +649,7 @@ pub fn start_write(
     app: AppHandle,
     cancel: State<'_, CancelRegistry>,
     active: State<'_, ActiveBurns>,
+    elevated: State<'_, ElevatedJobs>,
     job_id: String,
     image_path: String,
     target_device: String,
@@ -649,12 +679,29 @@ pub fn start_write(
 
     let needs_elevation = target_device.starts_with("/dev/") && !is_privileged();
     if needs_elevation {
+        // Parent-side FDA preflight: stat'ing TCC.db requires Full Disk
+        // Access, so a stat failure is a strong signal the helper would
+        // immediately bail with ENEEDS_FDA. Surface that without paying the
+        // osascript+password round-trip.
+        if !fda_granted() {
+            let msg = "Full Disk Access not granted to Disk Cutter".to_string();
+            db::record_burn_failed(&app.state::<Db>(), &job_id, "ENEEDS_FDA", &msg);
+            let _ = app.emit(
+                "disk-cutter://job-error",
+                JobFailure {
+                    job_id: job_id.clone(),
+                    error_code: "ENEEDS_FDA".into(),
+                    error_message: msg,
+                },
+            );
+            return Ok(());
+        }
         active.insert(ActiveBurn {
             job_id: job_id.clone(),
             target: target_device.clone(),
             kind: BurnKind::Elevated,
         });
-        return spawn_elevated_burn(app, job_id, image_path, target_device);
+        return spawn_elevated_burn(app, &elevated, job_id, image_path, target_device);
     }
 
     let flag = Arc::new(AtomicBool::new(false));
@@ -712,10 +759,43 @@ pub fn start_write(
 
 fn spawn_elevated_burn(
     app: AppHandle,
+    elevated: &State<'_, ElevatedJobs>,
     job_id: String,
     image_path: String,
     target: String,
 ) -> Result<(), String> {
+    // Idempotency: if an elevated job for this id is already in flight, do
+    // not spawn another osascript/helper. Each duplicate spawn would prompt
+    // for the password again, race over the device, and clobber the progress
+    // JSONL — the multi-prompt storm we are fixing. Check-and-reserve in one
+    // critical section so two near-simultaneous Retry clicks can't both win.
+    {
+        let mut guard = elevated.0.lock().unwrap();
+        if guard.contains_key(&job_id) {
+            return Err("burn already in flight for this job".to_string());
+        }
+        // Reserve with sentinel pid 0; real pid is filled in after spawn.
+        guard.insert(job_id.clone(), 0);
+    }
+    let result = spawn_elevated_burn_inner(app.clone(), &job_id, image_path, target);
+    if result.is_err() {
+        // Spawn never made it to tail_helper, which is what would normally
+        // remove the registry entry. Clean up here so a future retry can
+        // proceed.
+        if let Some(reg) = app.try_state::<ElevatedJobs>() {
+            reg.0.lock().unwrap().remove(&job_id);
+        }
+    }
+    result
+}
+
+fn spawn_elevated_burn_inner(
+    app: AppHandle,
+    job_id: &str,
+    image_path: String,
+    target: String,
+) -> Result<(), String> {
+    let job_id = job_id.to_string();
     let exe = std::env::current_exe().map_err(|e| {
         let msg = e.to_string();
         db::record_burn_failed(&app.state::<Db>(), &job_id, "EHELPER", &msg);
@@ -723,7 +803,11 @@ fn spawn_elevated_burn(
         msg
     })?;
     let progress_path = format!("/tmp/disk-cutter-progress-{job_id}.jsonl");
-    let _ = std::fs::remove_file(&progress_path);
+    // Do NOT unlink the progress file here. If a prior helper for this id is
+    // still alive (e.g. retry-storm survivor) its open fd points at the old
+    // inode; removing the path orphans its writes to a deleted inode while
+    // the new tail_helper reads a fresh empty file — UI freezes. Lifecycle
+    // ownership now sits in tail_helper, which deletes on its own exit.
     // Clear any stale cancel sentinel from a previous job with the same id.
     let _ = std::fs::remove_file(cancel_sentinel_path(&job_id));
 
@@ -778,6 +862,13 @@ fn spawn_elevated_burn(
             app.state::<ActiveBurns>().remove(&job_id);
             msg
         })?;
+
+    // Record osascript pid into the in-flight registry so cancel/duplicate
+    // checks have a real pid to work with. tail_helper removes the entry on
+    // exit.
+    if let Some(reg) = app.try_state::<ElevatedJobs>() {
+        reg.0.lock().unwrap().insert(job_id.clone(), child.id());
+    }
 
     let app_for_tail = app.clone();
     let job_for_tail = job_id.clone();
@@ -907,6 +998,11 @@ fn tail_helper(app: AppHandle, job_id: String, path: String, mut child: std::pro
     }
     let _ = std::fs::remove_file(&path);
     let _ = std::fs::remove_file(cancel_sentinel_path(&job_id));
+    // Release the in-flight slot. After this point a Retry for the same
+    // job_id is allowed to spawn a fresh osascript+helper again.
+    if let Some(reg) = app.try_state::<ElevatedJobs>() {
+        reg.0.lock().unwrap().remove(&job_id);
+    }
 }
 
 enum HelperEvent {

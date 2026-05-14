@@ -179,6 +179,8 @@
     "actions": {
       "abort": "SCHREIBEN ABBRECHEN",
       "retry": "ERNEUT VERSUCHEN",
+      "retrying": "WIRD WIEDERHOLT…",
+      "retry_waiting_fda": "WARTE AUF FDA",
       "copy_error": "FEHLER KOPIEREN",
       "open_log": "LOG ÖFFNEN",
       "eject": "AUSWERFEN",

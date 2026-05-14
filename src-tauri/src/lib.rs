@@ -26,9 +26,9 @@ use db::{
     burn_history_clear, burn_history_list, burn_logs_list, config_all, config_get, config_set, Db,
 };
 use disks::{
-    abort_and_quit, app_info, cancel_write, find_orphan_helpers, has_active_burns, inspect_image,
-    kill_orphan_helpers, list_disks, open_fda_settings, start_write, verify_image, ActiveBurns,
-    CancelRegistry,
+    abort_and_quit, app_info, cancel_write, check_fda, find_orphan_helpers, has_active_burns,
+    inspect_image, kill_orphan_helpers, list_disks, open_fda_settings, start_write, verify_image,
+    ActiveBurns, CancelRegistry, ElevatedJobs,
 };
 use std::sync::Mutex;
 use tauri::menu::{AboutMetadataBuilder, MenuBuilder, SubmenuBuilder};
@@ -40,6 +40,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(CancelRegistry::default())
         .manage(ActiveBurns::default())
+        .manage(ElevatedJobs::default())
         .manage(url_fetch::DownloadRegistry::default())
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
@@ -67,6 +68,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             app_info,
             open_fda_settings,
+            check_fda,
             find_orphan_helpers,
             kill_orphan_helpers,
             list_disks,
