@@ -13,12 +13,10 @@ import {
   useTweaks, TweaksPanel, TweakSection,
   TweakRadio, TweakToggle, TweakColor,
 } from './tweaks-panel.jsx';
+import { formatBytes } from './format.js';
 import {
-  formatBytes, formatBps, formatDuration, formatSession, makeJob, makeEntry, decrementEntry,
-} from './format.js';
-import {
-  applyJobUpdate, applyJobComplete, applyJobFailure,
-} from './job-reducers.js';
+  useQueueStore, attachQueueListeners, selectJobs, selectEntries, startValidation,
+} from './store/queue.js';
 import {
   computeScene, sceneToTitleKey, computeSessionStats, planStart,
 } from './app-derive.js';
@@ -55,8 +53,12 @@ function App() {
   // `tw` for tweak state — `t` is reserved for the i18n translator below.
   const [tw, setTweak] = useTweaks(TWEAK_DEFAULTS);
   const { t } = useTranslation();
-  const [jobs, setJobs] = useState([]);
-  const [entries, setEntries] = useState([]);
+  // Queue rows + bulk-entry counters live in the central queue store now
+  // (see src/store/queue.js). The store also owns the Tauri event
+  // listeners that mutate them, so this component is left with UI-only
+  // state.
+  const jobs = useQueueStore(selectJobs);
+  const entries = useQueueStore(selectEntries);
   // User-chosen "copies" count for the next ADD IMAGE; sticks across adds so
   // the operator can queue several different images at the same copy count
   // without re-setting the stepper each time.
@@ -190,11 +192,7 @@ function App() {
         setFdaBlocked(!granted);
         if (granted) {
           fdaSettingsOpenedRef.current = false;
-          setJobs((js) => js.map((j) => (
-            j.state === 'error' && j.errorCode === 'ENEEDS_FDA'
-              ? { ...j, state: 'idle', errorCode: undefined, errorMessage: undefined }
-              : j
-          )));
+          useQueueStore.getState().clearEneedsFdaErrors();
         }
       }).catch(() => {});
     };
@@ -221,12 +219,7 @@ function App() {
     if (!Number.isFinite(seconds) || seconds <= 0) return undefined;
     const thresholdMs = seconds * 1000;
     const id = setInterval(() => {
-      const now = Date.now();
-      setJobs((js) => js.filter((j) => {
-        if (j.state !== 'success') return true;
-        if (!j.finishedAt) return true;
-        return (now - j.finishedAt) < thresholdMs;
-      }));
+      useQueueStore.getState().removeStaleSuccess(thresholdMs);
     }, 10000);
     return () => clearInterval(id);
   }, [prefs]);
@@ -248,43 +241,13 @@ function App() {
     let mounted = true;
     const subs = [];
 
-    listen('disk-cutter://job-update', (e) => {
-      if (!mounted) return;
-      setJobs((js) => applyJobUpdate(js, e.payload));
-    }).then((u) => subs.push(u));
-
-    listen('disk-cutter://job-complete', (e) => {
-      if (!mounted) return;
-      const finishedAt = Date.now();
-      let parentEntryId = null;
-      setJobs((js) => {
-        const before = js.find((j) => j.id === e.payload.job_id);
-        if (before) parentEntryId = before.parentEntryId || null;
-        return applyJobComplete(js, e.payload).map((j) => (
-          j.id === e.payload.job_id && j.state === 'success'
-            ? { ...j, finishedAt }
-            : j
-        ));
-      });
-      // Each successful burn from an entry decrements its counter. When the
-      // counter hits zero the entry drops out — the completed jobs remain
-      // in the history portion of the queue until cleared.
-      if (parentEntryId) {
-        setEntries((es) => es
-          .map((entry) => (entry.id === parentEntryId ? decrementEntry(entry) : entry))
-          .filter((entry) => entry.copiesRemaining > 0));
-      }
-    }).then((u) => subs.push(u));
-
-    listen('disk-cutter://job-error', (e) => {
-      if (!mounted) return;
-      const f = e.payload;
-      setJobs((js) => applyJobFailure(js, f));
-      if (f.error_code === 'ENEEDS_FDA') {
+    // Queue-state event channels (job-update, job-complete, job-error,
+    // image-validated) live in the store. We only pass back the FDA
+    // and "image invalid" reactions because those touch UI state /
+    // toast layer this component owns.
+    const detachQueue = attachQueueListeners({
+      onFdaError: () => {
         setFdaBlocked(true);
-        // Only open System Settings once per FDA outage — repeat opens on
-        // every retry click are pure noise. fdaSettingsOpenedRef resets back
-        // to false in the focus-probe effect when check_fda reports granted.
         if (!fdaSettingsOpenedRef.current) {
           fdaSettingsOpenedRef.current = true;
           invoke('open_fda_settings').catch((err) => {
@@ -292,8 +255,13 @@ function App() {
             pushToast('warn', t('error.could_not_open_system_settings'));
           });
         }
-      }
-    }).then((u) => subs.push(u));
+      },
+      onImageInvalid: (p) => {
+        const detail = p.detail || p.reason || '—';
+        pushToast('error', t('error.image_invalid', { reason: detail }));
+      },
+    });
+    subs.push(detachQueue);
 
     // URL fetch: progress as a transient toast every ~250ms; on
     // completion, hand the local file path to addImageFromPath which
@@ -338,22 +306,6 @@ function App() {
       setCloseBlocked((prev) => (prev ? { ...prev, phase } : prev));
     }).then((u) => subs.push(u));
 
-    // Content-validation result for a queued image. Backend probes
-    // partition table + filesystem signatures; an Invalid verdict
-    // blocks burn (the START QUEUE gate filters on validation==='valid').
-    listen('disk-cutter://image-validated', (e) => {
-      if (!mounted) return;
-      const p = e.payload;
-      const result = p.result === 'valid' ? 'valid' : 'invalid';
-      const detail = p.detail || p.reason || null;
-      setJobs((js) => js.map((j) => (
-        j.id === p.job_id ? { ...j, validation: result, validationDetail: detail } : j
-      )));
-      if (result === 'invalid') {
-        pushToast('error', t('error.image_invalid', { reason: detail || '—' }));
-      }
-    }).then((u) => subs.push(u));
-
     return () => {
       mounted = false;
       subs.forEach((u) => u());
@@ -372,25 +324,11 @@ function App() {
         format: details.format,
         sha256: details.sha256 || '—',
       };
-      const requested = Math.max(1, Math.floor(Number(copies) || 1));
-      const newJob = makeJob(0, image, null);
-      const jobId = newJob.id;
-      if (requested === 1) {
-        // Classic single-burn flow: no entry, just a job. Preserves today's UX.
-        setJobs((js) => [...js, { ...newJob, num: js.length + 1 }]);
-      } else {
-        // Bulk flow: one entry holds the copies counter; the first job is
-        // dispatched immediately so the queue isn't empty after ADD IMAGE.
-        // Subsequent copies are dispatched manually from the entry row.
-        const entry = makeEntry(image, requested);
-        setEntries((es) => [...es, { ...entry, copiesRemaining: entry.copiesRemaining - 1 }]);
-        setJobs((js) => [...js, { ...newJob, num: js.length + 1, parentEntryId: entry.id }]);
-      }
+      const jobId = useQueueStore.getState().addImage(image, copies);
       // Kick off content validation in the background. Result lands on
       // 'disk-cutter://image-validated' and flips job.validation; the
       // START QUEUE gate refuses to burn until it's 'valid'.
-      invoke('validate_image_contents', { jobId, path: details.path })
-        .catch((e) => console.error('validate_image_contents failed', e));
+      startValidation(jobId, details.path);
     } catch (e) {
       console.error('inspect_image failed', e);
       pushToast('error', t('error.could_not_add_image', { error: e }));
@@ -423,13 +361,8 @@ function App() {
   // image and decrement the entry's "remaining" counter. Operator still
   // picks the target on the new job in the usual way.
   const dispatchFromEntry = useCallback((entryId) => {
-    const entry = entries.find((en) => en.id === entryId);
-    if (!entry || entry.copiesRemaining <= 0) return;
-    setEntries((es) => es
-      .map((en) => (en.id === entryId ? decrementEntry(en) : en))
-      .filter((en) => en.copiesRemaining > 0));
-    setJobs((js) => [...js, makeJob(js.length + 1, entry.image, null, entry.id)]);
-  }, [entries]);
+    useQueueStore.getState().dispatchFromEntry(entryId);
+  }, []);
 
   // FROM URL: prompt for a URL, kick off a background download. The
   // download_complete event handler below will inspect_image + queue
@@ -496,9 +429,7 @@ function App() {
   const startQueue = useCallback(async () => {
     const { tooSmall, okToBurn } = planStart(jobs);
     if (tooSmall.length) {
-      setJobs((js) => js.map((j) => (
-        tooSmall.some((t) => t.id === j.id) ? { ...j, state: 'error', errorCode: 'ETOOBIG' } : j
-      )));
+      useQueueStore.getState().markTooSmall(tooSmall.map((j) => j.id));
     }
     for (const job of okToBurn) {
       try {
@@ -570,9 +501,7 @@ function App() {
       return;
     }
     retryInFlightRef.current.add(jobId);
-    setJobs((js) => js.map((j) => (
-      j.id !== jobId ? j : { ...j, state: 'idle', progress: 0, verifyProgress: 0, errorCode: undefined, errorMessage: undefined, verification: null, retrying: true }
-    )));
+    useQueueStore.getState().setRetrying(jobId, true);
     try {
       await invoke('start_write', {
         jobId: job.id,
@@ -588,23 +517,21 @@ function App() {
       }
     } finally {
       retryInFlightRef.current.delete(jobId);
-      setJobs((js) => js.map((j) => (j.id === jobId ? { ...j, retrying: false } : j)));
+      useQueueStore.getState().setRetrying(jobId, false);
     }
   }, [jobs, fdaBlocked, pushToast]);
 
   const clearDone = useCallback(() => {
-    setJobs((js) => js.filter((j) => j.state !== 'success'));
+    useQueueStore.getState().clearDone();
   }, []);
 
   const removeJob = useCallback((jobId) => {
-    setJobs((js) => js.filter((j) => j.id !== jobId));
+    useQueueStore.getState().removeJob(jobId);
   }, []);
 
   const flashAnother = useCallback((jobId) => {
-    const job = jobs.find((j) => j.id === jobId);
-    if (!job) return;
-    setJobs((js) => [...js, makeJob(js.length + 1, job.image, null)]);
-  }, [jobs]);
+    useQueueStore.getState().flashAnother(jobId);
+  }, []);
 
   const copyText = useCallback(async (text) => {
     if (!text) return;
@@ -613,7 +540,7 @@ function App() {
   }, []);
 
   const pickTarget = useCallback((disk) => {
-    setJobs((js) => js.map((j, i) => (i === pickerJob ? { ...j, target: disk } : j)));
+    if (pickerJob != null) useQueueStore.getState().setTarget(pickerJob, disk);
     setPickerJob(null);
   }, [pickerJob]);
 
@@ -689,7 +616,7 @@ function App() {
       <DiskPickerSheet
         open={pickerJob !== null}
         disks={disks}
-        jobImage={pickerJob !== null ? jobs[pickerJob]?.image : null}
+        jobImage={pickerJob != null ? (jobs.find((j) => j.id === pickerJob)?.image || null) : null}
         onPick={pickTarget}
         onClose={() => setPickerJob(null)}
         onRefresh={refreshDisks}
@@ -884,7 +811,7 @@ function AppBody({
                 fdaBlocked={fdaBlocked}
                 expanded={!!expanded[job.id]}
                 onToggle={() => setExpanded((e) => ({ ...e, [job.id]: !e[job.id] }))}
-                onSelectTarget={() => setPickerJob(jobs.indexOf(job))}
+                onSelectTarget={() => setPickerJob(job.id)}
                 onCancel={() => onCancelJob(job.id)}
                 onCopyHash={() => onCopyText(job.verification?.sourceHash)}
                 onCopyError={() => onCopyText(job.errorMessage || job.errorCode)}
