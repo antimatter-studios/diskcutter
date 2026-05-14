@@ -167,7 +167,10 @@ function Toolbar({
   copies, onChangeCopies,
 }) {
   const { t } = useTranslation();
-  const ready = confirmed && jobs.some(j => j.state === 'idle' && j.target);
+  // Same gate as the Cmd+Enter shortcut path (see keymap.js::queueReady):
+  // burn requires confirmation AND at least one idle job that's been
+  // validated as a real disk image AND has a target picked.
+  const ready = confirmed && jobs.some(j => j.state === 'idle' && j.target && j.validation === 'valid');
   const hasDone = jobs.some(j => j.state === 'success');
   const copiesValue = Math.max(1, Math.floor(Number(copies) || 1));
   const setCopies = (n) => onChangeCopies && onChangeCopies(Math.max(1, Math.floor(n)));
@@ -248,6 +251,155 @@ function EntryRow({ entry, accent, onDispatch }) {
   );
 }
 
+/* ─────────── Validation Badge ─────────── */
+
+// Compact status pill for "does this image actually contain a burnable
+// disk?". Driven by `job.validation` ('pending' | 'valid' | 'invalid');
+// the optional `validationDetail` becomes a hover tooltip ("partition
+// table: GPT (3 partitions)" / "compressed contents are not a
+// recognised disk image" / etc.).
+function ValidationBadge({ validation, detail }) {
+  const { t } = useTranslation();
+  if (validation === 'invalid') {
+    return (
+      <span className="vbadge vbadge--invalid" title={detail || t('job.validation.invalid')}>
+        <span aria-hidden="true">⚠</span>
+        <span className="vbadge-label">{t('job.validation.invalid')}</span>
+      </span>
+    );
+  }
+  if (validation === 'valid') {
+    return (
+      <span className="vbadge vbadge--valid" title={detail || t('job.validation.valid')}>
+        <span aria-hidden="true">✓</span>
+        <span className="vbadge-label">{t('job.validation.valid')}</span>
+      </span>
+    );
+  }
+  return (
+    <span className="vbadge vbadge--pending" title={t('job.validation.pending')}>
+      <span aria-hidden="true">…</span>
+      <span className="vbadge-label">{t('job.validation.pending')}</span>
+    </span>
+  );
+}
+
+/* ─────────── Partition Strip ─────────── */
+
+// gparted-style proportional bar. `partitions` is the PartitionSummary
+// from the backend (or null when the image has no recognised layout,
+// e.g. compressed sources or superfloppies). `totalBytes` is the
+// uncompressed image size — used as denominator so the bar fills the
+// whole row even when partitions don't cover the full disk (trailing
+// unallocated space then shows up as a grey segment).
+function PartitionStrip({ partitions, totalBytes, validation, validationDetail }) {
+  const { t } = useTranslation();
+  // Only show once we know the image is valid. The validation badge
+  // already carries the pending / invalid state on its own row.
+  if (validation !== 'valid') return null;
+  // Valid but no partition table → superfloppy / unrecognised boot
+  // sector. Render a single-cell bar tagged with the validation detail
+  // ("filesystem: FAT32", "boot sector …") so the row still has
+  // visual continuity with multi-partition images.
+  if (!partitions || !partitions.partitions?.length) {
+    return (
+      <div className="pstrip pstrip--single">
+        <div className="pstrip-bar">
+          <div className="pstrip-seg pstrip-seg--unknown" style={{ width: '100%' }}>
+            <span className="pstrip-seg-label mono">
+              {validationDetail || t('job.partition.no_table')}
+            </span>
+          </div>
+        </div>
+      </div>
+    );
+  }
+  const segments = buildPartitionSegments(partitions.partitions, totalBytes);
+  const totalShown = segments.reduce((s, x) => s + x.length, 0);
+  return (
+    <div className="pstrip" aria-label={t('job.partition.strip.aria', { kind: partitions.table_kind })}>
+      <div className="pstrip-bar">
+        {segments.map((seg, i) => (
+          <div
+            key={i}
+            className={`pstrip-seg pstrip-seg--${seg.fsClass}`}
+            style={{ width: `${(seg.length / totalShown) * 100}%` }}
+            title={`${seg.title}\n${seg.sizeHuman}`}
+          >
+            <span className="pstrip-seg-label mono">{seg.label}</span>
+          </div>
+        ))}
+      </div>
+      <div className="pstrip-meta mono small">
+        <span>{partitions.table_kind}</span>
+        <span className="dot">·</span>
+        <span>{t('job.partition.count', { count: partitions.partitions.length })}</span>
+      </div>
+    </div>
+  );
+}
+
+// Walks the partition list in start-order, inserting "unallocated"
+// pseudo-segments wherever there's a gap before / between / after
+// partitions. Without this, multi-partition images with a 1 MiB
+// alignment hole at the front would render with their first partition
+// hugging the left edge — fine, but the user wants to see "this disk
+// has unused space" too.
+function buildPartitionSegments(parts, totalBytes) {
+  const sorted = parts.slice().sort((a, b) => a.start_bytes - b.start_bytes);
+  const out = [];
+  let cursor = 0;
+  for (const p of sorted) {
+    if (p.start_bytes > cursor) {
+      const gap = p.start_bytes - cursor;
+      out.push({
+        fsClass: 'unallocated',
+        length: gap,
+        sizeHuman: formatBytes(gap),
+        label: '',
+        title: 'unallocated',
+      });
+    }
+    out.push({
+      fsClass: fsClassFor(p.filesystem),
+      length: p.length_bytes,
+      sizeHuman: p.size_human,
+      label: p.label || p.filesystem || p.kind_label || '',
+      title: [p.label, p.filesystem || p.kind_label].filter(Boolean).join(' · ') || p.kind_label,
+    });
+    cursor = p.start_bytes + p.length_bytes;
+  }
+  if (totalBytes && totalBytes > cursor) {
+    const gap = totalBytes - cursor;
+    out.push({
+      fsClass: 'unallocated',
+      length: gap,
+      sizeHuman: formatBytes(gap),
+      label: '',
+      title: 'unallocated',
+    });
+  }
+  return out;
+}
+
+// Map the backend's filesystem string into a CSS class suffix. Keeps
+// the colour palette in CSS instead of inlined styles — switch the
+// theme variable to retheme the strip globally.
+function fsClassFor(fs) {
+  const f = (fs || '').toLowerCase();
+  if (!f) return 'unknown';
+  if (f.startsWith('ext')) return 'ext';
+  if (f.includes('exfat')) return 'exfat';
+  if (f.includes('fat')) return 'fat';
+  if (f.includes('ntfs')) return 'ntfs';
+  if (f.includes('hfs')) return 'hfs';
+  if (f.includes('apfs')) return 'apfs';
+  if (f.includes('swap')) return 'swap';
+  if (f.includes('iso')) return 'iso';
+  if (f.includes('squash')) return 'squash';
+  return 'unknown';
+}
+
 /* ─────────── Job Row ─────────── */
 
 function JobRow({ job, accent, expanded, onToggle, onSelectTarget, onCancel, onRetry, onCopyHash, onCopyError, onFlashAnother, onRemove, density, fdaBlocked }) {
@@ -270,6 +422,7 @@ function JobRow({ job, accent, expanded, onToggle, onSelectTarget, onCancel, onR
             <span>{job.image.size}</span>
             <span className="dot">·</span>
             <span className="mono small">sha256: {job.image.sha256.slice(0,12)}…{job.image.sha256.slice(-4)}</span>
+            <ValidationBadge validation={job.validation} detail={job.validationDetail} />
           </div>
         </div>
 
@@ -324,6 +477,13 @@ function JobRow({ job, accent, expanded, onToggle, onSelectTarget, onCancel, onR
           </button>
         )}
       </div>
+
+      <PartitionStrip
+        partitions={job.partitions}
+        totalBytes={job.image?.bytes}
+        validation={job.validation}
+        validationDetail={job.validationDetail}
+      />
 
       {expanded && <JobDetail job={job} accent={accent} fdaBlocked={fdaBlocked} onCancel={onCancel} onRetry={onRetry} onCopyHash={onCopyHash} onCopyError={onCopyError} onFlashAnother={onFlashAnother} />}
     </div>
@@ -401,6 +561,14 @@ function JobDetail({ job, accent, onCancel, onRetry, fdaBlocked }) {
           ) : <div className="empty-line">{t('detail.kv.no_target')}</div>}
         </DetailBlock>
 
+        <DetailBlock label={t('detail.block.partitions')} full>
+          <PartitionTable
+            partitions={job.partitions}
+            validation={job.validation}
+            validationDetail={job.validationDetail}
+          />
+        </DetailBlock>
+
         <DetailBlock label={t('detail.block.verification')} full>
           <VerificationPanel job={job} accent={accent} />
         </DetailBlock>
@@ -455,6 +623,61 @@ function KV({ k, v, mono, wrap }) {
     <div className="kv">
       <div className="kv-k">{k}</div>
       <div className={"kv-v" + (mono ? " mono" : "") + (wrap ? " wrap" : "")}>{v}</div>
+    </div>
+  );
+}
+
+/* ─────────── Partition Table (expanded detail) ─────────── */
+
+function PartitionTable({ partitions, validation, validationDetail }) {
+  const { t } = useTranslation();
+  if (validation === 'pending') {
+    return <div className="empty-line">{t('job.partition.pending')}</div>;
+  }
+  if (validation === 'invalid') {
+    return <div className="empty-line">{validationDetail || t('job.validation.invalid')}</div>;
+  }
+  if (!partitions || !partitions.partitions?.length) {
+    // Valid but no table — superfloppy / unrecognised. Surface the
+    // validation detail string ("filesystem: FAT32", "boot sector …")
+    // so the user knows _why_ there's no partition list.
+    return (
+      <div className="empty-line">
+        {validationDetail || t('job.partition.no_table')}
+      </div>
+    );
+  }
+  return (
+    <div className="ptable">
+      <div className="ptable-head mono small">
+        <span>{partitions.table_kind}</span>
+        <span className="dot">·</span>
+        <span>{t('job.partition.count', { count: partitions.partitions.length })}</span>
+      </div>
+      <table className="ver-table">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>{t('job.partition.col.start')}</th>
+            <th>{t('job.partition.col.size')}</th>
+            <th>{t('job.partition.col.kind')}</th>
+            <th>{t('job.partition.col.fs')}</th>
+            <th>{t('job.partition.col.label')}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {partitions.partitions.map((p) => (
+            <tr key={p.index}>
+              <td className="mono">{p.index}</td>
+              <td className="mono">{formatBytes(p.start_bytes)}</td>
+              <td className="mono">{p.size_human}</td>
+              <td>{p.kind_label}</td>
+              <td>{p.filesystem || '—'}</td>
+              <td>{p.label || '—'}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }

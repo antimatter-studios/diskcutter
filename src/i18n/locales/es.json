@@ -155,7 +155,26 @@
     },
     "validation": {
       "checking": "comprobando contenido de la imagen…",
-      "invalid_unknown": "no es una imagen de disco reconocida"
+      "invalid_unknown": "no es una imagen de disco reconocida",
+      "pending": "VALIDANDO…",
+      "valid": "VÁLIDA",
+      "invalid": "NO ES DISCO"
+    },
+    "partition": {
+      "pending": "Diseño no disponible hasta que finalice la validación.",
+      "no_table": "Sistema de archivos único — sin tabla de particiones.",
+      "count_one": "{{count}} partición",
+      "count_other": "{{count}} particiones",
+      "strip": {
+        "aria": "Diseño de particiones ({{kind}})"
+      },
+      "col": {
+        "start": "INICIO",
+        "size": "TAMAÑO",
+        "kind": "TIPO",
+        "fs": "SISTEMA DE ARCHIVOS",
+        "label": "ETIQUETA"
+      }
     },
     "select_target": "SELECCIONAR DISCO DESTINO",
     "eta": "ETA {{value}}",
@@ -165,6 +184,7 @@
     "block": {
       "image": "IMAGEN",
       "target": "DESTINO",
+      "partitions": "DISEÑO DE PARTICIONES",
       "verification": "VERIFICACIÓN"
     },
     "kv": {

@@ -86,6 +86,7 @@ pub fn run() {
             burn_history_clear,
             burn_logs_list,
             commands::inspect_partitions,
+            commands::inspect_image_partitions,
             commands::capture_snapshot,
             commands::restore_snapshot,
             commands::export_burn_report,

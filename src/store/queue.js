@@ -211,10 +211,27 @@ export const useQueueStore = create((set, get) => ({
   setValidation(jobId, report) {
     const result = report.result === 'valid' ? 'valid' : 'invalid';
     const detail = report.detail || report.reason || null;
+    let imagePath = null;
     set((s) => {
       const j = s.jobs[jobId];
       if (!j) return s;
+      imagePath = j.image?.path || null;
       return { jobs: { ...s.jobs, [jobId]: { ...j, validation: result, validationDetail: detail } } };
+    });
+    // A valid verdict means it's worth running the more expensive
+    // partition probe; invalid means we'd be probing a non-disk and
+    // skip the round-trip entirely.
+    if (result === 'valid' && imagePath) {
+      invoke('inspect_image_partitions', { jobId, path: imagePath })
+        .catch((e) => console.error('inspect_image_partitions failed', e));
+    }
+  },
+
+  setPartitions(jobId, summary) {
+    set((s) => {
+      const j = s.jobs[jobId];
+      if (!j) return s;
+      return { jobs: { ...s.jobs, [jobId]: { ...j, partitions: summary || null } } };
     });
   },
 }));
@@ -260,6 +277,12 @@ export function attachQueueListeners({ onFdaError, onImageInvalid } = {}) {
     if (p.result !== 'valid') {
       onImageInvalid?.(p);
     }
+  }).then((u) => subs.push(u));
+
+  listen('disk-cutter://image-partitioned', (e) => {
+    if (!mounted) return;
+    const p = e.payload;
+    useQueueStore.getState().setPartitions(p.job_id, p.summary);
   }).then((u) => subs.push(u));
 
   return () => {

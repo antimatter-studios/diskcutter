@@ -47,6 +47,11 @@ export function makeJob(num, image, target, parentEntryId) {
     verification: null,
     validation: 'pending',
     validationDetail: null,
+    // Partition summary lands once content validation succeeds: shape
+    // is `{ table_kind: 'MBR'|'GPT', partitions: [PartInfo] }` or
+    // `null` for compressed / superfloppy / unrecognised layouts. The
+    // PartitionStrip component handles either case.
+    partitions: null,
   };
 }
 

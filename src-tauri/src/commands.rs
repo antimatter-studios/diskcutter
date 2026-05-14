@@ -14,7 +14,7 @@
 
 use std::path::Path;
 
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
 
 use crate::db::{self, Db};
 use crate::forensic::{self, HostInfo};
@@ -30,6 +30,37 @@ use crate::snapshot::{self, RestoreResult, SnapshotResult, DEFAULT_SNAPSHOT_BYTE
 pub fn inspect_partitions(path: String) -> Result<PartitionSummary, String> {
     let p = Path::new(&path);
     inspect::inspect_any(p).ok_or_else(|| format!("no partition table found in {path}"))
+}
+
+/// Same probe as `inspect_partitions`, but async — spawns a worker and
+/// emits `disk-cutter://image-partitioned { job_id, summary }` once
+/// done. `summary` is `null` for images without a recognised table
+/// (superfloppy / compressed / unrecognised) so the UI can render an
+/// "extract / no layout" placeholder instead of treating it as an
+/// error.
+///
+/// The frontend kicks this off once an image's validation result
+/// comes back as `valid` — gating it on validation keeps the partition
+/// probe from running on files we've already rejected as not-a-disk.
+#[tauri::command]
+pub fn inspect_image_partitions(
+    app: AppHandle,
+    job_id: String,
+    path: String,
+) -> Result<(), String> {
+    std::thread::spawn(move || {
+        let summary = inspect::inspect_any(Path::new(&path));
+        #[derive(serde::Serialize, Clone)]
+        struct Payload {
+            job_id: String,
+            summary: Option<PartitionSummary>,
+        }
+        let _ = app.emit(
+            "disk-cutter://image-partitioned",
+            Payload { job_id, summary },
+        );
+    });
+    Ok(())
 }
 
 /// Capture the first N bytes of `device` into a recovery file at

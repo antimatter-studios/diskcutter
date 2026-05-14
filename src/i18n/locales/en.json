@@ -155,7 +155,26 @@
     },
     "validation": {
       "checking": "checking image contents…",
-      "invalid_unknown": "not a recognised disk image"
+      "invalid_unknown": "not a recognised disk image",
+      "pending": "VALIDATING…",
+      "valid": "VALID",
+      "invalid": "NOT A DISK"
+    },
+    "partition": {
+      "pending": "Layout unavailable until validation completes.",
+      "no_table": "Single filesystem — no partition table.",
+      "count_one": "{{count}} partition",
+      "count_other": "{{count}} partitions",
+      "strip": {
+        "aria": "Partition layout ({{kind}})"
+      },
+      "col": {
+        "start": "START",
+        "size": "SIZE",
+        "kind": "KIND",
+        "fs": "FILESYSTEM",
+        "label": "LABEL"
+      }
     },
     "select_target": "SELECT TARGET DISK",
     "eta": "ETA {{value}}",
@@ -165,6 +184,7 @@
     "block": {
       "image": "IMAGE",
       "target": "TARGET",
+      "partitions": "PARTITION LAYOUT",
       "verification": "VERIFICATION"
     },
     "kv": {

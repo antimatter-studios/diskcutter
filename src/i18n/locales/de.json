@@ -155,7 +155,26 @@
     },
     "validation": {
       "checking": "prüfe Abbild-Inhalt…",
-      "invalid_unknown": "kein erkanntes Disk-Image"
+      "invalid_unknown": "kein erkanntes Disk-Image",
+      "pending": "PRÜFE…",
+      "valid": "GÜLTIG",
+      "invalid": "KEIN DISK"
+    },
+    "partition": {
+      "pending": "Layout nicht verfügbar, bis die Prüfung abgeschlossen ist.",
+      "no_table": "Einzelnes Dateisystem — keine Partitionstabelle.",
+      "count_one": "{{count}} Partition",
+      "count_other": "{{count}} Partitionen",
+      "strip": {
+        "aria": "Partitionslayout ({{kind}})"
+      },
+      "col": {
+        "start": "START",
+        "size": "GRÖSSE",
+        "kind": "TYP",
+        "fs": "DATEISYSTEM",
+        "label": "LABEL"
+      }
     },
     "select_target": "ZIEL-DATENTRÄGER WÄHLEN",
     "eta": "REST {{value}}",
@@ -165,6 +184,7 @@
     "block": {
       "image": "ABBILD",
       "target": "ZIEL",
+      "partitions": "PARTITIONSLAYOUT",
       "verification": "PRÜFUNG"
     },
     "kv": {

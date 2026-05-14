@@ -35,6 +35,25 @@
   --accent-3:       #7a5af8;   /* psybe violet */
   --accent-4:       #0c0c0b;   /* ink */
 
+  /* ── Validation + filesystem swatches ──
+     Muted so they read as informational rather than competing with
+     the hazard accent. Reused by the partition strip on the queue
+     row and the per-row validation pill. Dark counterparts live in
+     the data-theme=dark block below. */
+  --ok:             #4b8a3a;
+  --warn:           #b88a1a;
+  --fs-ext:         #3b7f5e;
+  --fs-ntfs:        #2f5fa8;
+  --fs-fat:         #b8862c;
+  --fs-exfat:       #a76b22;
+  --fs-hfs:         #b75973;
+  --fs-apfs:        #8a5fa3;
+  --fs-swap:        #6a677e;
+  --fs-iso:         #7a728e;
+  --fs-squash:      #66583c;
+  --fs-unknown:     #5e5949;
+  --fs-unallocated: #c8c1ad;
+
   /* ── Typography ── */
   --line: 2px;
   --mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
@@ -72,6 +91,22 @@
   --accent-2:       #4d8df0;
   --accent-3:       #9a7afa;
   --accent-4:       #ede8d8;
+
+  /* Validation + filesystem swatches — dark palette. Slightly lifted
+     so they don't melt into --bone:#14130f. */
+  --ok:             #6db968;
+  --warn:           #d4a73e;
+  --fs-ext:         #3c8b6a;
+  --fs-ntfs:        #4d7fcc;
+  --fs-fat:         #c4953b;
+  --fs-exfat:       #b87a2e;
+  --fs-hfs:         #c66a86;
+  --fs-apfs:        #9a6fb3;
+  --fs-swap:        #7a7790;
+  --fs-iso:         #8a82a4;
+  --fs-squash:      #786a4a;
+  --fs-unknown:     #6f6a5e;
+  --fs-unallocated: #3a3830;
 }
 
 *{box-sizing:border-box}
@@ -995,3 +1030,94 @@ input,select{font:inherit;color:inherit}
   from{opacity:0;transform:translateX(8px)}
   to{opacity:1;transform:translateX(0)}
 }
+
+/* ─────────── Validation Badge ─────────── */
+
+/* Inline status pill next to the image meta line on each job row.
+   Three variants — pending / valid / invalid — driven by job.validation
+   from the queue store. Compact form (just the glyph) shows under
+   density=compact, full form (glyph + label) elsewhere. */
+.vbadge{
+  display:inline-flex;align-items:center;gap:4px;
+  padding:1px 6px;
+  border:1.5px solid currentColor;
+  font-family:var(--mono);font-size:10.5px;letter-spacing:.04em;
+  text-transform:uppercase;
+  line-height:1.35;
+}
+.vbadge-label{display:inline-block}
+.vbadge--pending{color:var(--mute);border-style:dashed}
+.vbadge--valid{color:var(--ok)}
+.vbadge--invalid{color:var(--hazard);background:rgba(255,74,23,.08)}
+.job--compact .vbadge-label{display:none}
+
+/* ─────────── Partition Strip ─────────── */
+
+/* gparted-style proportional bar under each queue row. Built from
+   <div className="pstrip-seg pstrip-seg--ext|ntfs|fat|…"/> segments
+   sized by length_bytes. Sits between .job-head and the expanded
+   .job-detail so it doesn't fight the .job-head grid columns. */
+.pstrip{
+  margin:6px 12px 8px 12px;
+  display:flex;align-items:center;gap:10px;
+}
+.pstrip-bar{
+  flex:1;display:flex;align-items:stretch;
+  height:18px;
+  border:1.5px solid var(--ink);
+  background:var(--paper);
+  overflow:hidden;
+}
+.pstrip-seg{
+  position:relative;
+  display:flex;align-items:center;justify-content:flex-start;
+  min-width:1px;
+  padding:0 6px;
+  border-right:1.5px solid var(--ink);
+  overflow:hidden;
+  white-space:nowrap;
+  color:var(--on-accent);
+}
+.pstrip-seg:last-child{border-right:0}
+.pstrip-seg-label{
+  font-size:10px;letter-spacing:.04em;text-transform:uppercase;
+  overflow:hidden;text-overflow:clip;
+}
+.pstrip-meta{
+  flex:0 0 auto;color:var(--mute);
+  display:flex;align-items:center;gap:6px;
+}
+.pstrip--single .pstrip-bar{background:var(--paper)}
+
+.pstrip-seg--ext         {background:var(--fs-ext)}
+.pstrip-seg--ntfs        {background:var(--fs-ntfs)}
+.pstrip-seg--fat         {background:var(--fs-fat)}
+.pstrip-seg--exfat       {background:var(--fs-exfat)}
+.pstrip-seg--hfs         {background:var(--fs-hfs)}
+.pstrip-seg--apfs        {background:var(--fs-apfs)}
+.pstrip-seg--swap        {background:var(--fs-swap)}
+.pstrip-seg--iso         {background:var(--fs-iso)}
+.pstrip-seg--squash      {background:var(--fs-squash)}
+.pstrip-seg--unknown     {background:var(--fs-unknown)}
+.pstrip-seg--unallocated {
+  background:var(--fs-unallocated);
+  color:var(--ink);
+  /* Diagonal hatch makes "empty space" obvious even at a glance. */
+  background-image:repeating-linear-gradient(
+    45deg, transparent 0 4px,
+    rgba(0,0,0,.07) 4px 8px
+  );
+}
+
+.job--compact .pstrip{margin:4px 10px 6px 10px}
+.job--compact .pstrip-bar{height:12px}
+.job--compact .pstrip-seg-label{display:none}
+
+/* ─────────── Partition Table (expanded detail) ─────────── */
+
+.ptable{display:flex;flex-direction:column;gap:6px}
+.ptable-head{
+  display:flex;align-items:center;gap:6px;
+  color:var(--mute);
+}
+.ptable .ver-table{margin-top:2px}
