@@ -382,7 +382,15 @@ function App() {
   const addImage = useCallback(async () => {
     const path = await open({
       multiple: false,
-      filters: [{ name: 'Disk images', extensions: ['iso', 'img', 'bin', 'raw'] }],
+      filters: [{
+        name: 'Disk images',
+        extensions: [
+          'iso', 'img', 'bin', 'raw',
+          'qcow2', 'qcow',
+          'vhd', 'vhdx', 'vmdk',
+          'gz', 'xz', 'bz2', 'zst',
+        ],
+      }],
     });
     if (!path) return;
     addImageFromPath(path, nextCopies);
