@@ -146,10 +146,16 @@
     "state": {
       "ready": "BEREIT",
       "awaiting_target": "WARTET AUF ZIEL",
+      "validating": "VALIDIEREN",
+      "invalid": "NICHT BRENNBAR",
       "write": "SCHREIBEN",
       "verify": "PRÜFEN",
       "done": "FERTIG",
       "sha_match": "SHA STIMMT"
+    },
+    "validation": {
+      "checking": "prüfe Abbild-Inhalt…",
+      "invalid_unknown": "kein erkanntes Disk-Image"
     },
     "select_target": "ZIEL-DATENTRÄGER WÄHLEN",
     "eta": "REST {{value}}",

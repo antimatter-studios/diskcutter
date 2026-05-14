@@ -1,6 +1,6 @@
 [package]
 name = "diskcutter"
-version = "0.4.0-alpha"
+version = "0.5.0-alpha"
 description = "Brutalist disk-image writer"
 authors = ["Chris Thomas <chris.alex.thomas@gmail.com>"]
 edition = "2021"
@@ -15,7 +15,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2.0", features = [] }
 
 [dependencies]
-tauri = { version = "2.0", features = [] }
+tauri = { version = "2.0", features = ["image-png"] }
 tauri-plugin-dialog = "2.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

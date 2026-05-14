@@ -146,10 +146,16 @@
     "state": {
       "ready": "READY",
       "awaiting_target": "AWAITING TARGET",
+      "validating": "VALIDATING",
+      "invalid": "CANNOT BURN",
       "write": "WRITE",
       "verify": "VERIFY",
       "done": "DONE",
       "sha_match": "SHA MATCH"
+    },
+    "validation": {
+      "checking": "checking image contents…",
+      "invalid_unknown": "not a recognised disk image"
     },
     "select_target": "SELECT TARGET DISK",
     "eta": "ETA {{value}}",

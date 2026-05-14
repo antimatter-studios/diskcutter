@@ -401,7 +401,10 @@ pub fn run_qcow2_to_file(
     let dest = File::create(&options.output_path)?;
     let use_sparse = options.sparse && matches!(options.compression, Compression::None);
     let sink: Box<dyn Write + Send> = if use_sparse {
-        Box::new(crate::sparse::SparseFileWriter::new(dest, options.chunk_size))
+        Box::new(crate::sparse::SparseFileWriter::new(
+            dest,
+            options.chunk_size,
+        ))
     } else {
         Box::new(BufWriter::new(dest))
     };
@@ -417,9 +420,8 @@ pub fn run_qcow2_to_file(
     let mut window_bytes: u64 = 0;
 
     for extent in reader.extents() {
-        let ext = extent.map_err(|e| {
-            BackupError::Io(std::io::Error::other(format!("qcow2 extents: {e:?}")))
-        })?;
+        let ext = extent
+            .map_err(|e| BackupError::Io(std::io::Error::other(format!("qcow2 extents: {e:?}"))))?;
         match ext.status {
             ClusterStatus::Allocated => {
                 let end = ext.virt_offset + ext.length;
@@ -964,7 +966,11 @@ mod tests {
         let cancel = AtomicBool::new(false);
         let progress = RefCell::new(Vec::<BackupProgress>::new());
         run_qcow2_to_file(&options, &cancel, |p| progress.borrow_mut().push(p)).unwrap();
-        let last = progress.borrow().last().cloned().expect("at least one progress emit");
+        let last = progress
+            .borrow()
+            .last()
+            .cloned()
+            .expect("at least one progress emit");
         assert_eq!(last.bytes_done, 1024 * 1024);
     }
 

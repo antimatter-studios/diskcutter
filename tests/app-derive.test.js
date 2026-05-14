@@ -91,9 +91,10 @@ describe('computeSessionStats', () => {
 });
 
 describe('planStart', () => {
-  const job = (id, state, imageBytes, targetBytes) => ({
+  const job = (id, state, imageBytes, targetBytes, validation = 'valid') => ({
     id,
     state,
+    validation,
     image: { bytes: imageBytes },
     target: targetBytes != null ? { bytes: targetBytes, device: `/dev/${id}` } : null,
   });
@@ -134,6 +135,20 @@ describe('planStart', () => {
     const r = planStart([eq]);
     expect(r.tooSmall).toEqual([]);
     expect(r.okToBurn).toEqual([eq]);
+  });
+
+  it('excludes jobs whose validation is still pending', () => {
+    const pending = job('a', 'idle', 1000, 2000, 'pending');
+    const r = planStart([pending]);
+    expect(r.ready).toEqual([]);
+    expect(r.okToBurn).toEqual([]);
+  });
+
+  it('excludes jobs whose validation came back invalid', () => {
+    const bad = job('a', 'idle', 1000, 2000, 'invalid');
+    const r = planStart([bad]);
+    expect(r.ready).toEqual([]);
+    expect(r.okToBurn).toEqual([]);
   });
 });
 
@@ -236,9 +251,10 @@ describe('computeSessionStats additional cases', () => {
 });
 
 describe('planStart purity & additional cases', () => {
-  const job = (id, state, imageBytes, targetBytes) => ({
+  const job = (id, state, imageBytes, targetBytes, validation = 'valid') => ({
     id,
     state,
+    validation,
     image: { bytes: imageBytes },
     target: targetBytes != null ? { bytes: targetBytes, device: `/dev/${id}` } : null,
   });

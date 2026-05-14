@@ -146,10 +146,16 @@
     "state": {
       "ready": "LISTO",
       "awaiting_target": "ESPERANDO DESTINO",
+      "validating": "VALIDAR",
+      "invalid": "NO GRABABLE",
       "write": "ESCRIBIR",
       "verify": "VERIFICAR",
       "done": "HECHO",
       "sha_match": "SHA COINCIDE"
+    },
+    "validation": {
+      "checking": "comprobando contenido de la imagen…",
+      "invalid_unknown": "no es una imagen de disco reconocida"
     },
     "select_target": "SELECCIONAR DISCO DESTINO",
     "eta": "ETA {{value}}",

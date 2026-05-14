@@ -30,5 +30,5 @@ export function isEditableTarget(target) {
 export function queueReady(jobs, confirmed) {
   if (!confirmed) return false;
   if (!Array.isArray(jobs)) return false;
-  return jobs.some((j) => j && j.state === 'idle' && j.target);
+  return jobs.some((j) => j && j.state === 'idle' && j.target && j.validation === 'valid');
 }

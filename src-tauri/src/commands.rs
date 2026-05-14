@@ -126,8 +126,7 @@ pub fn run_backup(
         backup::run_qcow2_to_file(&options, &cancel, |_| {})
             .map_err(|e| format!("backup: {e:?}"))?
     } else {
-        backup::run_to_file(&options, &cancel, |_| {})
-            .map_err(|e| format!("backup: {e:?}"))?
+        backup::run_to_file(&options, &cancel, |_| {}).map_err(|e| format!("backup: {e:?}"))?
     };
     Ok(BackupResultJson {
         bytes_read: result.bytes_read,

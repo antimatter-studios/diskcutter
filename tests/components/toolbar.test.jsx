@@ -20,7 +20,7 @@ describe('Toolbar', () => {
         {...base}
         confirmed
         onStart={onStart}
-        jobs={[{ state: 'idle', target: { device: '/dev/disk5' } }]}
+        jobs={[{ state: 'idle', target: { device: '/dev/disk5' }, validation: 'valid' }]}
       />,
     );
     fireEvent.click(screen.getByText(/START QUEUE/i));
@@ -33,7 +33,35 @@ describe('Toolbar', () => {
       <Toolbar
         {...base}
         onStart={onStart}
-        jobs={[{ state: 'idle', target: { device: '/dev/disk5' } }]}
+        jobs={[{ state: 'idle', target: { device: '/dev/disk5' }, validation: 'valid' }]}
+      />,
+    );
+    fireEvent.click(screen.getByText(/START QUEUE/i));
+    expect(onStart).not.toHaveBeenCalled();
+  });
+
+  it('does not enable Start while a job is still validating', () => {
+    const onStart = vi.fn();
+    render(
+      <Toolbar
+        {...base}
+        confirmed
+        onStart={onStart}
+        jobs={[{ state: 'idle', target: { device: '/dev/disk5' }, validation: 'pending' }]}
+      />,
+    );
+    fireEvent.click(screen.getByText(/START QUEUE/i));
+    expect(onStart).not.toHaveBeenCalled();
+  });
+
+  it('does not enable Start when a job is marked invalid', () => {
+    const onStart = vi.fn();
+    render(
+      <Toolbar
+        {...base}
+        confirmed
+        onStart={onStart}
+        jobs={[{ state: 'idle', target: { device: '/dev/disk5' }, validation: 'invalid' }]}
       />,
     );
     fireEvent.click(screen.getByText(/START QUEUE/i));

@@ -77,7 +77,7 @@ describe('isEditableTarget', () => {
 
 describe('queueReady', () => {
   it('is false when not confirmed', () => {
-    expect(queueReady([{ state: 'idle', target: { device: '/dev/x' } }], false)).toBe(false);
+    expect(queueReady([{ state: 'idle', target: { device: '/dev/x' }, validation: 'valid' }], false)).toBe(false);
   });
 
   it('is false when no idle+target job exists', () => {
@@ -87,7 +87,7 @@ describe('queueReady', () => {
   });
 
   it('is true when confirmed and at least one idle+target job exists', () => {
-    expect(queueReady([{ state: 'idle', target: { device: '/dev/x' } }], true)).toBe(true);
+    expect(queueReady([{ state: 'idle', target: { device: '/dev/x' }, validation: 'valid' }], true)).toBe(true);
   });
 
   it('tolerates non-array jobs', () => {
@@ -143,18 +143,23 @@ describe('queueReady additional cases', () => {
     const jobs = [
       { state: 'writing', target: { device: '/dev/x' } },
       { state: 'idle', target: null },
-      { state: 'idle', target: { device: '/dev/y' } },
+      { state: 'idle', target: { device: '/dev/y' }, validation: 'valid' },
     ];
     expect(queueReady(jobs, true)).toBe(true);
   });
 
   it('tolerates null entries in the jobs array', () => {
-    expect(queueReady([null, { state: 'idle', target: { device: '/dev/x' } }], true)).toBe(true);
+    expect(queueReady([null, { state: 'idle', target: { device: '/dev/x' }, validation: 'valid' }], true)).toBe(true);
     expect(queueReady([null, undefined], true)).toBe(false);
   });
 
   it('rejects success or error states even with target attached', () => {
     expect(queueReady([{ state: 'success', target: { device: '/dev/x' } }], true)).toBe(false);
     expect(queueReady([{ state: 'error', target: { device: '/dev/x' } }], true)).toBe(false);
+  });
+
+  it('rejects jobs whose validation is still pending or invalid', () => {
+    expect(queueReady([{ state: 'idle', target: { device: '/dev/x' }, validation: 'pending' }], true)).toBe(false);
+    expect(queueReady([{ state: 'idle', target: { device: '/dev/x' }, validation: 'invalid' }], true)).toBe(false);
   });
 });

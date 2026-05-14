@@ -22,7 +22,7 @@ export function sceneToTitleKey(scene, verbose) {
 }
 
 export function planStart(jobs) {
-  const ready = jobs.filter((j) => j.state === 'idle' && j.target);
+  const ready = jobs.filter((j) => j.state === 'idle' && j.target && j.validation === 'valid');
   const tooSmall = ready.filter((j) => j.target.bytes && j.image.bytes && j.target.bytes < j.image.bytes);
   const okToBurn = ready.filter((j) => !tooSmall.includes(j));
   return { ready, tooSmall, okToBurn };
