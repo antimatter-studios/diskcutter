@@ -11,12 +11,22 @@ fn main() {
 // executable?" — e.g. the Full Disk Access / Privacy panes. Without this, the
 // elevated helper subprocess (spawned via osascript admin) is listed by raw
 // binary name ("diskcutter") with a generic icon, instead of "Disk Cutter".
+//
+// Skip in debug profile: tauri-codegen's dev path embeds its own
+// __info_plist via the embed_plist macro (merging Info.plist next to
+// tauri.conf.json with CFBundleName + version). A second sectcreate would
+// concatenate two plist documents into the same section; macOS reads only
+// the first, shadowing our identity keys and surfacing the process as
+// "diskcutter" with the parent (Terminal) icon in Activity Monitor.
 fn embed_macos_info_plist() {
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("macos") {
         return;
     }
+    if std::env::var("PROFILE").as_deref() == Ok("debug") {
+        return;
+    }
     let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
-    let plist = manifest.join("embedded-info.plist");
+    let plist = manifest.join("Info.plist");
     println!("cargo:rerun-if-changed={}", plist.display());
     // -sectcreate takes 3 args (segment, section, file). Pass via -Wl with
     // commas — cc splits each comma-separated piece into its own ld arg.
