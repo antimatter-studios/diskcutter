@@ -230,7 +230,18 @@ pub fn download_to_file<F>(
 where
     F: FnMut(u64, u64, u64),
 {
-    let resp = match ureq::get(url).timeout(Duration::from_secs(30)).call() {
+    // Separate connect / per-read timeouts — NOT an overall deadline.
+    // `Request::timeout` in ureq 2.x is an overall deadline covering the
+    // body stream too, which fails any download longer than the deadline
+    // mid-flight with "timed out reading response". An ISO is GBs; the
+    // wall-clock can be minutes. We want: fail fast on dead servers
+    // (connect), detect stalled sockets (per-read), but otherwise let
+    // the transfer run as long as it needs.
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_secs(30))
+        .timeout_read(Duration::from_secs(60))
+        .build();
+    let resp = match agent.get(url).call() {
         Ok(r) => r,
         Err(ureq::Error::Status(code, _)) => {
             return Err(DownloadFail {
