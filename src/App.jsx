@@ -13,6 +13,7 @@ import {
   useTweaks, TweaksPanel, TweakSection,
   TweakRadio, TweakToggle, TweakColor,
 } from './tweaks-panel.jsx';
+import { useShallow } from 'zustand/react/shallow';
 import { formatBytes } from './format.js';
 import {
   useQueueStore, attachQueueListeners, selectJobs, selectEntries, startValidation,
@@ -57,7 +58,12 @@ function App() {
   // (see src/store/queue.js). The store also owns the Tauri event
   // listeners that mutate them, so this component is left with UI-only
   // state.
-  const jobs = useQueueStore(selectJobs);
+  // useShallow wraps the selector so React re-renders only when an
+  // item reference inside the array actually changes. Without it,
+  // selectJobs returns a fresh array on every store notification
+  // (state.order.map(...)) and useSyncExternalStore loops on the
+  // Object.is check — Maximum-update-depth crash.
+  const jobs = useQueueStore(useShallow(selectJobs));
   const entries = useQueueStore(selectEntries);
   // User-chosen "copies" count for the next ADD IMAGE; sticks across adds so
   // the operator can queue several different images at the same copy count
