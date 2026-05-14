@@ -277,6 +277,7 @@
     "cleanup_incomplete": "Cleanup did not complete",
     "could_not_open_system_settings": "Could not open System Settings",
     "burn_start_failed": "Burn could not start: {{error}}",
+    "image_invalid": "Image is not a burnable disk: {{reason}}",
     "cancel_unclean": "Cancel did not complete cleanly",
     "ETOOBIG": {
       "title": "TARGET DISK IS TOO SMALL FOR THIS IMAGE",

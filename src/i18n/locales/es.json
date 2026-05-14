@@ -277,6 +277,7 @@
     "cleanup_incomplete": "La limpieza no se completó",
     "could_not_open_system_settings": "No se pudo abrir Ajustes del Sistema",
     "burn_start_failed": "No se pudo iniciar la grabación: {{error}}",
+    "image_invalid": "La imagen no es un disco grabable: {{reason}}",
     "cancel_unclean": "La cancelación no se completó correctamente",
     "ETOOBIG": {
       "title": "EL DISCO DESTINO ES DEMASIADO PEQUEÑO PARA ESTA IMAGEN",

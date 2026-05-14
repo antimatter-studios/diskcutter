@@ -338,6 +338,22 @@ function App() {
       setCloseBlocked((prev) => (prev ? { ...prev, phase } : prev));
     }).then((u) => subs.push(u));
 
+    // Content-validation result for a queued image. Backend probes
+    // partition table + filesystem signatures; an Invalid verdict
+    // blocks burn (the START QUEUE gate filters on validation==='valid').
+    listen('disk-cutter://image-validated', (e) => {
+      if (!mounted) return;
+      const p = e.payload;
+      const result = p.result === 'valid' ? 'valid' : 'invalid';
+      const detail = p.detail || p.reason || null;
+      setJobs((js) => js.map((j) => (
+        j.id === p.job_id ? { ...j, validation: result, validationDetail: detail } : j
+      )));
+      if (result === 'invalid') {
+        pushToast('error', t('error.image_invalid', { reason: detail || '—' }));
+      }
+    }).then((u) => subs.push(u));
+
     return () => {
       mounted = false;
       subs.forEach((u) => u());
@@ -357,17 +373,24 @@ function App() {
         sha256: details.sha256 || '—',
       };
       const requested = Math.max(1, Math.floor(Number(copies) || 1));
+      const newJob = makeJob(0, image, null);
+      const jobId = newJob.id;
       if (requested === 1) {
         // Classic single-burn flow: no entry, just a job. Preserves today's UX.
-        setJobs((js) => [...js, makeJob(js.length + 1, image, null)]);
-        return;
+        setJobs((js) => [...js, { ...newJob, num: js.length + 1 }]);
+      } else {
+        // Bulk flow: one entry holds the copies counter; the first job is
+        // dispatched immediately so the queue isn't empty after ADD IMAGE.
+        // Subsequent copies are dispatched manually from the entry row.
+        const entry = makeEntry(image, requested);
+        setEntries((es) => [...es, { ...entry, copiesRemaining: entry.copiesRemaining - 1 }]);
+        setJobs((js) => [...js, { ...newJob, num: js.length + 1, parentEntryId: entry.id }]);
       }
-      // Bulk flow: one entry holds the copies counter; the first job is
-      // dispatched immediately so the queue isn't empty after ADD IMAGE.
-      // Subsequent copies are dispatched manually from the entry row.
-      const entry = makeEntry(image, requested);
-      setEntries((es) => [...es, { ...entry, copiesRemaining: entry.copiesRemaining - 1 }]);
-      setJobs((js) => [...js, makeJob(js.length + 1, image, null, entry.id)]);
+      // Kick off content validation in the background. Result lands on
+      // 'disk-cutter://image-validated' and flips job.validation; the
+      // START QUEUE gate refuses to burn until it's 'valid'.
+      invoke('validate_image_contents', { jobId, path: details.path })
+        .catch((e) => console.error('validate_image_contents failed', e));
     } catch (e) {
       console.error('inspect_image failed', e);
       pushToast('error', t('error.could_not_add_image', { error: e }));

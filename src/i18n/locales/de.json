@@ -277,6 +277,7 @@
     "cleanup_incomplete": "Aufräumen nicht abgeschlossen",
     "could_not_open_system_settings": "Systemeinstellungen konnten nicht geöffnet werden",
     "burn_start_failed": "Brennvorgang konnte nicht gestartet werden: {{error}}",
+    "image_invalid": "Abbild ist nicht brennbar: {{reason}}",
     "cancel_unclean": "Abbruch nicht sauber abgeschlossen",
     "ETOOBIG": {
       "title": "ZIEL-DATENTRÄGER IST ZU KLEIN FÜR DIESES ABBILD",

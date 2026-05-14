@@ -17,6 +17,7 @@ pub mod readers;
 pub mod snapshot;
 pub mod sparse;
 pub mod url_fetch;
+pub mod validate;
 pub mod writers;
 
 pub use cli::run_cli;
@@ -96,6 +97,7 @@ pub fn run() {
             url_fetch::cancel_download,
             catalog::catalog_list,
             catalog::catalog_refresh,
+            validate::validate_image_contents,
         ])
         .setup(|app| {
             match db::open(app.handle()) {

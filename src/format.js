@@ -45,6 +45,8 @@ export function makeJob(num, image, target, parentEntryId) {
     errorCode: undefined,
     errorMessage: undefined,
     verification: null,
+    validation: 'pending',
+    validationDetail: null,
   };
 }
 
