@@ -613,6 +613,10 @@ function JobDetail({ job, accent, onCancel, onRetry, fdaBlocked }) {
           />
         </DetailBlock>
 
+        <DetailBlock label={t('detail.block.burn_params')} full>
+          <BurnParamsPanel params={job.burnParams} />
+        </DetailBlock>
+
         <DetailBlock label={t('detail.block.verification')} full>
           <VerificationPanel job={job} accent={accent} />
         </DetailBlock>
@@ -743,6 +747,30 @@ function PartitionTable({ partitions, validation, validationDetail, boot }) {
           ))}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+/* ─────────── Burn parameters panel ─────────── */
+
+// User-tunable write knobs that fed into this burn (writer impl,
+// chunk size, worker count, etc.). Source-of-truth lives on the
+// backend in burn_history.burn_params; the store decodes the JSON
+// once and hands us a flat `{key: value}` map. `null` means the
+// burn hasn't started yet (or the job pre-dates 0002_burn_params).
+function BurnParamsPanel({ params }) {
+  const { t } = useTranslation();
+  if (!params || Object.keys(params).length === 0) {
+    return <div className="empty-line">{t('detail.kv.burn_params_pending')}</div>;
+  }
+  // Sort keys so the panel reads the same way every render — and so
+  // matches the forensic markdown / json export ordering.
+  const entries = Object.entries(params).sort(([a], [b]) => a.localeCompare(b));
+  return (
+    <div className="burn-params">
+      {entries.map(([k, v]) => (
+        <KV key={k} k={k} v={String(v)} mono />
+      ))}
     </div>
   );
 }

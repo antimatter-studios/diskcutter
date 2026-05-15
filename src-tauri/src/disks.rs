@@ -90,6 +90,19 @@ pub struct JobFailure {
     pub error_message: String,
 }
 
+/// Emitted once per burn the moment `record_burn_started` has run.
+/// Carries the JSON snapshot of the user-tunable write knobs so the
+/// frontend's JobDetail panel can show "wrote with: writer=pipelined,
+/// chunk=1 MiB, …" alongside the live progress.
+#[derive(Serialize, Clone)]
+pub struct BurnStartedPayload {
+    pub job_id: String,
+    /// JSON object — same shape `db::collect_burn_params` produces.
+    /// Keep as a raw string so the frontend can `JSON.parse` it
+    /// (the inner shape changes freely without bumping our IPC types).
+    pub burn_params: String,
+}
+
 #[derive(Default)]
 pub struct CancelRegistry(pub Mutex<HashMap<String, Arc<AtomicBool>>>);
 
@@ -665,8 +678,13 @@ pub fn start_write(
         .unwrap_or("")
         .to_string();
 
-    {
+    // Snapshot the user-tunable write knobs at burn-start time so the
+    // forensic record carries which pref values were in effect for
+    // this specific row. Done before any elevation/FDA gating so even
+    // failed-to-start rows show the params the operator had set.
+    let burn_params = {
         let db = app.state::<Db>();
+        let snapshot = db::collect_burn_params(&db);
         db::record_burn_started(
             &db,
             &job_id,
@@ -674,8 +692,20 @@ pub fn start_write(
             &image_name,
             info.uncompressed_bytes,
             &target_device,
+            &snapshot,
         );
-    }
+        snapshot
+    };
+    // Surface the snapshot to the frontend so the JobDetail panel can
+    // display "wrote with: writer=pipelined, chunk=1 MiB, …" without
+    // having to query burn_history.
+    let _ = app.emit(
+        "disk-cutter://burn-started",
+        BurnStartedPayload {
+            job_id: job_id.clone(),
+            burn_params: burn_params.clone(),
+        },
+    );
 
     let needs_elevation = target_device.starts_with("/dev/") && !is_privileged();
     if needs_elevation {

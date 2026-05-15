@@ -59,6 +59,12 @@ export function makeJob(num, image, target, parentEntryId) {
     // partition entry. Shape `{ bootable: bool, sources: BootSource[] }`
     // or `null` while still loading / on sources we can't probe.
     boot: null,
+    // User-tunable write knobs in effect when this burn was dispatched
+    // (writer impl, chunk size, worker count, etc.). The backend
+    // snapshots them at start_write time and emits them on
+    // `disk-cutter://burn-started`. `null` until the burn starts;
+    // shape `{ "writer.impl": "pipelined", "chunk.bytes": "1048576", … }`.
+    burnParams: null,
   };
 }
 

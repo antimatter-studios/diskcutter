@@ -194,6 +194,7 @@
       "image": "IMAGEN",
       "target": "DESTINO",
       "partitions": "DISEÑO DE PARTICIONES",
+      "burn_params": "PARÁMETROS DE GRABACIÓN",
       "verification": "VERIFICACIÓN"
     },
     "kv": {
@@ -209,7 +210,8 @@
       "capacity_value": "{{capacity}}  ({{bytes}} bytes)",
       "bus": "BUS",
       "partitions": "PARTICIONES",
-      "no_target": "SIN DESTINO SELECCIONADO"
+      "no_target": "SIN DESTINO SELECCIONADO",
+      "burn_params_pending": "Se registra al iniciar la grabación."
     },
     "actions": {
       "abort": "ABORTAR ESCRITURA",

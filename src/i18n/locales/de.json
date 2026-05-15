@@ -194,6 +194,7 @@
       "image": "ABBILD",
       "target": "ZIEL",
       "partitions": "PARTITIONSLAYOUT",
+      "burn_params": "BRENN-PARAMETER",
       "verification": "PRÜFUNG"
     },
     "kv": {
@@ -209,7 +210,8 @@
       "capacity_value": "{{capacity}}  ({{bytes}} Bytes)",
       "bus": "BUS",
       "partitions": "PARTITIONEN",
-      "no_target": "KEIN ZIEL GEWÄHLT"
+      "no_target": "KEIN ZIEL GEWÄHLT",
+      "burn_params_pending": "Wird beim Brennstart aufgezeichnet."
     },
     "actions": {
       "abort": "SCHREIBEN ABBRECHEN",

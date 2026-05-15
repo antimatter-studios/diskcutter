@@ -237,7 +237,7 @@ fn lookup_burn_by_job_id(conn: &rusqlite::Connection, job_id: &str) -> Option<db
                source_sha256, readback_sha256, verify_match, bytes_written,
                elapsed_ms, avg_write_bps, avg_verify_bps,
                state, error_code, error_message,
-               started_at, finished_at
+               started_at, finished_at, burn_params
         FROM burn_history
         WHERE job_id = ?1
         ORDER BY started_at DESC
@@ -263,6 +263,7 @@ fn lookup_burn_by_job_id(conn: &rusqlite::Connection, job_id: &str) -> Option<db
             error_message: r.get(15)?,
             started_at: r.get(16)?,
             finished_at: r.get(17)?,
+            burn_params: r.get(18)?,
         })
     })
     .ok()

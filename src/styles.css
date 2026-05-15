@@ -1178,3 +1178,11 @@ input,select{font:inherit;color:inherit}
   color:var(--mute);
   font-size:10.5px;letter-spacing:.02em;
 }
+
+/* ─────────── Burn parameters panel ─────────── */
+
+/* List of K:V pairs mirrors the .kv layout used elsewhere in the
+   detail drawer — keep the keys mono so writer.impl / chunk.bytes /
+   etc. read as code, and stack pairs vertically. */
+.burn-params{display:flex;flex-direction:column;gap:4px}
+.burn-params .kv{grid-template-columns:200px 1fr}

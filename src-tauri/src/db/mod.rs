@@ -42,6 +42,49 @@ pub struct BurnRecord {
     pub error_message: Option<String>,
     pub started_at: i64,
     pub finished_at: Option<i64>,
+    /// JSON snapshot of the user-tunable write knobs that fed into
+    /// this burn (writer impl, chunk size, worker count, etc.).
+    /// `None` for rows written before 0002_burn_params landed.
+    pub burn_params: Option<String>,
+}
+
+/// Every config key whose value would change the bytes-on-the-wire
+/// behaviour of a burn. Snapshotted into `burn_history.burn_params` at
+/// the start of every write so post-mortems can answer "which knobs
+/// were set when this image was burned?". Adding a new write-related
+/// knob means adding its key here; the column itself is a free-form
+/// JSON blob so the migration doesn't need to change.
+pub const BURN_PARAM_KEYS: &[&str] = &[
+    "writer.impl",
+    "chunk.bytes",
+    "workers.count",
+    "queue.depth",
+    "verify.skip",
+    "hash.algo",
+    "max.mismatches",
+    "auto.eject",
+];
+
+/// Build the JSON snapshot of every `BURN_PARAM_KEYS` value currently
+/// in `config`. Missing keys are omitted (rather than serialised as
+/// nulls) so the JSON only carries values the operator actually set.
+pub fn collect_burn_params(db: &Db) -> String {
+    let Ok(conn) = db.0.lock() else {
+        return "{}".into();
+    };
+    let mut map = serde_json::Map::new();
+    for key in BURN_PARAM_KEYS {
+        if let Ok(val) = conn.query_row(
+            "SELECT value FROM config WHERE key = ?1",
+            params![*key],
+            |r| r.get::<_, String>(0),
+        ) {
+            if !val.is_empty() {
+                map.insert((*key).into(), serde_json::Value::String(val));
+            }
+        }
+    }
+    serde_json::Value::Object(map).to_string()
 }
 
 #[derive(Serialize, Clone)]
@@ -78,30 +121,37 @@ pub fn record_burn_started(
     image_name: &str,
     image_bytes: u64,
     target_device: &str,
+    burn_params: &str,
 ) -> Option<i64> {
     let conn = db.0.lock().ok()?;
     conn.execute(
         "INSERT INTO burn_history (job_id, image_path, image_name, image_bytes,
-            target_device, state, started_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, 'running', ?6)",
+            target_device, state, started_at, burn_params)
+         VALUES (?1, ?2, ?3, ?4, ?5, 'running', ?6, ?7)",
         params![
             job_id,
             image_path,
             image_name,
             image_bytes as i64,
             target_device,
-            now_ms()
+            now_ms(),
+            burn_params,
         ],
     )
     .ok()?;
     let id = conn.last_insert_rowid();
+    let kickoff_message = if burn_params.is_empty() || burn_params == "{}" {
+        format!("burn started: {image_name} → {target_device}")
+    } else {
+        // Inline the params snapshot into the kickoff line so a single
+        // SELECT on burn_logs shows what the run was started with even
+        // without joining burn_history.burn_params. Kept on the same
+        // row to avoid doubling burn_logs storage on every burn.
+        format!("burn started: {image_name} → {target_device} [params: {burn_params}]")
+    };
     let _ = conn.execute(
         "INSERT INTO burn_logs (burn_id, ts, level, message) VALUES (?1, ?2, 'info', ?3)",
-        params![
-            id,
-            now_ms(),
-            format!("burn started: {image_name} → {target_device}")
-        ],
+        params![id, now_ms(), kickoff_message],
     );
     Some(id)
 }
@@ -249,7 +299,8 @@ pub fn burn_history_list(db: State<'_, Db>, limit: Option<u32>) -> Result<Vec<Bu
             "SELECT id, job_id, image_path, image_name, image_bytes, target_device,
                     source_sha256, readback_sha256, verify_match,
                     bytes_written, elapsed_ms, avg_write_bps, avg_verify_bps,
-                    state, error_code, error_message, started_at, finished_at
+                    state, error_code, error_message, started_at, finished_at,
+                    burn_params
              FROM burn_history ORDER BY started_at DESC LIMIT ?1",
         )
         .map_err(|e| e.to_string())?;
@@ -274,6 +325,7 @@ pub fn burn_history_list(db: State<'_, Db>, limit: Option<u32>) -> Result<Vec<Bu
                 error_message: r.get(15)?,
                 started_at: r.get(16)?,
                 finished_at: r.get(17)?,
+                burn_params: r.get(18)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -364,7 +416,8 @@ fn burn_history_list_impl(db: &Db, limit: Option<u32>) -> Result<Vec<BurnRecord>
             "SELECT id, job_id, image_path, image_name, image_bytes, target_device,
                     source_sha256, readback_sha256, verify_match,
                     bytes_written, elapsed_ms, avg_write_bps, avg_verify_bps,
-                    state, error_code, error_message, started_at, finished_at
+                    state, error_code, error_message, started_at, finished_at,
+                    burn_params
              FROM burn_history ORDER BY started_at DESC LIMIT ?1",
         )
         .map_err(|e| e.to_string())?;
@@ -389,6 +442,7 @@ fn burn_history_list_impl(db: &Db, limit: Option<u32>) -> Result<Vec<BurnRecord>
                 error_message: r.get(15)?,
                 started_at: r.get(16)?,
                 finished_at: r.get(17)?,
+                burn_params: r.get(18)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -490,12 +544,60 @@ mod tests {
         assert!(config_all_impl(&db).is_empty());
     }
 
+    // ---------- burn-params snapshot ----------
+
+    #[test]
+    fn collect_burn_params_returns_empty_object_when_no_prefs_set() {
+        let db = fresh_db();
+        // No config rows → JSON shape is the empty object, not "null".
+        assert_eq!(collect_burn_params(&db), "{}");
+    }
+
+    #[test]
+    fn collect_burn_params_emits_only_write_relevant_keys() {
+        let db = fresh_db();
+        // language, theme, density are non-burn knobs; only the
+        // write-relevant ones (BURN_PARAM_KEYS) should appear in the
+        // snapshot. Stuff that landed empty stays out, too.
+        config_set_impl(&db, "language", "en").unwrap();
+        config_set_impl(&db, "theme", "dark").unwrap();
+        config_set_impl(&db, "writer.impl", "pipelined").unwrap();
+        config_set_impl(&db, "chunk.bytes", "1048576").unwrap();
+        config_set_impl(&db, "verify.skip", "").unwrap();
+        let json = collect_burn_params(&db);
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let obj = v.as_object().unwrap();
+        assert!(obj.contains_key("writer.impl"));
+        assert!(obj.contains_key("chunk.bytes"));
+        assert!(!obj.contains_key("language"));
+        assert!(!obj.contains_key("theme"));
+        assert!(!obj.contains_key("verify.skip"), "empty-string values stay out");
+    }
+
+    #[test]
+    fn record_burn_started_persists_burn_params_column() {
+        let db = fresh_db();
+        let snapshot = r#"{"writer.impl":"raw","chunk.bytes":"262144"}"#;
+        record_burn_started(
+            &db,
+            "job-p",
+            "/tmp/x.iso",
+            "x.iso",
+            0,
+            "/dev/disk5",
+            snapshot,
+        )
+        .unwrap();
+        let rows = burn_history_list_impl(&db, None).unwrap();
+        assert_eq!(rows[0].burn_params.as_deref(), Some(snapshot));
+    }
+
     // ---------- burn lifecycle helpers ----------
 
     #[test]
     fn record_burn_started_inserts_running_row_and_log() {
         let db = fresh_db();
-        let id = record_burn_started(&db, "job-1", "/tmp/x.iso", "x.iso", 12345, "/dev/disk5")
+        let id = record_burn_started(&db, "job-1", "/tmp/x.iso", "x.iso", 12345, "/dev/disk5", "{}")
             .expect("insert returns id");
         let rows = burn_history_list_impl(&db, None).unwrap();
         assert_eq!(rows.len(), 1);
@@ -520,7 +622,7 @@ mod tests {
     fn record_burn_completed_marks_success_and_appends_log() {
         let db = fresh_db();
         let id =
-            record_burn_started(&db, "job-ok", "/tmp/x.iso", "x.iso", 100, "/dev/disk5").unwrap();
+            record_burn_started(&db, "job-ok", "/tmp/x.iso", "x.iso", 100, "/dev/disk5", "{}").unwrap();
         record_burn_completed(
             &db, "job-ok", "src-hash", "rb-hash", true, 100, 1500, 1000, 2000,
         );
@@ -549,7 +651,7 @@ mod tests {
     fn record_burn_completed_marks_error_on_hash_mismatch() {
         let db = fresh_db();
         let id =
-            record_burn_started(&db, "job-mm", "/tmp/x.iso", "x.iso", 100, "/dev/disk5").unwrap();
+            record_burn_started(&db, "job-mm", "/tmp/x.iso", "x.iso", 100, "/dev/disk5", "{}").unwrap();
         record_burn_completed(&db, "job-mm", "a", "b", false, 100, 100, 100, 100);
         let rows = burn_history_list_impl(&db, None).unwrap();
         let r = &rows[0];
@@ -565,7 +667,7 @@ mod tests {
     fn record_burn_failed_marks_error_and_logs() {
         let db = fresh_db();
         let id =
-            record_burn_started(&db, "job-fail", "/tmp/x.iso", "x.iso", 0, "/dev/disk5").unwrap();
+            record_burn_started(&db, "job-fail", "/tmp/x.iso", "x.iso", 0, "/dev/disk5", "{}").unwrap();
         record_burn_failed(&db, "job-fail", "EIO", "boom");
         let r = &burn_history_list_impl(&db, None).unwrap()[0];
         assert_eq!(r.state, "error");
@@ -579,7 +681,7 @@ mod tests {
     #[test]
     fn record_burn_failed_with_cancel_code_marks_cancelled_state() {
         let db = fresh_db();
-        record_burn_started(&db, "job-c", "/tmp/x.iso", "x.iso", 0, "/dev/disk5").unwrap();
+        record_burn_started(&db, "job-c", "/tmp/x.iso", "x.iso", 0, "/dev/disk5", "{}").unwrap();
         record_burn_failed(&db, "job-c", "ECANCELLED", "user");
         let r = &burn_history_list_impl(&db, None).unwrap()[0];
         assert_eq!(r.state, "cancelled");
@@ -597,7 +699,7 @@ mod tests {
     #[test]
     fn append_log_appends_for_running_job_only() {
         let db = fresh_db();
-        let id = record_burn_started(&db, "job-l", "/tmp/x.iso", "x.iso", 0, "/dev/disk5").unwrap();
+        let id = record_burn_started(&db, "job-l", "/tmp/x.iso", "x.iso", 0, "/dev/disk5", "{}").unwrap();
         append_log(&db, "job-l", "warn", "yellow");
         // No-op against an unknown job_id.
         append_log(&db, "no-such", "warn", "ignored");
@@ -640,6 +742,7 @@ mod tests {
                 "x.iso",
                 0,
                 "/dev/disk5",
+                "{}",
             )
             .unwrap();
         }
@@ -650,7 +753,7 @@ mod tests {
     #[test]
     fn burn_history_clear_empties_table_and_cascades_to_logs() {
         let db = fresh_db();
-        let id = record_burn_started(&db, "job-x", "/tmp/x.iso", "x.iso", 0, "/dev/disk5").unwrap();
+        let id = record_burn_started(&db, "job-x", "/tmp/x.iso", "x.iso", 0, "/dev/disk5", "{}").unwrap();
         record_burn_completed(&db, "job-x", "s", "r", true, 1, 1, 1, 1);
         assert_eq!(burn_history_list_impl(&db, None).unwrap().len(), 1);
         assert!(!burn_logs_list_impl(&db, id).unwrap().is_empty());
@@ -665,8 +768,8 @@ mod tests {
     #[test]
     fn burn_logs_list_filters_by_burn_id_and_orders_ascending() {
         let db = fresh_db();
-        let id1 = record_burn_started(&db, "j1", "/tmp/x.iso", "x.iso", 0, "/dev/disk5").unwrap();
-        let id2 = record_burn_started(&db, "j2", "/tmp/y.iso", "y.iso", 0, "/dev/disk6").unwrap();
+        let id1 = record_burn_started(&db, "j1", "/tmp/x.iso", "x.iso", 0, "/dev/disk5", "{}").unwrap();
+        let id2 = record_burn_started(&db, "j2", "/tmp/y.iso", "y.iso", 0, "/dev/disk6", "{}").unwrap();
         append_log(&db, "j1", "info", "one");
         append_log(&db, "j1", "info", "two");
         append_log(&db, "j2", "warn", "other");

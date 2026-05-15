@@ -246,6 +246,21 @@ export const useQueueStore = create((set, get) => ({
       return { jobs: { ...s.jobs, [jobId]: { ...j, boot: boot || null } } };
     });
   },
+
+  setBurnParams(jobId, paramsJson) {
+    // Backend ships the snapshot as a JSON string so the inner shape
+    // can grow without bumping the IPC type — parse here once and
+    // store the decoded map so consumers don't have to.
+    let parsed = null;
+    if (paramsJson) {
+      try { parsed = JSON.parse(paramsJson); } catch { parsed = null; }
+    }
+    set((s) => {
+      const j = s.jobs[jobId];
+      if (!j) return s;
+      return { jobs: { ...s.jobs, [jobId]: { ...j, burnParams: parsed } } };
+    });
+  },
 }));
 
 // Selectors -- co-located so consumers import one symbol per concern.
@@ -304,6 +319,12 @@ export function attachQueueListeners({ onFdaError, onImageInvalid } = {}) {
       bootable: !!p.bootable,
       sources: Array.isArray(p.sources) ? p.sources : [],
     });
+  }).then((u) => subs.push(u));
+
+  listen('disk-cutter://burn-started', (e) => {
+    if (!mounted) return;
+    const p = e.payload;
+    useQueueStore.getState().setBurnParams(p.job_id, p.burn_params);
   }).then((u) => subs.push(u));
 
   return () => {

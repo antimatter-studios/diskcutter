@@ -194,6 +194,7 @@
       "image": "IMAGE",
       "target": "TARGET",
       "partitions": "PARTITION LAYOUT",
+      "burn_params": "BURN PARAMETERS",
       "verification": "VERIFICATION"
     },
     "kv": {
@@ -209,7 +210,8 @@
       "capacity_value": "{{capacity}}  ({{bytes}} bytes)",
       "bus": "BUS",
       "partitions": "PARTITIONS",
-      "no_target": "NO TARGET SELECTED"
+      "no_target": "NO TARGET SELECTED",
+      "burn_params_pending": "Recorded once the burn starts."
     },
     "actions": {
       "abort": "ABORT WRITE",
