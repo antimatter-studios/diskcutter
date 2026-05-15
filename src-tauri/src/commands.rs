@@ -75,11 +75,7 @@ pub fn inspect_image_partitions(
 /// MBR bootloader code, ISO 9660 El Torito) so the UI can show "via
 /// El Torito + ESP" detail when more than one fires.
 #[tauri::command]
-pub fn inspect_image_bootable(
-    app: AppHandle,
-    job_id: String,
-    path: String,
-) -> Result<(), String> {
+pub fn inspect_image_bootable(app: AppHandle, job_id: String, path: String) -> Result<(), String> {
     std::thread::spawn(move || {
         let (bootable, sources) = match DiskImage::open(Path::new(&path)) {
             Ok(img) => (img.is_bootable(), img.boot_sources().to_vec()),
