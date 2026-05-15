@@ -465,7 +465,12 @@ input,select{font:inherit;color:inherit}
 
 .queue-head{
   display:grid;
-  grid-template-columns: 38px 2.2fr 36px 1.6fr 60px 2.4fr 28px 24px;
+  /* Mirror .job-head columns exactly so header labels line up with the
+     data cells. Leading column is the row chevron's gutter (left
+     empty in the header), trailing column is the remove button's
+     gutter. Keeping the two grids in sync is the only reason the
+     header reads as a header at all. */
+  grid-template-columns: 28px 38px 2.2fr 36px 1.6fr 60px 2.4fr 24px;
   gap:16px;align-items:center;
   padding:12px 4px;border-bottom:1.5px solid var(--ink);
   letter-spacing:.06em;color:var(--mute);font-weight:600;
@@ -809,7 +814,7 @@ input,select{font:inherit;color:inherit}
 /* responsive scale-down */
 @media (max-width: 1280px){
   .main-title{font-size:34px}
-  .queue-head{grid-template-columns: 38px 2fr 30px 1.4fr 50px 2.2fr 28px 24px;gap:12px}
+  .queue-head{grid-template-columns: 28px 38px 2fr 30px 1.4fr 50px 2.2fr 24px;gap:12px}
   .job-head{grid-template-columns: 28px 38px 2fr 30px 1.4fr 50px 2.2fr 24px;gap:12px}
 }
 

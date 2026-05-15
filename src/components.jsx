@@ -467,7 +467,13 @@ function JobRow({ job, accent, expanded, onToggle, onSelectTarget, onCancel, onR
         </div>
 
         <div className="job-arrow">
-          {state === 'idle' ? '──→' : writing ? '═══►' : verifying ? '─◇─►' : success ? '═══►' : '─⨯─→'}
+          {/* Single-glyph arrow per state — the composite "──→" /
+              "═══►" forms used to render bent because the box-drawing
+              line characters and the arrow glyph come from different
+              metrics in most monospace fonts. The state column
+              already carries the verb (writing / verifying / etc.);
+              this column is just the image→target connector. */}
+          {state === 'error' ? '⨯' : '→'}
         </div>
 
         <div className="job-target">

@@ -788,13 +788,14 @@ function AppBody({
               </div>
             )}
             <div className="queue-head mono small">
+              {/* Leading empty cell aligns with the row chevron column. */}
+              <span />
               <span>{t('queue.head.num')}</span>
               <span>{t('queue.head.image')}</span>
               <span />
               <span>{t('queue.head.target')}</span>
               <span>{t('queue.head.state')}</span>
               <span>{t('queue.head.progress')}</span>
-              <span />
               <span />
             </div>
             {visibleJobs.map((job) => (
