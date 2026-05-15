@@ -170,7 +170,7 @@ fn validate_compressed(path: &Path) -> ValidationReport {
     }
 }
 
-fn classify_buffer(buf: &[u8]) -> ValidationReport {
+pub(crate) fn classify_buffer(buf: &[u8]) -> ValidationReport {
     let kind = classify(buf);
     if !matches!(kind, FsKind::Unknown) {
         return ValidationReport::Valid {
@@ -222,9 +222,15 @@ pub fn validate_image_contents(
     job_id: String,
     path: String,
 ) -> Result<(), String> {
+    use crate::image::DiskImage;
     use tauri::Emitter;
     std::thread::spawn(move || {
-        let report = validate(Path::new(&path));
+        let report = match DiskImage::open(Path::new(&path)) {
+            Ok(img) => img.validate(),
+            Err(e) => ValidationReport::Invalid {
+                reason: e.to_string(),
+            },
+        };
         #[derive(serde::Serialize, Clone)]
         struct Payload {
             job_id: String,

@@ -18,18 +18,21 @@ use tauri::{AppHandle, Emitter, State};
 
 use crate::db::{self, Db};
 use crate::forensic::{self, HostInfo};
-use crate::inspect::{self, PartitionSummary};
+use crate::image::{BootSource, DiskImage};
+use crate::inspect::PartitionSummary;
 use crate::snapshot::{self, RestoreResult, SnapshotResult, DEFAULT_SNAPSHOT_BYTES};
 
 /// Probe an image source for partition table + per-partition
-/// filesystem. Works on raw / iso / qcow2 / vhd / vhdx / vmdk via
-/// `inspect::inspect_any`. Returns `None` (as an Err string) for
-/// images without a partition table — the UI surfaces that as a
-/// "single filesystem, no table" hint.
+/// filesystem. Returns `None` (as an Err string) for images without a
+/// partition table — the UI surfaces that as a "single filesystem, no
+/// table" hint. Format dispatch lives in `DiskImage::open`.
 #[tauri::command]
 pub fn inspect_partitions(path: String) -> Result<PartitionSummary, String> {
     let p = Path::new(&path);
-    inspect::inspect_any(p).ok_or_else(|| format!("no partition table found in {path}"))
+    let img = DiskImage::open(p).map_err(|e| e.to_string())?;
+    img.partitions()
+        .cloned()
+        .ok_or_else(|| format!("no partition table found in {path}"))
 }
 
 /// Same probe as `inspect_partitions`, but async — spawns a worker and
@@ -49,7 +52,9 @@ pub fn inspect_image_partitions(
     path: String,
 ) -> Result<(), String> {
     std::thread::spawn(move || {
-        let summary = inspect::inspect_any(Path::new(&path));
+        let summary = DiskImage::open(Path::new(&path))
+            .ok()
+            .and_then(|img| img.partitions().cloned());
         #[derive(serde::Serialize, Clone)]
         struct Payload {
             job_id: String,
@@ -58,6 +63,41 @@ pub fn inspect_image_partitions(
         let _ = app.emit(
             "disk-cutter://image-partitioned",
             Payload { job_id, summary },
+        );
+    });
+    Ok(())
+}
+
+/// Async bootability probe — spawns a worker and emits
+/// `disk-cutter://image-boot-checked { job_id, bootable, sources }`.
+/// `sources` is the list of every boot signal the image presents (MBR
+/// active partition, GPT EFI System Partition, GPT legacy-BIOS bit,
+/// MBR bootloader code, ISO 9660 El Torito) so the UI can show "via
+/// El Torito + ESP" detail when more than one fires.
+#[tauri::command]
+pub fn inspect_image_bootable(
+    app: AppHandle,
+    job_id: String,
+    path: String,
+) -> Result<(), String> {
+    std::thread::spawn(move || {
+        let (bootable, sources) = match DiskImage::open(Path::new(&path)) {
+            Ok(img) => (img.is_bootable(), img.boot_sources().to_vec()),
+            Err(_) => (false, Vec::new()),
+        };
+        #[derive(serde::Serialize, Clone)]
+        struct Payload {
+            job_id: String,
+            bootable: bool,
+            sources: Vec<BootSource>,
+        }
+        let _ = app.emit(
+            "disk-cutter://image-boot-checked",
+            Payload {
+                job_id,
+                bootable,
+                sources,
+            },
         );
     });
     Ok(())

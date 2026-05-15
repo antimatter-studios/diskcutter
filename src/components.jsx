@@ -292,15 +292,17 @@ function ValidationBadge({ validation, detail }) {
 // uncompressed image size — used as denominator so the bar fills the
 // whole row even when partitions don't cover the full disk (trailing
 // unallocated space then shows up as a grey segment).
-function PartitionStrip({ partitions, totalBytes, validation, validationDetail }) {
+function PartitionStrip({ partitions, totalBytes, validation, validationDetail, boot }) {
   const { t } = useTranslation();
   // Only show once we know the image is valid. The validation badge
   // already carries the pending / invalid state on its own row.
   if (validation !== 'valid') return null;
+  const bootSummary = describeBootSources(boot, t);
   // Valid but no partition table → superfloppy / unrecognised boot
-  // sector. Render a single-cell bar tagged with the validation detail
-  // ("filesystem: FAT32", "boot sector …") so the row still has
-  // visual continuity with multi-partition images.
+  // sector / ISO with only El Torito. Render a single-cell bar tagged
+  // with the validation detail so the row keeps visual continuity, and
+  // still show the BOOTABLE pill when the image-level probe lit up
+  // (e.g. an ISO that boots via El Torito with no partition entry).
   if (!partitions || !partitions.partitions?.length) {
     return (
       <div className="pstrip pstrip--single">
@@ -311,6 +313,11 @@ function PartitionStrip({ partitions, totalBytes, validation, validationDetail }
             </span>
           </div>
         </div>
+        {boot?.bootable && (
+          <div className="pstrip-meta mono small">
+            <span className="pstrip-bootpill" title={bootSummary}>{t('job.partition.bootable')}</span>
+          </div>
+        )}
       </div>
     );
   }
@@ -337,10 +344,10 @@ function PartitionStrip({ partitions, totalBytes, validation, validationDetail }
         <span>{partitions.table_kind}</span>
         <span className="dot">·</span>
         <span>{t('job.partition.count', { count: partitions.partitions.length })}</span>
-        {partitions.any_bootable && (
+        {boot?.bootable && (
           <>
             <span className="dot">·</span>
-            <span className="pstrip-bootpill">{t('job.partition.bootable')}</span>
+            <span className="pstrip-bootpill" title={bootSummary}>{t('job.partition.bootable')}</span>
           </>
         )}
       </div>
@@ -408,6 +415,28 @@ function fsClassFor(fs) {
   if (f.includes('iso')) return 'iso';
   if (f.includes('squash')) return 'squash';
   return 'unknown';
+}
+
+// Human-readable list of every boot signal the backend reported. Used
+// as the BOOTABLE pill's hover tooltip so the user can see which
+// mechanisms are active on a hybrid image without expanding the row.
+// Boot source shape comes from `BootSource` in src-tauri/src/image.rs:
+//   { kind: 'mbr_active'|'gpt_esp'|'gpt_legacy_bios', index } |
+//   { kind: 'mbr_bootloader' } |
+//   { kind: 'el_torito' }
+function describeBootSources(boot, t) {
+  if (!boot || !boot.bootable || !boot.sources?.length) return undefined;
+  const parts = boot.sources.map((s) => {
+    switch (s.kind) {
+      case 'mbr_active':       return t('job.partition.boot_source.mbr_active', { index: s.index });
+      case 'gpt_esp':          return t('job.partition.boot_source.gpt_esp', { index: s.index });
+      case 'gpt_legacy_bios':  return t('job.partition.boot_source.gpt_legacy_bios', { index: s.index });
+      case 'mbr_bootloader':   return t('job.partition.boot_source.mbr_bootloader');
+      case 'el_torito':        return t('job.partition.boot_source.el_torito');
+      default:                 return s.kind;
+    }
+  });
+  return parts.join(' · ');
 }
 
 /* ─────────── Job Row ─────────── */
@@ -493,6 +522,7 @@ function JobRow({ job, accent, expanded, onToggle, onSelectTarget, onCancel, onR
         totalBytes={job.image?.bytes}
         validation={job.validation}
         validationDetail={job.validationDetail}
+        boot={job.boot}
       />
 
       {expanded && <JobDetail job={job} accent={accent} fdaBlocked={fdaBlocked} onCancel={onCancel} onRetry={onRetry} onCopyHash={onCopyHash} onCopyError={onCopyError} onFlashAnother={onFlashAnother} />}
@@ -576,6 +606,7 @@ function JobDetail({ job, accent, onCancel, onRetry, fdaBlocked }) {
             partitions={job.partitions}
             validation={job.validation}
             validationDetail={job.validationDetail}
+            boot={job.boot}
           />
         </DetailBlock>
 
@@ -639,7 +670,7 @@ function KV({ k, v, mono, wrap }) {
 
 /* ─────────── Partition Table (expanded detail) ─────────── */
 
-function PartitionTable({ partitions, validation, validationDetail }) {
+function PartitionTable({ partitions, validation, validationDetail, boot }) {
   const { t } = useTranslation();
   if (validation === 'pending') {
     return <div className="empty-line">{t('job.partition.pending')}</div>;
@@ -647,14 +678,24 @@ function PartitionTable({ partitions, validation, validationDetail }) {
   if (validation === 'invalid') {
     return <div className="empty-line">{validationDetail || t('job.validation.invalid')}</div>;
   }
+  const bootSummary = describeBootSources(boot, t);
   if (!partitions || !partitions.partitions?.length) {
     // Valid but no table — superfloppy / unrecognised. Surface the
     // validation detail string ("filesystem: FAT32", "boot sector …")
-    // so the user knows _why_ there's no partition list.
+    // so the user knows _why_ there's no partition list. Still show
+    // the BOOTABLE pill if disk-level probes lit up (e.g. El Torito).
     return (
-      <div className="empty-line">
-        {validationDetail || t('job.partition.no_table')}
-      </div>
+      <>
+        <div className="empty-line">
+          {validationDetail || t('job.partition.no_table')}
+        </div>
+        {boot?.bootable && (
+          <div className="ptable-head mono small">
+            <span className="pstrip-bootpill" title={bootSummary}>{t('job.partition.bootable')}</span>
+            <span className="ptable-bootdetail">{bootSummary}</span>
+          </div>
+        )}
+      </>
     );
   }
   return (
@@ -663,10 +704,11 @@ function PartitionTable({ partitions, validation, validationDetail }) {
         <span>{partitions.table_kind}</span>
         <span className="dot">·</span>
         <span>{t('job.partition.count', { count: partitions.partitions.length })}</span>
-        {partitions.any_bootable && (
+        {boot?.bootable && (
           <>
             <span className="dot">·</span>
-            <span className="pstrip-bootpill">{t('job.partition.bootable')}</span>
+            <span className="pstrip-bootpill" title={bootSummary}>{t('job.partition.bootable')}</span>
+            <span className="ptable-bootdetail">{bootSummary}</span>
           </>
         )}
       </div>

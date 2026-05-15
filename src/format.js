@@ -52,6 +52,13 @@ export function makeJob(num, image, target, parentEntryId) {
     // `null` for compressed / superfloppy / unrecognised layouts. The
     // PartitionStrip component handles either case.
     partitions: null,
+    // Image-level bootability — fires alongside partition probe once
+    // validation passes. Distinct from per-partition `partition.bootable`
+    // because some bootable images (ISO with El Torito only, MBR with
+    // bootloader code but no active partition) carry no bootable
+    // partition entry. Shape `{ bootable: bool, sources: BootSource[] }`
+    // or `null` while still loading / on sources we can't probe.
+    boot: null,
   };
 }
 

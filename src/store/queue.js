@@ -219,11 +219,15 @@ export const useQueueStore = create((set, get) => ({
       return { jobs: { ...s.jobs, [jobId]: { ...j, validation: result, validationDetail: detail } } };
     });
     // A valid verdict means it's worth running the more expensive
-    // partition probe; invalid means we'd be probing a non-disk and
-    // skip the round-trip entirely.
+    // probes; invalid means we'd be probing a non-disk and skip the
+    // round-trips entirely. The partition probe and bootability probe
+    // each open their own DiskImage and run independently, so we fire
+    // them in parallel.
     if (result === 'valid' && imagePath) {
       invoke('inspect_image_partitions', { jobId, path: imagePath })
         .catch((e) => console.error('inspect_image_partitions failed', e));
+      invoke('inspect_image_bootable', { jobId, path: imagePath })
+        .catch((e) => console.error('inspect_image_bootable failed', e));
     }
   },
 
@@ -232,6 +236,14 @@ export const useQueueStore = create((set, get) => ({
       const j = s.jobs[jobId];
       if (!j) return s;
       return { jobs: { ...s.jobs, [jobId]: { ...j, partitions: summary || null } } };
+    });
+  },
+
+  setBoot(jobId, boot) {
+    set((s) => {
+      const j = s.jobs[jobId];
+      if (!j) return s;
+      return { jobs: { ...s.jobs, [jobId]: { ...j, boot: boot || null } } };
     });
   },
 }));
@@ -283,6 +295,15 @@ export function attachQueueListeners({ onFdaError, onImageInvalid } = {}) {
     if (!mounted) return;
     const p = e.payload;
     useQueueStore.getState().setPartitions(p.job_id, p.summary);
+  }).then((u) => subs.push(u));
+
+  listen('disk-cutter://image-boot-checked', (e) => {
+    if (!mounted) return;
+    const p = e.payload;
+    useQueueStore.getState().setBoot(p.job_id, {
+      bootable: !!p.bootable,
+      sources: Array.isArray(p.sources) ? p.sources : [],
+    });
   }).then((u) => subs.push(u));
 
   return () => {

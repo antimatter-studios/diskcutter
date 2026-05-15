@@ -166,6 +166,13 @@
       "count_one": "{{count}} partición",
       "count_other": "{{count}} particiones",
       "bootable": "ARRANCABLE",
+      "boot_source": {
+        "mbr_active": "Partición activa MBR #{{index}}",
+        "gpt_esp": "Partición de sistema EFI GPT #{{index}}",
+        "gpt_legacy_bios": "GPT arranque BIOS legacy #{{index}}",
+        "mbr_bootloader": "Código de arranque MBR",
+        "el_torito": "ISO 9660 El Torito"
+      },
       "strip": {
         "aria": "Diseño de particiones ({{kind}})"
       },

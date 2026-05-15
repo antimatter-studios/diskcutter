@@ -166,6 +166,13 @@
       "count_one": "{{count}} partition",
       "count_other": "{{count}} partitions",
       "bootable": "BOOTABLE",
+      "boot_source": {
+        "mbr_active": "MBR active partition #{{index}}",
+        "gpt_esp": "GPT EFI System Partition #{{index}}",
+        "gpt_legacy_bios": "GPT legacy-BIOS-bootable #{{index}}",
+        "mbr_bootloader": "MBR bootloader code",
+        "el_torito": "ISO 9660 El Torito"
+      },
       "strip": {
         "aria": "Partition layout ({{kind}})"
       },

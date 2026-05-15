@@ -1157,3 +1157,10 @@ input,select{font:inherit;color:inherit}
   font-size:10.5px;letter-spacing:.04em;
   text-transform:uppercase;
 }
+/* Free-text list of every boot signal that fired ("MBR active partition
+   #1 · GPT ESP #2"). Sits next to the BOOTABLE pill in the expanded
+   PartitionTable header. */
+.ptable-bootdetail{
+  color:var(--mute);
+  font-size:10.5px;letter-spacing:.02em;
+}

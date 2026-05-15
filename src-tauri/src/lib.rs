@@ -10,6 +10,7 @@ pub mod doctor;
 pub mod forensic;
 pub mod hash;
 mod helper;
+pub mod image;
 pub mod inspect;
 pub mod pipeline;
 pub mod qemu;
@@ -87,6 +88,7 @@ pub fn run() {
             burn_logs_list,
             commands::inspect_partitions,
             commands::inspect_image_partitions,
+            commands::inspect_image_bootable,
             commands::capture_snapshot,
             commands::restore_snapshot,
             commands::export_burn_report,
