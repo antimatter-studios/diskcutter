@@ -325,6 +325,14 @@ input,select{font:inherit;color:inherit}
 .error-strip-detail{font-family:var(--mono);font-size:11px;letter-spacing:.04em;margin-top:4px;line-height:1.45}
 .error-strip-raw{font-family:var(--mono);font-size:10.5px;letter-spacing:.02em;margin-top:6px;opacity:.85;word-break:break-all}
 .error-strip-code{font-size:11px;letter-spacing:.08em;background:var(--on-accent);color:var(--ink);padding:3px 8px;font-weight:600}
+.error-strip-action{
+  display:inline-block;margin-top:8px;padding:4px 10px;
+  font-family:var(--mono);font-size:11px;letter-spacing:.06em;
+  color:var(--on-accent);background:transparent;
+  border:2px solid var(--on-accent);cursor:pointer;
+}
+.error-strip-action:hover{background:var(--on-accent);color:var(--ink)}
+.error-strip-action:active{transform:translate(1px,1px)}
 
 /* ─────────── Danger banner ─────────── */
 

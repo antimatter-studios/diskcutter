@@ -25,6 +25,7 @@ import { matchShortcut, isEditableTarget, queueReady } from './keymap.js';
 import {
   addToast, reapExpired, dismissToast, defaultTtlMs,
 } from './toast.js';
+import { useFda } from './hooks/useFda.js';
 
 // Theme palette is sourced from CSS :root vars (--accent-1..4), so theme switching is just a CSS swap.
 function readThemeAccent(n, fallback) {
@@ -86,12 +87,8 @@ function App() {
   // Shape: { active: [{ job_id, target }], phase?: 'cancelling' | 'exiting' }
   const [closeBlocked, setCloseBlocked] = useState(null);
   const [toasts, setToasts] = useState([]);
-  const [fdaBlocked, setFdaBlocked] = useState(false);
   const toastIdRef = useRef(0);
   const sessionStartRef = useRef(Date.now());
-  // True once we've kicked System Settings open for the current FDA outage.
-  // Reset when check_fda reports granted again, so the next outage opens it.
-  const fdaSettingsOpenedRef = useRef(false);
   // Per-job retry debounce: prevents a second click while the start_write
   // round-trip is still pending. Without this, every extra click stacks
   // another osascript prompt + helper.
@@ -117,6 +114,15 @@ function App() {
   const handleDismissToast = useCallback((id) => {
     setToasts((list) => dismissToast(list, id));
   }, []);
+
+  // FDA plumbing: state, focus-probe (DOM 'focus' + Tauri 'tauri://focus'),
+  // ENEEDS_FDA handler, auto-open System Settings de-dup, etc. all live in
+  // useFda. When the probe flips blocked→unblocked, clear stale ENEEDS_FDA
+  // error rows so the banner disappears without requiring a manual Retry.
+  const fda = useFda({
+    onGranted: () => useQueueStore.getState().clearEneedsFdaErrors(),
+    onOpenSettingsError: () => pushToast('warn', t('error.could_not_open_system_settings')),
+  });
 
   // Single ticking interval reaps expired toasts. Cheap to keep running —
   // the filter is a no-op when nothing is queued.
@@ -144,10 +150,6 @@ function App() {
     // find_orphan_helpers is expected to fail on non-macOS — keep console.error
     // for devtools visibility but suppress the user-facing toast.
     invoke('find_orphan_helpers').then(setOrphanPids).catch((e) => console.error('find_orphan_helpers failed', e));
-    // Initial FDA probe. The window-focus listener (separate effect below)
-    // re-runs the probe whenever the user comes back to us, e.g. after they
-    // toggle Full Disk Access in System Settings.
-    invoke('check_fda').then((granted) => setFdaBlocked(!granted)).catch(() => {});
     // Hydrate every pref in one round-trip. Missing/empty keys fall through
     // to PREFS_DEFAULTS so the UI shows a sensible value until the user
     // touches the control for the first time.
@@ -185,27 +187,6 @@ function App() {
       console.warn('auto.eject enabled, but eject_disk command is not implemented yet');
     }
   }, [pushToast, t]);
-
-  // FDA re-probe on window focus. The user toggles Full Disk Access in
-  // System Settings (a separate app), so we don't get a direct signal — we
-  // re-check whenever they come back to us. When the state flips to granted,
-  // clear stale ENEEDS_FDA errors back to idle so the banner disappears
-  // without requiring a Retry click. Also re-arm the once-per-outage flag
-  // for open_fda_settings.
-  useEffect(() => {
-    const probe = () => {
-      invoke('check_fda').then((granted) => {
-        setFdaBlocked(!granted);
-        if (granted) {
-          fdaSettingsOpenedRef.current = false;
-          useQueueStore.getState().clearEneedsFdaErrors();
-        }
-      }).catch(() => {});
-    };
-    const onFocus = () => probe();
-    window.addEventListener('focus', onFocus);
-    return () => window.removeEventListener('focus', onFocus);
-  }, []);
 
   // Theme: data-theme attribute on <html> drives the dark palette swap.
   useEffect(() => {
@@ -252,16 +233,10 @@ function App() {
     // and "image invalid" reactions because those touch UI state /
     // toast layer this component owns.
     const detachQueue = attachQueueListeners({
-      onFdaError: () => {
-        setFdaBlocked(true);
-        if (!fdaSettingsOpenedRef.current) {
-          fdaSettingsOpenedRef.current = true;
-          invoke('open_fda_settings').catch((err) => {
-            console.error('open_fda_settings failed', err);
-            pushToast('warn', t('error.could_not_open_system_settings'));
-          });
-        }
-      },
+      // Helper-reported FDA error → useFda flips blocked, opens System
+      // Settings (de-duped per outage), and surfaces any open-settings
+      // failure through the onOpenSettingsError toast we passed at hook init.
+      onFdaError: fda.handleFdaError,
       onImageInvalid: (p) => {
         const detail = p.detail || p.reason || '—';
         pushToast('error', t('error.image_invalid', { reason: detail }));
@@ -316,7 +291,7 @@ function App() {
       mounted = false;
       subs.forEach((u) => u());
     };
-  }, [pushToast, t]);
+  }, [pushToast, t, fda.handleFdaError]);
 
   const addImageFromPath = useCallback(async (path, copies) => {
     try {
@@ -502,7 +477,7 @@ function App() {
     // Don't bother the backend if we already know FDA is blocked. The user
     // can still trigger an explicit prompt via the banner action; this just
     // keeps the click from being a no-op storm.
-    if (fdaBlocked) {
+    if (fda.blocked) {
       invoke('open_fda_settings').catch(() => {});
       return;
     }
@@ -525,7 +500,7 @@ function App() {
       retryInFlightRef.current.delete(jobId);
       useQueueStore.getState().setRetrying(jobId, false);
     }
-  }, [jobs, fdaBlocked, pushToast]);
+  }, [jobs, fda.blocked, pushToast]);
 
   const clearDone = useCallback(() => {
     useQueueStore.getState().clearDone();
@@ -591,7 +566,8 @@ function App() {
     confirmed, setConfirmed,
     errorJob, errorMsg,
     expanded, setExpanded,
-    fdaBlocked,
+    fdaBlocked: fda.blocked,
+    onFdaRecheck: fda.recheck,
     setPickerJob,
     entries, nextCopies, onChangeNextCopies: setNextCopies,
     onDispatchFromEntry: dispatchFromEntry,
@@ -678,6 +654,7 @@ function AppBody({
   errorJob, errorMsg,
   expanded, setExpanded,
   fdaBlocked,
+  onFdaRecheck,
   setPickerJob,
   entries, nextCopies, onChangeNextCopies, onDispatchFromEntry,
   onAdd, onAddFromUrl, onBrowseCatalog, onStart, onCancelJob,
@@ -745,6 +722,18 @@ function AppBody({
               <div className="error-strip-detail">{errorMsg.detail}</div>
               {errorJob.errorMessage && (
                 <div className="error-strip-raw mono">{errorJob.errorMessage}</div>
+              )}
+              {/* Escape hatch — macOS Tauri's DOM 'focus' event is
+                  unreliable on return from System Settings, so give
+                  the user an explicit re-probe trigger. */}
+              {errorJob.errorCode === 'ENEEDS_FDA' && onFdaRecheck && (
+                <button
+                  type="button"
+                  className="error-strip-action mono"
+                  onClick={() => onFdaRecheck()}
+                >
+                  [ {t('error.fda_recheck')} ]
+                </button>
               )}
             </div>
             <div className="error-strip-code mono">{errorJob.errorCode}</div>
