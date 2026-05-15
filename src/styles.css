@@ -473,7 +473,7 @@ input,select{font:inherit;color:inherit}
 
 .job-head{
   display:grid;
-  grid-template-columns: 38px 2.2fr 36px 1.6fr 60px 2.4fr 28px 24px;
+  grid-template-columns: 28px 38px 2.2fr 36px 1.6fr 60px 2.4fr 24px;
   gap:16px;align-items:center;
   padding:18px 4px;cursor:pointer;
 }
@@ -801,7 +801,8 @@ input,select{font:inherit;color:inherit}
 /* responsive scale-down */
 @media (max-width: 1280px){
   .main-title{font-size:34px}
-  .queue-head, .job-head{grid-template-columns: 38px 2fr 30px 1.4fr 50px 2.2fr 28px 24px;gap:12px}
+  .queue-head{grid-template-columns: 38px 2fr 30px 1.4fr 50px 2.2fr 28px 24px;gap:12px}
+  .job-head{grid-template-columns: 28px 38px 2fr 30px 1.4fr 50px 2.2fr 24px;gap:12px}
 }
 
 /* ─────────── Prefs view ─────────── */

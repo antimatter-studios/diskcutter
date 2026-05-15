@@ -453,6 +453,9 @@ function JobRow({ job, accent, expanded, onToggle, onSelectTarget, onCancel, onR
     <div className={"job" + (danger ? " job--danger" : "") + (expanded ? " job--open" : "") + (density === 'compact' ? " job--compact" : "")}
          style={{ '--accent': accent }}>
       <div className="job-head" onClick={onToggle}>
+        <button className="job-chev" onClick={(e) => { e.stopPropagation(); onToggle(); }}>
+          {expanded ? "▼" : "▶"}
+        </button>
         <div className="job-num">#{job.num.toString().padStart(2,'0')}</div>
 
         <div className="job-image">
@@ -496,10 +499,6 @@ function JobRow({ job, accent, expanded, onToggle, onSelectTarget, onCancel, onR
           {success && <SuccessReadout job={job} />}
           {danger && <div className="status-tag status-tag--danger">{job.errorCode}</div>}
         </div>
-
-        <button className="job-chev" onClick={(e) => { e.stopPropagation(); onToggle(); }}>
-          {expanded ? "▼" : "▶"}
-        </button>
 
         {(writing || verifying) ? (
           <span className="job-remove job-remove--disabled" aria-hidden="true" />
