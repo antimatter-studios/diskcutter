@@ -531,8 +531,8 @@ function JobRow({ job, accent, expanded, onToggle, onSelectTarget, onCancel, onR
 function StateGlyph({ state, accent }) {
   if (state === 'success') return <div className="glyph glyph--ok">✓</div>;
   if (state === 'error') return <div className="glyph glyph--err" style={{ background: accent }}>✕</div>;
-  if (state === 'writing') return <div className="glyph glyph--run">▣</div>;
-  if (state === 'verifying') return <div className="glyph glyph--run">◇</div>;
+  if (state === 'writing') return <div className="glyph glyph--run">▶</div>;
+  if (state === 'verifying') return <div className="glyph glyph--run">⌕</div>;
   return <div className="glyph">·</div>;
 }
 
