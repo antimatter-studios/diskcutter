@@ -165,10 +165,12 @@
       "no_table": "Single filesystem — no partition table.",
       "count_one": "{{count}} partition",
       "count_other": "{{count}} partitions",
+      "bootable": "BOOTABLE",
       "strip": {
         "aria": "Partition layout ({{kind}})"
       },
       "col": {
+        "boot": "BOOT",
         "start": "START",
         "size": "SIZE",
         "kind": "KIND",

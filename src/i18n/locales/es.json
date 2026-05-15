@@ -165,10 +165,12 @@
       "no_table": "Sistema de archivos único — sin tabla de particiones.",
       "count_one": "{{count}} partición",
       "count_other": "{{count}} particiones",
+      "bootable": "ARRANCABLE",
       "strip": {
         "aria": "Diseño de particiones ({{kind}})"
       },
       "col": {
+        "boot": "ARR",
         "start": "INICIO",
         "size": "TAMAÑO",
         "kind": "TIPO",

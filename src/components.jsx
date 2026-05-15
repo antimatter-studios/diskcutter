@@ -322,10 +322,13 @@ function PartitionStrip({ partitions, totalBytes, validation, validationDetail }
         {segments.map((seg, i) => (
           <div
             key={i}
-            className={`pstrip-seg pstrip-seg--${seg.fsClass}`}
+            className={`pstrip-seg pstrip-seg--${seg.fsClass}` + (seg.bootable ? ' pstrip-seg--bootable' : '')}
             style={{ width: `${(seg.length / totalShown) * 100}%` }}
-            title={`${seg.title}\n${seg.sizeHuman}`}
+            title={`${seg.title}\n${seg.sizeHuman}` + (seg.bootable ? `\n${t('job.partition.bootable')}` : '')}
           >
+            {seg.bootable && (
+              <span className="pstrip-seg-boot" aria-label={t('job.partition.bootable')}>★</span>
+            )}
             <span className="pstrip-seg-label mono">{seg.label}</span>
           </div>
         ))}
@@ -334,6 +337,12 @@ function PartitionStrip({ partitions, totalBytes, validation, validationDetail }
         <span>{partitions.table_kind}</span>
         <span className="dot">·</span>
         <span>{t('job.partition.count', { count: partitions.partitions.length })}</span>
+        {partitions.any_bootable && (
+          <>
+            <span className="dot">·</span>
+            <span className="pstrip-bootpill">{t('job.partition.bootable')}</span>
+          </>
+        )}
       </div>
     </div>
   );
@@ -366,6 +375,7 @@ function buildPartitionSegments(parts, totalBytes) {
       sizeHuman: p.size_human,
       label: p.label || p.filesystem || p.kind_label || '',
       title: [p.label, p.filesystem || p.kind_label].filter(Boolean).join(' · ') || p.kind_label,
+      bootable: !!p.bootable,
     });
     cursor = p.start_bytes + p.length_bytes;
   }
@@ -653,11 +663,18 @@ function PartitionTable({ partitions, validation, validationDetail }) {
         <span>{partitions.table_kind}</span>
         <span className="dot">·</span>
         <span>{t('job.partition.count', { count: partitions.partitions.length })}</span>
+        {partitions.any_bootable && (
+          <>
+            <span className="dot">·</span>
+            <span className="pstrip-bootpill">{t('job.partition.bootable')}</span>
+          </>
+        )}
       </div>
       <table className="ver-table">
         <thead>
           <tr>
             <th>#</th>
+            <th>{t('job.partition.col.boot')}</th>
             <th>{t('job.partition.col.start')}</th>
             <th>{t('job.partition.col.size')}</th>
             <th>{t('job.partition.col.kind')}</th>
@@ -669,6 +686,9 @@ function PartitionTable({ partitions, validation, validationDetail }) {
           {partitions.partitions.map((p) => (
             <tr key={p.index}>
               <td className="mono">{p.index}</td>
+              <td className="mono ptable-boot" aria-label={p.bootable ? t('job.partition.bootable') : ''}>
+                {p.bootable ? '★' : '·'}
+              </td>
               <td className="mono">{formatBytes(p.start_bytes)}</td>
               <td className="mono">{p.size_human}</td>
               <td>{p.kind_label}</td>

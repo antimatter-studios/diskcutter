@@ -1121,3 +1121,39 @@ input,select{font:inherit;color:inherit}
   color:var(--mute);
 }
 .ptable .ver-table{margin-top:2px}
+.ptable-boot{
+  /* Star glyph for bootable partitions; dot placeholder for the rest
+     so the column stays a fixed width even when empty. */
+  color:var(--ok);
+  text-align:center;
+  width:24px;
+}
+
+/* ─────────── Bootable indicators (strip + table header) ─────────── */
+
+/* Star overlaid on the left edge of a bootable strip segment. Sits
+   inside the existing pstrip-seg flex row, before the label. */
+.pstrip-seg-boot{
+  font-size:11px;line-height:1;
+  margin-right:4px;
+  color:var(--bone);
+  text-shadow:0 0 2px rgba(0,0,0,.4);
+}
+.pstrip-seg--bootable{
+  /* Subtle inner glow so the bootable segment reads as "marked" even
+     when the segment is too narrow to fit the star. */
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.35);
+}
+.job--compact .pstrip-seg-boot{display:none}
+
+/* Compact pill that surfaces "BOOTABLE" once at the meta line / table
+   header so the user can tell at a glance without scanning every
+   segment. Uses --ok (validation-valid green) to match the badge. */
+.pstrip-bootpill{
+  display:inline-flex;align-items:center;
+  padding:1px 6px;
+  border:1.5px solid var(--ok);
+  color:var(--ok);
+  font-size:10.5px;letter-spacing:.04em;
+  text-transform:uppercase;
+}

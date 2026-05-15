@@ -32,6 +32,10 @@ use serde::Serialize;
 pub struct PartitionSummary {
     pub table_kind: String,
     pub partitions: Vec<PartInfo>,
+    /// True when any partition in the table is marked bootable — the UI
+    /// uses this to surface a whole-image "BOOTABLE" pill in the
+    /// partition header.
+    pub any_bootable: bool,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -45,6 +49,11 @@ pub struct PartInfo {
     pub label: Option<String>,
     pub uuid: Option<String>,
     pub filesystem: Option<String>,
+    /// True when the on-disk table marks this partition bootable:
+    /// MBR active flag set, GPT legacy-BIOS-bootable attribute set, or
+    /// GPT type is the EFI System Partition GUID. Comes from
+    /// `Partition::is_bootable` upstream.
+    pub bootable: bool,
 }
 
 /// Inspect a raw / ISO image path. Returns `None` for unrecognised or
@@ -107,9 +116,11 @@ fn summarise(dev: &dyn BlockRead) -> partitions::Result<PartitionSummary> {
         let fs = sniff(dev, p).ok();
         out.push(make_part_info((i + 1) as u32, p, fs));
     }
+    let any_bootable = out.iter().any(|p| p.bootable);
     Ok(PartitionSummary {
         table_kind: table_kind_label(table).to_string(),
         partitions: out,
+        any_bootable,
     })
 }
 
@@ -124,11 +135,11 @@ pub fn table_kind_label(t: TableKind) -> &'static str {
 /// in tests that synthesize partitions without filesystem I/O.
 pub fn make_part_info(index: u32, p: &Partition, fs: Option<FsKind>) -> PartInfo {
     let (kind_label, type_id) = match p.kind {
-        PartitionKind::Gpt { type_guid } => (
+        PartitionKind::Gpt { type_guid, .. } => (
             gpt_type_label(&type_guid).to_string(),
             format_guid(&type_guid),
         ),
-        PartitionKind::Mbr { type_byte } => (
+        PartitionKind::Mbr { type_byte, .. } => (
             mbr_type_label(type_byte).to_string(),
             format!("0x{type_byte:02X}"),
         ),
@@ -144,6 +155,7 @@ pub fn make_part_info(index: u32, p: &Partition, fs: Option<FsKind>) -> PartInfo
         label: p.label.clone(),
         uuid: p.uuid.map(|b| format_guid(&b)),
         filesystem: fs.map(format_fs_kind),
+        bootable: p.is_bootable(),
     }
 }
 
@@ -353,7 +365,10 @@ mod tests {
         let p = Partition {
             start: 1_048_576,
             length: 100 * 1024 * 1024,
-            kind: PartitionKind::Gpt { type_guid: guid },
+            kind: PartitionKind::Gpt {
+                type_guid: guid,
+                attributes: 0,
+            },
             label: Some("EFI".into()),
             uuid: Some(guid),
         };
@@ -366,6 +381,8 @@ mod tests {
         assert_eq!(info.type_id, "C12A7328-F81F-11D2-BA4B-00A0C93EC93B");
         assert_eq!(info.label.as_deref(), Some("EFI"));
         assert_eq!(info.filesystem.as_deref(), Some("FAT32"));
+        // ESP-typed GPT entry is bootable even with zero attributes.
+        assert!(info.bootable);
     }
 
     #[test]
@@ -373,7 +390,10 @@ mod tests {
         let p = Partition {
             start: 1024 * 512,
             length: 10 * 1024 * 1024,
-            kind: PartitionKind::Mbr { type_byte: 0x83 },
+            kind: PartitionKind::Mbr {
+                type_byte: 0x83,
+                active: false,
+            },
             label: None,
             uuid: None,
         };
@@ -382,6 +402,8 @@ mod tests {
         assert_eq!(info.type_id, "0x83");
         assert!(info.filesystem.is_none());
         assert!(info.label.is_none());
+        // Non-active MBR partition is not bootable.
+        assert!(!info.bootable);
     }
 
     #[test]
@@ -396,6 +418,45 @@ mod tests {
         let info = make_part_info(0, &p, None);
         assert_eq!(info.kind_label, "Whole device");
         assert_eq!(info.type_id, "—");
+        assert!(!info.bootable);
+    }
+
+    #[test]
+    fn make_part_info_marks_active_mbr_bootable() {
+        let p = Partition {
+            start: 1024 * 512,
+            length: 1024 * 512,
+            kind: PartitionKind::Mbr {
+                type_byte: 0x83,
+                active: true,
+            },
+            label: None,
+            uuid: None,
+        };
+        let info = make_part_info(1, &p, None);
+        assert!(info.bootable);
+    }
+
+    #[test]
+    fn make_part_info_marks_legacy_bios_bootable_gpt() {
+        // Linux filesystem type GUID + the legacy-BIOS-bootable bit
+        // (1<<2) → bootable.
+        let guid: [u8; 16] = [
+            0xAF, 0x3D, 0xC6, 0x0F, 0x83, 0x84, 0x72, 0x47, 0x8E, 0x79, 0x3D, 0x69, 0xD8, 0x47,
+            0x7D, 0xE4,
+        ];
+        let p = Partition {
+            start: 1 << 20,
+            length: 100 << 20,
+            kind: PartitionKind::Gpt {
+                type_guid: guid,
+                attributes: 1 << 2,
+            },
+            label: None,
+            uuid: Some(guid),
+        };
+        let info = make_part_info(1, &p, None);
+        assert!(info.bootable);
     }
 
     #[test]

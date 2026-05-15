@@ -32,7 +32,7 @@ am-img-vhd = "0.2"
 am-img-vhdx = "0.2"
 am-img-vmdk = "0.2"
 am-fs-core = "0.2"
-am-partitions = "0.2"
+am-partitions = "0.3"
 ureq = { version = "2", features = ["tls", "native-certs"] }
 
 [dev-dependencies]

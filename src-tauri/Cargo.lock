@@ -91,9 +91,9 @@ dependencies = [
 
 [[package]]
 name = "am-partitions"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "58b64e59d23e749e640cebe0f6855b52c9dc62f62907ace12f236ba02690e93d"
+checksum = "39424e0d798f510918c8126bd8ab7c5fc8c84124c81989bc6c04542a4d7b8f84"
 dependencies = [
  "am-fs-core",
  "crc32fast",

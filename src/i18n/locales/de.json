@@ -165,10 +165,12 @@
       "no_table": "Einzelnes Dateisystem — keine Partitionstabelle.",
       "count_one": "{{count}} Partition",
       "count_other": "{{count}} Partitionen",
+      "bootable": "BOOTFÄHIG",
       "strip": {
         "aria": "Partitionslayout ({{kind}})"
       },
       "col": {
+        "boot": "BOOT",
         "start": "START",
         "size": "GRÖSSE",
         "kind": "TYP",
