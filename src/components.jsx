@@ -459,8 +459,6 @@ function JobRow({ job, accent, expanded, onToggle, onSelectTarget, onCancel, onR
           <div className="job-image-name">{job.image.name}</div>
           <div className="job-image-meta">
             <span>{job.image.size}</span>
-            <span className="dot">·</span>
-            <span className="mono small">sha256: {job.image.sha256.slice(0,12)}…{job.image.sha256.slice(-4)}</span>
             <ValidationBadge validation={job.validation} detail={job.validationDetail} />
           </div>
         </div>
