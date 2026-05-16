@@ -4,12 +4,13 @@
 # .githooks/pre-commit (cargo fmt, cargo clippy -D warnings, i18n parity)
 # and additionally runs the full test suites and the frontend production
 # build. A green CI run here means the same checks that pass locally on a
-# pre-commit also pass on a clean Linux/macOS runner.
+# pre-commit also pass on a clean Linux/macOS/Windows runner.
 #
-# We deliberately do not exercise the macOS DiskArbitration FFI against
-# real devices — that requires a physical disk or sandboxing tricks that
-# don't belong in CI. `cargo test` is enough; the unit tests don't touch
-# real /dev/ nodes.
+# We deliberately do not exercise the macOS DiskArbitration FFI, the
+# Linux udev path, or Windows PowerShell disk enumeration against real
+# devices — those require physical disks or sandboxing tricks that
+# don't belong in CI. `cargo test` is enough; the unit tests don't
+# touch real /dev/ nodes or \\.\PhysicalDriveN handles.
 
 name: CI
 
@@ -29,7 +30,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
 
