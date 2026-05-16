@@ -32,7 +32,12 @@ frontend Vitest suite at the repo root.
 One-time per clone:
 
 ```sh
-npm install
+npm install                         # also runs scripts/install-hooks.sh via "prepare"
+```
+
+If you ever need to re-register the hook manually:
+
+```sh
 bash scripts/install-hooks.sh       # registers .githooks/pre-commit
 ```
 
