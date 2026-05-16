@@ -341,12 +341,14 @@ fn enumerate_macos() -> Option<Vec<Disk>> {
     Some(out)
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn is_whole_disk(id: &str) -> bool {
     id.strip_prefix("disk")
         .map(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
         .unwrap_or(false)
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn parse_disks_plist(bytes: &[u8]) -> Option<Vec<String>> {
     let val: plist::Value = plist::from_bytes(bytes).ok()?;
     let all = val.as_dictionary()?.get("AllDisks")?.as_array()?;
@@ -374,6 +376,7 @@ fn info_for_macos(id: &str) -> Option<Disk> {
     parse_disk_info_plist(&out.stdout, path)
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn parse_disk_info_plist(bytes: &[u8], device_path: String) -> Option<Disk> {
     let val: plist::Value = plist::from_bytes(bytes).ok()?;
     let dict = val.as_dictionary()?;
@@ -637,6 +640,7 @@ fn format_capacity(bytes: u64) -> String {
     }
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn derive_partitions(dict: &plist::Dictionary) -> String {
     let fs = dict
         .get("FilesystemType")

@@ -12,6 +12,7 @@
 //! Hard rule: every check must complete in well under a second. We
 //! call this on UI mount and the user shouldn't notice.
 
+#[cfg(target_os = "macos")]
 use std::path::Path;
 use std::process::{Command, Stdio};
 
