@@ -164,11 +164,13 @@ pub fn run_helper(args: &[String]) -> i32 {
 
     let cancel = Arc::new(AtomicBool::new(false));
     // Watch the parent-controlled sentinel file. The parent (running as the
-    // invoking user) writes `/tmp/disk-cutter-cancel-<job>.flag`; the helper
-    // runs as root via osascript, so signals are not an option — file polling
-    // is the only reliable cross-process channel here.
+    // invoking user) writes to `disks::cancel_sentinel_path(job_id)`; the
+    // helper runs as root via osascript, so signals are not an option —
+    // file polling is the only reliable cross-process channel here. Reuse
+    // the parent's path builder so both sides agree on the location
+    // (`/tmp` on unix, `%TEMP%` on windows).
     if !job_id.is_empty() {
-        let sentinel = std::path::PathBuf::from(format!("/tmp/disk-cutter-cancel-{job_id}.flag"));
+        let sentinel = crate::disks::cancel_sentinel_path(&job_id);
         let cancel_watch = Arc::clone(&cancel);
         std::thread::spawn(move || loop {
             if sentinel.exists() {

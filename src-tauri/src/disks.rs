@@ -1165,10 +1165,14 @@ fn emit_helper_line(app: &AppHandle, job_id: &str, line: &str) -> Option<&'stati
 }
 
 /// Cross-process cancel sentinel path. The elevated helper subprocess runs as
-/// root via osascript and can't be reached through the parent's in-memory
-/// `CancelRegistry`; it polls this file instead.
+/// root via osascript (unix) or an elevated shim (windows) and can't be
+/// reached through the parent's in-memory `CancelRegistry`; it polls this
+/// file instead. Lives under `std::env::temp_dir()` so it resolves to
+/// `/tmp/` on unix and `%TEMP%` on Windows — `/tmp` does not exist on
+/// Windows runners (or default Windows installs), so the prior hard-coded
+/// path produced silent write failures and a broken cancel channel there.
 pub fn cancel_sentinel_path(job_id: &str) -> std::path::PathBuf {
-    std::path::PathBuf::from(format!("/tmp/disk-cutter-cancel-{job_id}.flag"))
+    std::env::temp_dir().join(format!("disk-cutter-cancel-{job_id}.flag"))
 }
 
 #[tauri::command]
