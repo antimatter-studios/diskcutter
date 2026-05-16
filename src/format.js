@@ -31,7 +31,7 @@ export function formatSession(ms) {
 
 export function makeJob(num, image, target, parentEntryId) {
   return {
-    id: `job-${Date.now()}-${num}`,
+    id: `job-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     num,
     image,
     target,
