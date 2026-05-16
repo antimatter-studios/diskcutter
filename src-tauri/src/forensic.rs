@@ -139,10 +139,7 @@ pub fn build_report(burn: &BurnRecord, logs: &[BurnLogRow], host: HostInfo) -> F
         error_message: burn.error_message.clone(),
         started_at_unix_ms: burn.started_at,
         finished_at_unix_ms: burn.finished_at,
-        burn_params: burn
-            .burn_params
-            .as_deref()
-            .and_then(parse_burn_params_json),
+        burn_params: burn.burn_params.as_deref().and_then(parse_burn_params_json),
     };
     let log_entries: Vec<LogEntry> = logs
         .iter()

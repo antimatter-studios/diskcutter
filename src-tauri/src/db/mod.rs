@@ -571,7 +571,10 @@ mod tests {
         assert!(obj.contains_key("chunk.bytes"));
         assert!(!obj.contains_key("language"));
         assert!(!obj.contains_key("theme"));
-        assert!(!obj.contains_key("verify.skip"), "empty-string values stay out");
+        assert!(
+            !obj.contains_key("verify.skip"),
+            "empty-string values stay out"
+        );
     }
 
     #[test]
@@ -597,8 +600,16 @@ mod tests {
     #[test]
     fn record_burn_started_inserts_running_row_and_log() {
         let db = fresh_db();
-        let id = record_burn_started(&db, "job-1", "/tmp/x.iso", "x.iso", 12345, "/dev/disk5", "{}")
-            .expect("insert returns id");
+        let id = record_burn_started(
+            &db,
+            "job-1",
+            "/tmp/x.iso",
+            "x.iso",
+            12345,
+            "/dev/disk5",
+            "{}",
+        )
+        .expect("insert returns id");
         let rows = burn_history_list_impl(&db, None).unwrap();
         assert_eq!(rows.len(), 1);
         let r = &rows[0];
@@ -621,8 +632,16 @@ mod tests {
     #[test]
     fn record_burn_completed_marks_success_and_appends_log() {
         let db = fresh_db();
-        let id =
-            record_burn_started(&db, "job-ok", "/tmp/x.iso", "x.iso", 100, "/dev/disk5", "{}").unwrap();
+        let id = record_burn_started(
+            &db,
+            "job-ok",
+            "/tmp/x.iso",
+            "x.iso",
+            100,
+            "/dev/disk5",
+            "{}",
+        )
+        .unwrap();
         record_burn_completed(
             &db, "job-ok", "src-hash", "rb-hash", true, 100, 1500, 1000, 2000,
         );
@@ -650,8 +669,16 @@ mod tests {
     #[test]
     fn record_burn_completed_marks_error_on_hash_mismatch() {
         let db = fresh_db();
-        let id =
-            record_burn_started(&db, "job-mm", "/tmp/x.iso", "x.iso", 100, "/dev/disk5", "{}").unwrap();
+        let id = record_burn_started(
+            &db,
+            "job-mm",
+            "/tmp/x.iso",
+            "x.iso",
+            100,
+            "/dev/disk5",
+            "{}",
+        )
+        .unwrap();
         record_burn_completed(&db, "job-mm", "a", "b", false, 100, 100, 100, 100);
         let rows = burn_history_list_impl(&db, None).unwrap();
         let r = &rows[0];
@@ -666,8 +693,16 @@ mod tests {
     #[test]
     fn record_burn_failed_marks_error_and_logs() {
         let db = fresh_db();
-        let id =
-            record_burn_started(&db, "job-fail", "/tmp/x.iso", "x.iso", 0, "/dev/disk5", "{}").unwrap();
+        let id = record_burn_started(
+            &db,
+            "job-fail",
+            "/tmp/x.iso",
+            "x.iso",
+            0,
+            "/dev/disk5",
+            "{}",
+        )
+        .unwrap();
         record_burn_failed(&db, "job-fail", "EIO", "boom");
         let r = &burn_history_list_impl(&db, None).unwrap()[0];
         assert_eq!(r.state, "error");
@@ -699,7 +734,8 @@ mod tests {
     #[test]
     fn append_log_appends_for_running_job_only() {
         let db = fresh_db();
-        let id = record_burn_started(&db, "job-l", "/tmp/x.iso", "x.iso", 0, "/dev/disk5", "{}").unwrap();
+        let id = record_burn_started(&db, "job-l", "/tmp/x.iso", "x.iso", 0, "/dev/disk5", "{}")
+            .unwrap();
         append_log(&db, "job-l", "warn", "yellow");
         // No-op against an unknown job_id.
         append_log(&db, "no-such", "warn", "ignored");
@@ -753,7 +789,8 @@ mod tests {
     #[test]
     fn burn_history_clear_empties_table_and_cascades_to_logs() {
         let db = fresh_db();
-        let id = record_burn_started(&db, "job-x", "/tmp/x.iso", "x.iso", 0, "/dev/disk5", "{}").unwrap();
+        let id = record_burn_started(&db, "job-x", "/tmp/x.iso", "x.iso", 0, "/dev/disk5", "{}")
+            .unwrap();
         record_burn_completed(&db, "job-x", "s", "r", true, 1, 1, 1, 1);
         assert_eq!(burn_history_list_impl(&db, None).unwrap().len(), 1);
         assert!(!burn_logs_list_impl(&db, id).unwrap().is_empty());
@@ -768,8 +805,10 @@ mod tests {
     #[test]
     fn burn_logs_list_filters_by_burn_id_and_orders_ascending() {
         let db = fresh_db();
-        let id1 = record_burn_started(&db, "j1", "/tmp/x.iso", "x.iso", 0, "/dev/disk5", "{}").unwrap();
-        let id2 = record_burn_started(&db, "j2", "/tmp/y.iso", "y.iso", 0, "/dev/disk6", "{}").unwrap();
+        let id1 =
+            record_burn_started(&db, "j1", "/tmp/x.iso", "x.iso", 0, "/dev/disk5", "{}").unwrap();
+        let id2 =
+            record_burn_started(&db, "j2", "/tmp/y.iso", "y.iso", 0, "/dev/disk6", "{}").unwrap();
         append_log(&db, "j1", "info", "one");
         append_log(&db, "j1", "info", "two");
         append_log(&db, "j2", "warn", "other");
