@@ -6,7 +6,7 @@
 use std::fs::{File, OpenOptions};
 #[cfg(unix)]
 use std::io::{Read, Result, Write};
-#[cfg(unix)]
+#[cfg(target_os = "macos")]
 use std::os::unix::fs::OpenOptionsExt;
 #[cfg(unix)]
 use std::path::{Path, PathBuf};

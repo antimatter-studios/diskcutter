@@ -103,6 +103,7 @@ fn unmount_macos(device: &Path) -> std::result::Result<(), String> {
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]
+#[allow(dead_code)]
 fn unmount_macos(_device: &Path) -> std::result::Result<(), String> {
     Ok(())
 }
