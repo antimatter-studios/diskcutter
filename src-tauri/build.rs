@@ -96,9 +96,14 @@ fn generate_migrations_index() {
     out.push_str("pub static MIGRATIONS: &[Migration] = &[\n");
     for (v, name, path) in &entries {
         let rel = path.strip_prefix(&manifest).unwrap_or(path);
+        // Normalise to forward slashes so the emitted include_str! literal
+        // is valid on Windows. `rel.display()` keeps native separators, and
+        // rustc parses `"\001_initial.sql"` as the NUL escape \0 + "01...",
+        // which fails the include_str! file read with "WinAPI strings cannot
+        // contain NULs". Windows accepts `/` in paths, so this is portable.
+        let rel_str = rel.to_string_lossy().replace('\\', "/");
         out.push_str(&format!(
-            "    Migration {{ version: {v}, name: {name:?}, sql: include_str!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/{}\")) }},\n",
-            rel.display()
+            "    Migration {{ version: {v}, name: {name:?}, sql: include_str!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/{rel_str}\")) }},\n",
         ));
     }
     out.push_str("];\n");
