@@ -45,6 +45,7 @@ impl HostInfo {
     }
 }
 
+#[cfg(unix)]
 fn gethostname() -> Option<String> {
     // libc::gethostname into a buffer; ignore errors.
     let mut buf = vec![0i8; 256];
@@ -54,6 +55,14 @@ fn gethostname() -> Option<String> {
     }
     let cstr = unsafe { std::ffi::CStr::from_ptr(buf.as_ptr()) };
     Some(cstr.to_string_lossy().into_owned())
+}
+
+#[cfg(windows)]
+fn gethostname() -> Option<String> {
+    // libc on Windows doesn't expose gethostname (it lives in WinSock and
+    // needs WSAStartup). %COMPUTERNAME% is set on every Windows session
+    // and reflects the NetBIOS hostname — good enough for the audit field.
+    std::env::var("COMPUTERNAME").ok()
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
