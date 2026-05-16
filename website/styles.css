@@ -419,4 +419,9 @@ footer.site-foot {
   display: flex;
   gap: 20px;
 }
-.foot-links a:hover { color: var(--hazard); }
+.foot-links a {
+  color: var(--ink);
+  border-bottom: 1.5px solid var(--ink);
+  padding-bottom: 1px;
+}
+.foot-links a:hover { color: var(--hazard); border-bottom-color: var(--hazard); }
