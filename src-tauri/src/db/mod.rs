@@ -92,23 +92,23 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
-// Most-recent non-terminal row for a job_id. Used by the
-// queued→running and running→terminal transitions to find the row to
-// update without callers needing to track the burn_jobs.id themselves.
-fn find_open_id(conn: &Connection, job_id: &str) -> Option<i64> {
+// Look up the burn_jobs row id for `job_id`, regardless of its state.
+// Pure SELECT — no side effects, no fallback INSERT. Callers that need
+// "find or create" semantics have to wire that explicitly (see
+// `enqueue_burn` below) so the decision is visible at the call site
+// instead of hiding inside this helper.
+fn find_burn_id(conn: &Connection, job_id: &str) -> Option<i64> {
     conn.query_row(
-        "SELECT id FROM burn_jobs
-         WHERE job_id = ?1 AND state IN ('queued','running')
-         ORDER BY queued_at DESC LIMIT 1",
+        "SELECT id FROM burn_jobs WHERE job_id = ?1",
         params![job_id],
         |r| r.get::<_, i64>(0),
     )
     .ok()
 }
 
-// Specifically the running row (post-record_burn_started). Used by
-// completion recorders so they can't accidentally close out a still-
-// queued row that never got a started_at.
+// Same lookup gated on state = 'running'. Used by completion recorders
+// so they can't accidentally close out a still-queued row that never
+// got a started_at.
 fn find_running_id(conn: &Connection, job_id: &str) -> Option<i64> {
     conn.query_row(
         "SELECT id FROM burn_jobs
@@ -120,28 +120,12 @@ fn find_running_id(conn: &Connection, job_id: &str) -> Option<i64> {
     .ok()
 }
 
-// Insert a 'queued' row for this job_id, or return the id of an
-// existing non-terminal row (idempotent w.r.t. re-enqueues during the
-// same lifecycle). Returns the burn_jobs.id on success.
-pub fn record_burn_queued(
-    db: &Db,
-    job_id: &str,
-    image_path: &str,
-    image_name: &str,
-    image_bytes: u64,
-    target_device: &str,
-) -> Option<i64> {
-    let conn = db.0.lock().ok()?;
-    insert_queued_row(
-        &conn,
-        job_id,
-        image_path,
-        image_name,
-        image_bytes,
-        target_device,
-    )
-}
-
+// Pure INSERT of a 'queued' row. No SELECT, no upsert. Returns `None`
+// on any failure — including the UNIQUE-constraint violation that
+// fires when a row with this `job_id` already exists. Callers are
+// expected to have checked for an existing row via `find_burn_id`
+// first and decided what to do (reuse, reset to queued, or treat as
+// caller error).
 fn insert_queued_row(
     conn: &Connection,
     job_id: &str,
@@ -150,9 +134,6 @@ fn insert_queued_row(
     image_bytes: u64,
     target_device: &str,
 ) -> Option<i64> {
-    if let Some(existing) = find_open_id(conn, job_id) {
-        return Some(existing);
-    }
     conn.execute(
         "INSERT INTO burn_jobs (job_id, image_path, image_name, image_bytes,
             target_device, state, queued_at)
@@ -179,6 +160,72 @@ fn insert_queued_row(
     Some(id)
 }
 
+// UPDATE an existing row's state back to 'queued', clearing the
+// terminal-state breadcrumbs (error_code, error_message, started_at,
+// finished_at, helper_pid, progress_file). Used by the retry path so a
+// failed burn can be re-attempted on the SAME row instead of a fresh
+// INSERT. Returns the row id on success; `None` if the row doesn't
+// exist or is in a non-terminal state (queued / running — re-arming
+// those is a no-op and the caller is expected to treat it as
+// "already in flight").
+fn reset_row_to_queued(conn: &Connection, job_id: &str) -> Option<i64> {
+    let id = find_burn_id(conn, job_id)?;
+    let updated = conn
+        .execute(
+            "UPDATE burn_jobs
+             SET state='queued',
+                 error_code=NULL,
+                 error_message=NULL,
+                 started_at=NULL,
+                 finished_at=NULL,
+                 helper_pid=NULL,
+                 progress_file=NULL
+             WHERE id=?1 AND state IN ('error','cancelled')",
+            params![id],
+        )
+        .ok()?;
+    if updated == 0 {
+        return None;
+    }
+    let _ = conn.execute(
+        "INSERT INTO burn_logs (burn_id, ts, level, message) VALUES (?1, ?2, 'info', 'requeued: retry')",
+        params![id, now_ms()],
+    );
+    Some(id)
+}
+
+// Idempotent enqueue used by the elevated-burn path in disks.rs as a
+// defensive net (in case the frontend's enqueue_burn round-trip
+// hasn't completed before start_write fires). The body is the
+// explicit two-step the caller would write inline: find_burn_id
+// first; if a row exists, return its id; otherwise INSERT. No upsert
+// magic — the read and the write are two visibly separate operations.
+//
+// Does NOT reset terminal rows — that's the Tauri `enqueue_burn`'s
+// job because it's the retry entry point and the semantic of
+// "requeue an existing terminal row" is caller-specific.
+pub fn record_burn_queued(
+    db: &Db,
+    job_id: &str,
+    image_path: &str,
+    image_name: &str,
+    image_bytes: u64,
+    target_device: &str,
+) -> Option<i64> {
+    let conn = db.0.lock().ok()?;
+    if let Some(existing) = find_burn_id(&conn, job_id) {
+        return Some(existing);
+    }
+    insert_queued_row(
+        &conn,
+        job_id,
+        image_path,
+        image_name,
+        image_bytes,
+        target_device,
+    )
+}
+
 // Transition the most recent open row for this job_id from queued →
 // running, stamping `started_at` and (for the elevated path)
 // `progress_file` / `helper_pid` so a future reattach can find the
@@ -194,17 +241,20 @@ pub fn record_burn_started(
         Ok(c) => c,
         Err(_) => return,
     };
-    let Some(id) = find_open_id(&conn, job_id) else {
+    let Some(id) = find_burn_id(&conn, job_id) else {
         return;
     };
     let pid_i: Option<i64> = helper_pid.map(|p| p as i64);
+    // State guard lives in the UPDATE: only queued/running rows can be
+    // (re-)stamped as started. Prevents accidentally reviving an
+    // already-terminal row if a caller invokes us out of order.
     let _ = conn.execute(
         "UPDATE burn_jobs
          SET state='running',
              started_at=COALESCE(started_at, ?1),
              progress_file=COALESCE(?2, progress_file),
              helper_pid=COALESCE(?3, helper_pid)
-         WHERE id=?4",
+         WHERE id=?4 AND state IN ('queued','running')",
         params![now_ms(), progress_file, pid_i, id],
     );
     let _ = conn.execute(
@@ -280,7 +330,9 @@ pub fn record_burn_failed(db: &Db, job_id: &str, code: &str, message: &str) {
     // Accept failure against either queued or running rows: failures
     // can land before the helper actually starts (FDA preflight, spawn
     // error) and we still want them recorded against the queued row.
-    let Some(id) = find_open_id(&conn, job_id) else {
+    // Terminal rows are explicitly rejected by the UPDATE's state
+    // guard so a stale event can't overwrite a settled outcome.
+    let Some(id) = find_burn_id(&conn, job_id) else {
         return;
     };
     let state = if code == "ECANCELLED" {
@@ -291,7 +343,7 @@ pub fn record_burn_failed(db: &Db, job_id: &str, code: &str, message: &str) {
     let _ = conn.execute(
         "UPDATE burn_jobs
          SET state=?1, error_code=?2, error_message=?3, finished_at=?4
-         WHERE id=?5",
+         WHERE id=?5 AND state IN ('queued','running')",
         params![state, code, message, now_ms(), id],
     );
     let _ = conn.execute(
@@ -494,7 +546,7 @@ pub fn append_log(db: &Db, job_id: &str, level: &str, message: &str) {
         Ok(c) => c,
         Err(_) => return,
     };
-    if let Some(id) = find_open_id(&conn, job_id) {
+    if let Some(id) = find_burn_id(&conn, job_id) {
         let _ = conn.execute(
             "INSERT INTO burn_logs (burn_id, ts, level, message) VALUES (?1, ?2, ?3, ?4)",
             params![id, now_ms(), level, message],
@@ -631,9 +683,22 @@ pub fn burn_jobs_clear(db: State<'_, Db>) -> Result<(), String> {
     Ok(())
 }
 
-// Frontend enqueue: inserts (or finds existing) a queued row. The
-// returned id isn't needed by the frontend right now but we surface
-// it for symmetry with the other recorders.
+// Frontend enqueue. The job_id is unique per logical burn (one row per
+// queued/running/finished attempt of the same image+target). The
+// decision tree is explicit at this call site — no hidden upsert:
+//
+//   - find_burn_id finds the row regardless of state
+//   - if the row is queued or running, this is a duplicate add; return
+//     the existing id as a no-op so the caller's idempotent re-enqueue
+//     flow doesn't break
+//   - if the row is in a terminal state (error / cancelled / success),
+//     this is a retry; reset the row back to 'queued' and return its id
+//   - if no row exists, INSERT a fresh queued row
+//
+// The UNIQUE INDEX on burn_jobs(job_id) is what guarantees we'll
+// either find an existing row OR be free to insert; we'll never get
+// the "found nothing, but INSERT fails because a different code path
+// snuck a row in" race the old upsert was prone to.
 #[tauri::command]
 pub fn enqueue_burn(
     db: State<'_, Db>,
@@ -644,15 +709,33 @@ pub fn enqueue_burn(
     target_device: String,
 ) -> Result<i64, String> {
     let conn = db.0.lock().map_err(|e| e.to_string())?;
-    insert_queued_row(
-        &conn,
-        &job_id,
-        &image_path,
-        &image_name,
-        image_bytes,
-        &target_device,
-    )
-    .ok_or_else(|| format!("failed to enqueue burn for {job_id}"))
+    if let Some(existing_id) = find_burn_id(&conn, &job_id) {
+        let state: Option<String> = conn
+            .query_row(
+                "SELECT state FROM burn_jobs WHERE id = ?1",
+                params![existing_id],
+                |r| r.get(0),
+            )
+            .ok();
+        match state.as_deref() {
+            Some("queued") | Some("running") => Ok(existing_id),
+            Some("error") | Some("cancelled") | Some("success") => {
+                reset_row_to_queued(&conn, &job_id)
+                    .ok_or_else(|| format!("failed to requeue burn for {job_id}"))
+            }
+            _ => Err(format!("burn_jobs row {existing_id} has unknown state")),
+        }
+    } else {
+        insert_queued_row(
+            &conn,
+            &job_id,
+            &image_path,
+            &image_name,
+            image_bytes,
+            &target_device,
+        )
+        .ok_or_else(|| format!("failed to enqueue burn for {job_id}"))
+    }
 }
 
 // Hard-delete a job row. burn_logs cascades. Allowed in any state —
@@ -940,6 +1023,77 @@ mod tests {
         let id2 = record_burn_queued(&db, "job-q", "/p", "n", 1, "/dev/disk5").unwrap();
         assert_eq!(id1, id2, "re-enqueue should return same row id");
         assert_eq!(burn_jobs_list_impl(&db, None).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn record_burn_queued_returns_existing_id_for_terminal_rows() {
+        // Old behaviour: when the existing row was 'error' or
+        // 'cancelled', record_burn_queued INSERTed a fresh row,
+        // producing duplicate burn_jobs entries for the same job_id.
+        // New behaviour: find_burn_id finds the row regardless of
+        // state and we return its id without INSERTing — the UNIQUE
+        // INDEX on job_id would refuse the duplicate anyway.
+        let db = fresh_db();
+        let id1 = record_burn_queued(&db, "job-err", "/p", "n", 1, "/dev/disk5").unwrap();
+        record_burn_failed(&db, "job-err", "ENEEDS_FDA", "denied");
+        let id2 = record_burn_queued(&db, "job-err", "/p", "n", 1, "/dev/disk5").unwrap();
+        assert_eq!(
+            id1, id2,
+            "must reuse the existing error row, not INSERT a duplicate"
+        );
+        assert_eq!(burn_jobs_list_impl(&db, None).unwrap().len(), 1);
+        // Note: record_burn_queued does NOT reset the row's state —
+        // that's reset_row_to_queued's job, invoked from the retry
+        // path. The row stays at 'error' here.
+        let r = &burn_jobs_list_impl(&db, None).unwrap()[0];
+        assert_eq!(r.state, "error");
+    }
+
+    #[test]
+    fn reset_row_to_queued_revives_an_errored_burn() {
+        let db = fresh_db();
+        let id = record_burn_queued(&db, "job-r", "/p", "n", 1, "/dev/disk5").unwrap();
+        record_burn_started(&db, "job-r", Some("/tmp/p"), Some(42));
+        record_burn_failed(&db, "job-r", "EIO", "boom");
+        {
+            let r = &burn_jobs_list_impl(&db, None).unwrap()[0];
+            assert_eq!(r.state, "error");
+            assert!(r.started_at.is_some());
+            assert!(r.finished_at.is_some());
+            assert_eq!(r.helper_pid, Some(42));
+        }
+        let conn = db.0.lock().unwrap();
+        let reset_id = reset_row_to_queued(&conn, "job-r").expect("must reset terminal row");
+        drop(conn);
+        assert_eq!(reset_id, id);
+        let r = &burn_jobs_list_impl(&db, None).unwrap()[0];
+        assert_eq!(r.state, "queued");
+        assert!(r.error_code.is_none());
+        assert!(r.error_message.is_none());
+        assert!(r.started_at.is_none(), "started_at cleared on requeue");
+        assert!(r.finished_at.is_none(), "finished_at cleared on requeue");
+        assert!(r.helper_pid.is_none(), "helper_pid cleared on requeue");
+        assert!(
+            r.progress_file.is_none(),
+            "progress_file cleared on requeue"
+        );
+    }
+
+    #[test]
+    fn reset_row_to_queued_refuses_to_revive_a_running_burn() {
+        let db = fresh_db();
+        record_burn_queued(&db, "job-running", "/p", "n", 1, "/dev/disk5").unwrap();
+        record_burn_started(&db, "job-running", None, None);
+        let conn = db.0.lock().unwrap();
+        let result = reset_row_to_queued(&conn, "job-running");
+        assert!(result.is_none(), "running row should not be resettable");
+    }
+
+    #[test]
+    fn reset_row_to_queued_is_none_for_unknown_job_id() {
+        let db = fresh_db();
+        let conn = db.0.lock().unwrap();
+        assert!(reset_row_to_queued(&conn, "ghost").is_none());
     }
 
     #[test]

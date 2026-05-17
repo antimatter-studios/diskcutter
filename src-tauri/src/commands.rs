@@ -397,22 +397,31 @@ mod tests {
     }
 
     #[test]
-    fn lookup_burn_by_job_id_prefers_most_recent_row() {
+    fn duplicate_job_id_insert_fails_with_unique_violation() {
         let conn = fresh_conn();
-        // Two rows with same job_id — should win the later one.
+        // The UNIQUE INDEX on burn_jobs.job_id (migration 0004) makes
+        // a second INSERT with the same job_id a hard error. The old
+        // upsert path used to silently produce two rows; this is the
+        // regression guard.
         conn.execute(
             "INSERT INTO burn_jobs(job_id, image_path, image_name, image_bytes, target_device, state, queued_at)
              VALUES ('dup', '/tmp/x', 'x', 100, '/dev/old', 'error', 1000)",
             [],
         ).unwrap();
-        conn.execute(
+        let second = conn.execute(
             "INSERT INTO burn_jobs(job_id, image_path, image_name, image_bytes, target_device, state, queued_at)
              VALUES ('dup', '/tmp/x', 'x', 200, '/dev/new', 'success', 2000)",
             [],
-        ).unwrap();
+        );
+        let err = second.expect_err("second INSERT must fail").to_string();
+        assert!(
+            err.contains("UNIQUE constraint failed: burn_jobs.job_id"),
+            "expected UNIQUE violation, got: {err}"
+        );
+        // Original row survives untouched.
         let r = lookup_burn_by_job_id(&conn, "dup").unwrap();
-        assert_eq!(r.target_device, "/dev/new");
-        assert_eq!(r.image_bytes, 200);
+        assert_eq!(r.target_device, "/dev/old");
+        assert_eq!(r.image_bytes, 100);
     }
 
     #[test]
