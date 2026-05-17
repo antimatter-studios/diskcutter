@@ -429,7 +429,7 @@ input,select{font:inherit;color:inherit}
   gap:14px;align-items:center;padding:10px 12px;
 }
 .entry-icon{font-size:18px;text-align:center}
-.entry-image-name{font-family:var(--display);font-weight:700;font-size:14px}
+.entry-image-name{font-family:var(--display);font-weight:700;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
 .entry-image-meta{color:var(--mute)}
 .entry-counter{font-weight:700;letter-spacing:.06em;text-align:right}
 .entry-dispatch{justify-self:end}
@@ -471,22 +471,33 @@ input,select{font:inherit;color:inherit}
 
 .queue{
   flex:1;min-height:0;overflow:auto;padding:0 28px 0;
+  /* Single grid spanning the header + every job row, so the image
+     column sizes against rows uniformly via subgrid. Header, entries
+     strip, and each .job descend into this grid via subgrid.
+     `minmax(0, 1fr)` on the image column (not bare `1fr`) — without
+     the explicit min, the column refuses to shrink below the longest
+     filename's intrinsic width, and a single non-wrapping filename
+     pushes the whole grid wider than the queue container, which in
+     turn forces every `grid-column: 1 / -1` element (.pstrip,
+     .job-detail, .scan-strip) past the right edge. minmax(0, …)
+     lets the cell shrink and clip; the filename cell handles the
+     visual truncation with text-overflow: ellipsis below. */
+  display:grid;
+  grid-template-columns: 28px 38px minmax(0, 1fr) 36px 280px 60px 200px 200px;
+  column-gap:16px;align-content:start;
 }
 
+.queue-entries{grid-column:1 / -1}
+
 .queue-head{
-  display:grid;
-  /* Mirror .job-head columns exactly so header labels line up with the
-     data cells. Leading column is the row chevron's gutter (left
-     empty in the header), trailing column is the remove button's
-     gutter. Keeping the two grids in sync is the only reason the
-     header reads as a header at all. */
-  grid-template-columns: 28px 38px 1fr 36px 280px 60px 200px 200px;
-  gap:16px;align-items:start;
+  display:grid;grid-template-columns:subgrid;grid-column:1 / -1;
+  align-items:start;
   padding:12px 4px;border-bottom:1.5px solid var(--ink);
   letter-spacing:.06em;color:var(--mute);font-weight:600;
 }
 
 .job{
+  display:grid;grid-template-columns:subgrid;grid-column:1 / -1;
   border-bottom:1.5px solid var(--ink);
   background:transparent;
   transition:background .14s;
@@ -495,9 +506,8 @@ input,select{font:inherit;color:inherit}
 .job--danger{background:rgba(255,74,23,.04)}
 
 .job-head{
-  display:grid;
-  grid-template-columns: 28px 38px 1fr 36px 280px 60px 200px 200px;
-  gap:16px;align-items:start;
+  display:grid;grid-template-columns:subgrid;grid-column:1 / -1;
+  align-items:start;
   padding:18px 4px;cursor:pointer;
 }
 .job--compact .job-head{padding:12px 4px}
@@ -510,8 +520,14 @@ input,select{font:inherit;color:inherit}
   padding:1px 8px;box-sizing:border-box;line-height:1.35;
 }
 
+/* The image cell holds the filename + meta. `min-width: 0` lets the
+   cell shrink below its content's intrinsic width, which is what
+   allows the child `.job-image-name`/`.entry-image-name` ellipsis to
+   actually engage — without it, grid/flex items default to
+   `min-width: auto` and refuse to clip. */
+.job-image,.entry-image{min-width:0}
 .job-image-name{font-family:var(--display);font-weight:700;font-size:15.5px;line-height:1.15;
-  letter-spacing:-.005em;word-break:break-all;}
+  letter-spacing:-.005em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;}
 .job-image-meta{display:flex;gap:6px;align-items:center;font-family:var(--mono);font-size:10.5px;
   color:var(--ink-2);margin-top:5px;letter-spacing:.03em;}
 .job-image-meta .dot{opacity:.4}
@@ -625,6 +641,7 @@ input,select{font:inherit;color:inherit}
 
 /* expanded drawer */
 .job-detail{
+  grid-column:1 / -1;
   border-top:1.5px solid var(--ink);background:var(--sidebar-bg);
   padding:20px 24px;
 }
@@ -669,6 +686,7 @@ input,select{font:inherit;color:inherit}
 /* Deep-scan progress strip — sits between the row's main line and the
    expanded detail. Visible only while a scan is in flight. */
 .scan-strip{
+  grid-column:1 / -1;
   display:grid;grid-template-columns:auto 1fr auto;gap:10px;align-items:center;
   padding:5px 14px;border-top:1.5px dashed var(--ink-2);
   background:var(--bone);color:var(--ink-2);font-size:10.5px;letter-spacing:.06em;
@@ -1161,6 +1179,7 @@ input,select{font:inherit;color:inherit}
    sized by length_bytes. Sits between .job-head and the expanded
    .job-detail so it doesn't fight the .job-head grid columns. */
 .pstrip{
+  grid-column:1 / -1;
   margin:6px 12px 8px 12px;
   display:flex;align-items:center;gap:10px;
 }
