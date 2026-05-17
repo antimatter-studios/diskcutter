@@ -50,8 +50,10 @@ export function formatSession(ms) {
 }
 
 export function makeJob(num, image, target, parentEntryId) {
+  // No `id` here. The backend's enqueue_burn mints the canonical integer
+  // job_id and the store stamps it onto the job before insertion. This
+  // function only fills in the UI-side defaults.
   return {
-    id: `job-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     num,
     image,
     target,

@@ -91,15 +91,9 @@ describe('makeJob', () => {
     expect(job.verification).toBeNull();
   });
 
-  it('generates a job id with timestamp and random suffix', () => {
+  it('does not mint an id — the backend assigns the integer PK on enqueue', () => {
     const job = makeJob(3, {}, null);
-    expect(job.id).toMatch(/^job-\d+-[a-z0-9]+$/);
-  });
-
-  it('generates unique job ids across successive calls', () => {
-    const a = makeJob(1, {}, null);
-    const b = makeJob(1, {}, null);
-    expect(a.id).not.toBe(b.id);
+    expect(job.id).toBeUndefined();
   });
 
   it('accepts null target for an awaiting-target job', () => {
@@ -221,10 +215,14 @@ describe('makeJob purity & uniqueness', () => {
     expect(tgt).toEqual(tgtSnap);
   });
 
-  it('different num values produce different ids', () => {
+  it('does not stamp an id; the integer PK comes from the backend', () => {
+    // makeJob is purely a UI defaults factory now. The store calls
+    // enqueue_burn first, gets the backend-assigned integer, and
+    // attaches it as `.id` before inserting the row.
     const a = makeJob(1, {}, null);
     const b = makeJob(2, {}, null);
-    expect(a.id).not.toBe(b.id);
+    expect(a.id).toBeUndefined();
+    expect(b.id).toBeUndefined();
   });
 
   it('preserves identity of image and target (reference, not copy)', () => {

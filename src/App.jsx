@@ -311,7 +311,8 @@ function App() {
         format: details.format,
         sha256: details.sha256 || '—',
       };
-      const jobId = useQueueStore.getState().addImage(image, copies);
+      const jobId = await useQueueStore.getState().addImage(image, copies);
+      if (jobId == null) return;
       // Kick off content validation in the background. Result lands on
       // 'disk-cutter://image-validated' and flips job.validation; the
       // START QUEUE gate refuses to burn until it's 'valid'.
@@ -533,6 +534,13 @@ function App() {
     retryInFlightRef.current.add(jobId);
     useQueueStore.getState().setRetrying(jobId, true);
     try {
+      // The previous attempt landed in a terminal state (error / cancelled).
+      // requeue_burn resets the row back to 'queued' on the backend so the
+      // subsequent start_write has something to flip queued → running. The
+      // call also asserts the row exists — a missing row would be a caller
+      // bug worth surfacing as an explicit error rather than silently
+      // proceeding into start_write.
+      await invoke('requeue_burn', { jobId: job.id });
       await invoke('start_write', {
         jobId: job.id,
         imagePath: job.image.path,

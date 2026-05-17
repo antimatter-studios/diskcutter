@@ -181,56 +181,70 @@ export const useQueueStore = create((set, get) => ({
     }
   },
 
-  addImage(image, requestedCopies) {
+  // The backend mints the canonical integer job_id; we await it before
+  // inserting the row into the store. Without the round-trip the store
+  // and the DB would disagree about which integer represents this
+  // burn — a hazard now that the id is no longer a frontend invention.
+  async addImage(image, requestedCopies) {
     const requested = Math.max(1, Math.floor(Number(requestedCopies) || 1));
+    let jobId = null;
+    try {
+      jobId = await invoke('enqueue_burn', {
+        imagePath: image.path,
+        imageName: image.name,
+        imageBytes: image.bytes || 0,
+        targetDevice: '',
+      });
+    } catch (e) {
+      console.error('enqueue_burn failed', e);
+      return null;
+    }
     // New rows land at the TOP of the queue — operators expect the row they
     // just added to be visible without scrolling, and the `num` we stamp is
     // just a stable label that doesn't have to mirror insertion order.
     const num = get().order.length + 1;
-    const job = makeJob(num, image, null);
+    const job = { ...makeJob(num, image, null), id: jobId };
     if (requested === 1) {
       set((s) => ({
-        jobs: { ...s.jobs, [job.id]: job },
-        order: [job.id, ...s.order],
+        jobs: { ...s.jobs, [jobId]: job },
+        order: [jobId, ...s.order],
       }));
     } else {
       const entry = makeEntry(image, requested);
       set((s) => ({
-        jobs: { ...s.jobs, [job.id]: { ...job, parentEntryId: entry.id } },
-        order: [job.id, ...s.order],
+        jobs: { ...s.jobs, [jobId]: { ...job, parentEntryId: entry.id } },
+        order: [jobId, ...s.order],
         entries: [...s.entries, { ...entry, copiesRemaining: entry.copiesRemaining - 1 }],
       }));
     }
-    fire('enqueue_burn', {
-      jobId: job.id,
-      imagePath: image.path,
-      imageName: image.name,
-      imageBytes: image.bytes || 0,
-      targetDevice: '',
-    });
-    return job.id;
+    return jobId;
   },
 
-  dispatchFromEntry(entryId) {
+  async dispatchFromEntry(entryId) {
     const s = get();
     const entry = s.entries.find((en) => en.id === entryId);
     if (!entry || entry.copiesRemaining <= 0) return;
-    const num = s.order.length + 1;
-    const job = makeJob(num, entry.image, null, entry.id);
+    let jobId = null;
+    try {
+      jobId = await invoke('enqueue_burn', {
+        imagePath: entry.image.path,
+        imageName: entry.image.name,
+        imageBytes: entry.image.bytes || 0,
+        targetDevice: '',
+      });
+    } catch (e) {
+      console.error('enqueue_burn failed', e);
+      return;
+    }
+    const num = get().order.length + 1;
+    const job = { ...makeJob(num, entry.image, null, entry.id), id: jobId };
     set((cur) => ({
-      jobs: { ...cur.jobs, [job.id]: job },
-      order: [job.id, ...cur.order],
+      jobs: { ...cur.jobs, [jobId]: job },
+      order: [jobId, ...cur.order],
       entries: cur.entries
         .map((en) => (en.id === entryId ? decrementEntry(en) : en))
         .filter((en) => en.copiesRemaining > 0),
     }));
-    fire('enqueue_burn', {
-      jobId: job.id,
-      imagePath: entry.image.path,
-      imageName: entry.image.name,
-      imageBytes: entry.image.bytes || 0,
-      targetDevice: '',
-    });
   },
 
   setTarget(jobId, disk) {
@@ -291,30 +305,30 @@ export const useQueueStore = create((set, get) => ({
     removed.forEach((jobId) => fire('remove_burn_job', { jobId }));
   },
 
-  flashAnother(jobId) {
+  async flashAnother(jobId) {
+    const j = get().jobs[jobId];
+    if (!j) return;
+    const imageRef = j.image;
     let newId = null;
-    let imageRef = null;
-    set((s) => {
-      const j = s.jobs[jobId];
-      if (!j) return s;
-      const num = s.order.length + 1;
-      const newJob = makeJob(num, j.image, null);
-      newId = newJob.id;
-      imageRef = j.image;
-      return {
-        jobs: { ...s.jobs, [newJob.id]: newJob },
-        order: [...s.order, newJob.id],
-      };
-    });
-    if (newId && imageRef) {
-      fire('enqueue_burn', {
-        jobId: newId,
+    try {
+      newId = await invoke('enqueue_burn', {
         imagePath: imageRef.path,
         imageName: imageRef.name,
         imageBytes: imageRef.bytes || 0,
         targetDevice: '',
       });
+    } catch (e) {
+      console.error('enqueue_burn failed', e);
+      return;
     }
+    set((s) => {
+      const num = s.order.length + 1;
+      const newJob = { ...makeJob(num, imageRef, null), id: newId };
+      return {
+        jobs: { ...s.jobs, [newId]: newJob },
+        order: [...s.order, newId],
+      };
+    });
   },
 
   setRetrying(jobId, retrying) {
