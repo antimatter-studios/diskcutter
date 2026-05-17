@@ -6,6 +6,26 @@ export function formatBytes(n) {
   return `${n} B`;
 }
 
+// Compact human form for the queue row meta line: `31.98GB`. No
+// space inside the unit because the row is tight on horizontal
+// space and pairs the size with the validation chip — a tight glyph
+// reads more like one token alongside the chip.
+export function formatBytesCompact(n) {
+  if (n == null) return '—';
+  if (n >= 1e9) return `${(n / 1e9).toFixed(2)}GB`;
+  if (n >= 1e6) return `${(n / 1e6).toFixed(1)}MB`;
+  if (n >= 1e3) return `${(n / 1e3).toFixed(0)}kB`;
+  return `${n}B`;
+}
+
+// "Human + exact" form for the expanded detail block: `31.98GB
+// (31,000,000,000 bytes)`. The detail view has room for both, and the
+// exact bytes matter when comparing image size to target capacity.
+export function formatBytesExtended(n) {
+  if (n == null) return '—';
+  return `${formatBytesCompact(n)} (${n.toLocaleString()} bytes)`;
+}
+
 export function formatBps(bps) {
   if (bps == null) return '—';
   if (bps >= 1e9) return `${(bps / 1e9).toFixed(2)} GB/s`;
