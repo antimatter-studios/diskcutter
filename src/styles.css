@@ -634,6 +634,13 @@ input,select{font:inherit;color:inherit}
 .detail-block{
   border:1.5px solid var(--ink);background:var(--paper);
   padding:14px 16px;
+  /* Grid items default to min-width:auto, so an unbreakable token in
+     a descendant cell (long FS label, ISO9660 PVD identifier, raw
+     SHA hash) makes the block expand past its track and push the
+     whole row off the right edge of the window. min-width:0 plus
+     overflow-x clipping confines content to the assigned track. */
+  min-width:0;
+  overflow-x:hidden;
 }
 .detail-block--full{grid-column:1/-1}
 .detail-label{
@@ -1211,12 +1218,21 @@ input,select{font:inherit;color:inherit}
 
 /* ─────────── Partition Table (expanded detail) ─────────── */
 
-.ptable{display:flex;flex-direction:column;gap:6px}
+.ptable{display:flex;flex-direction:column;gap:6px;min-width:0}
 .ptable-head{
-  display:flex;align-items:center;gap:6px;
+  display:flex;align-items:center;gap:6px;flex-wrap:wrap;
   color:var(--mute);
 }
-.ptable .ver-table{margin-top:2px}
+.ptable .ver-table{margin-top:2px;width:100%}
+/* Long FS / partition labels and PVD identifiers can be 16-32 chars
+   of unbroken text. Let them wrap inside the cell instead of widening
+   the column. The mono cells (#, start, size) stay nowrap so numeric
+   columns don't get ugly mid-number breaks. */
+.ptable .ver-table td{
+  word-break:break-word;
+  overflow-wrap:anywhere;
+}
+.ptable .ver-table td.mono{word-break:normal;overflow-wrap:normal}
 .ptable-boot{
   /* Star glyph for bootable partitions; dot placeholder for the rest
      so the column stays a fixed width even when empty. */
