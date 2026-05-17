@@ -128,7 +128,7 @@ pub fn restore_snapshot(recovery: String, device: String) -> Result<RestoreResul
 /// Build a forensic burn-record report for a finished job. `format`
 /// is either `"json"` (canonical pretty JSON with sha256 digest) or
 /// `"markdown"` (human-readable summary). The report aggregates the
-/// burn_history row + burn_logs rows + current host info; the digest
+/// burn_jobs row + burn_logs rows + current host info; the digest
 /// is recomputed on the fly so a tampered DB row produces a digest
 /// mismatch.
 #[tauri::command]
@@ -213,38 +213,36 @@ pub struct BackupResultJson {
     pub avg_bytes_per_sec: u64,
 }
 
-/// Pull the burn_history row + burn_logs rows for a given `job_id`.
+/// Pull the burn_jobs row + burn_logs rows for a given `job_id`.
 /// Pure-ish — does the DB lookup but doesn't compute anything. The
 /// forensic-export command uses this to build its inputs.
-fn load_burn_and_logs(
-    db: &Db,
-    job_id: &str,
-) -> Result<(db::BurnRecord, Vec<db::BurnLogRow>), String> {
+fn load_burn_and_logs(db: &Db, job_id: &str) -> Result<(db::BurnJob, Vec<db::BurnLogRow>), String> {
     let conn = db.0.lock().map_err(|e| format!("db lock: {e}"))?;
     let burn = lookup_burn_by_job_id(&conn, job_id)
-        .ok_or_else(|| format!("no burn_history row for job_id {job_id}"))?;
+        .ok_or_else(|| format!("no burn_jobs row for job_id {job_id}"))?;
     let logs = lookup_logs_for_burn(&conn, burn.id)?;
     Ok((burn, logs))
 }
 
-/// SELECT one row out of burn_history by job_id, falling back to the
+/// SELECT one row out of burn_jobs by job_id, falling back to the
 /// most recent matching row if there are multiple (e.g. a re-run with
 /// the same id, which the schema allows). Pure SQL over the open
 /// connection — no app-level dependencies.
-fn lookup_burn_by_job_id(conn: &rusqlite::Connection, job_id: &str) -> Option<db::BurnRecord> {
+fn lookup_burn_by_job_id(conn: &rusqlite::Connection, job_id: &str) -> Option<db::BurnJob> {
     let sql = r#"
         SELECT id, job_id, image_path, image_name, image_bytes, target_device,
                source_sha256, readback_sha256, verify_match, bytes_written,
                elapsed_ms, avg_write_bps, avg_verify_bps,
                state, error_code, error_message,
-               started_at, finished_at, burn_params
-        FROM burn_history
+               queued_at, started_at, finished_at,
+               progress_file, helper_pid
+        FROM burn_jobs
         WHERE job_id = ?1
-        ORDER BY started_at DESC
+        ORDER BY queued_at DESC
         LIMIT 1
     "#;
     conn.query_row(sql, [job_id], |r| {
-        Ok(db::BurnRecord {
+        Ok(db::BurnJob {
             id: r.get(0)?,
             job_id: r.get(1)?,
             image_path: r.get(2)?,
@@ -253,7 +251,7 @@ fn lookup_burn_by_job_id(conn: &rusqlite::Connection, job_id: &str) -> Option<db
             target_device: r.get(5)?,
             source_sha256: r.get(6)?,
             readback_sha256: r.get(7)?,
-            verify_match: r.get(8)?,
+            verify_match: r.get::<_, Option<i32>>(8)?.map(|v| v != 0),
             bytes_written: r.get::<_, Option<i64>>(9)?.map(|v| v as u64),
             elapsed_ms: r.get::<_, Option<i64>>(10)?.map(|v| v as u64),
             avg_write_bps: r.get::<_, Option<i64>>(11)?.map(|v| v as u64),
@@ -261,9 +259,11 @@ fn lookup_burn_by_job_id(conn: &rusqlite::Connection, job_id: &str) -> Option<db
             state: r.get(13)?,
             error_code: r.get(14)?,
             error_message: r.get(15)?,
-            started_at: r.get(16)?,
-            finished_at: r.get(17)?,
-            burn_params: r.get(18)?,
+            queued_at: r.get(16)?,
+            started_at: r.get(17)?,
+            finished_at: r.get(18)?,
+            progress_file: r.get(19)?,
+            helper_pid: r.get(20)?,
         })
     })
     .ok()
@@ -309,8 +309,8 @@ mod tests {
 
     fn insert_burn_row(conn: &Connection, job_id: &str) -> i64 {
         conn.execute(
-            "INSERT INTO burn_history(job_id, image_path, image_name, image_bytes, target_device, state, started_at)
-             VALUES (?1, '/tmp/x.iso', 'x.iso', 4096, '/dev/disk5', 'completed', 1715600000000)",
+            "INSERT INTO burn_jobs(job_id, image_path, image_name, image_bytes, target_device, state, queued_at)
+             VALUES (?1, '/tmp/x.iso', 'x.iso', 4096, '/dev/disk5', 'success', 1715600000000)",
             [job_id],
         ).unwrap();
         conn.last_insert_rowid()
@@ -337,13 +337,13 @@ mod tests {
         let conn = fresh_conn();
         // Two rows with same job_id — should win the later one.
         conn.execute(
-            "INSERT INTO burn_history(job_id, image_path, image_name, image_bytes, target_device, state, started_at)
-             VALUES ('dup', '/tmp/x', 'x', 100, '/dev/old', 'failed', 1000)",
+            "INSERT INTO burn_jobs(job_id, image_path, image_name, image_bytes, target_device, state, queued_at)
+             VALUES ('dup', '/tmp/x', 'x', 100, '/dev/old', 'error', 1000)",
             [],
         ).unwrap();
         conn.execute(
-            "INSERT INTO burn_history(job_id, image_path, image_name, image_bytes, target_device, state, started_at)
-             VALUES ('dup', '/tmp/x', 'x', 200, '/dev/new', 'completed', 2000)",
+            "INSERT INTO burn_jobs(job_id, image_path, image_name, image_bytes, target_device, state, queued_at)
+             VALUES ('dup', '/tmp/x', 'x', 200, '/dev/new', 'success', 2000)",
             [],
         ).unwrap();
         let r = lookup_burn_by_job_id(&conn, "dup").unwrap();

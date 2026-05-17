@@ -25,6 +25,78 @@ function orderedJobs(state) {
   return state.order.map((id) => state.jobs[id]);
 }
 
+// Fire-and-forget invoke wrapper. The DB writes for queue persistence
+// are non-load-bearing for the UI — if persistence fails the user can
+// still burn, they just lose the survive-restart property. So we log
+// the failure and move on rather than rolling back the local state.
+function fire(name, args) {
+  invoke(name, args).catch((e) => console.error(`${name} failed`, e));
+}
+
+// Backend BurnJob → frontend Job. Lossy by design: runtime-derived
+// fields (validation, partitions, boot, speed/eta/elapsed) are not
+// persisted. They re-populate as backend events fire after hydrate.
+function jobFromBackend(row, num) {
+  // DB state → UI state. 'cancelled' collapses to 'error' for now
+  // (the UI doesn't have a dedicated cancelled glyph; the error code
+  // ECANCELLED carries the distinction).
+  const stateMap = {
+    queued: 'idle',
+    running: 'writing',
+    success: 'success',
+    error: 'error',
+    cancelled: 'error',
+  };
+  const image = {
+    name: row.image_name,
+    path: row.image_path,
+    bytes: row.image_bytes,
+    // size string is a render artefact; UI will recompute from bytes.
+    size: undefined,
+    sectors: undefined,
+    format: undefined,
+    sha256: '—',
+  };
+  // target_device is the raw device path the user picked previously.
+  // We surface it as a stub `target` object so the row renders with
+  // its device label; the user may still need to re-pick to populate
+  // the richer fields (size, partitions). Empty string means "no
+  // target chosen yet" — backend column is NOT NULL so we store an
+  // empty string sentinel at enqueue time.
+  const target = row.target_device
+    ? { device: row.target_device, name: row.target_device }
+    : null;
+  const uiState = stateMap[row.state] || 'error';
+  // Validation badge is meaningless for terminal rows: an errored / cancelled
+  // / succeeded row doesn't need its image re-classified, and showing
+  // VALIDATING… on top of an error row reads as "still trying", which is a
+  // lie. Only queued rows that we'll re-validate post-hydrate stay 'pending'.
+  const validation = (uiState === 'success' || uiState === 'error')
+    ? 'valid'
+    : 'pending';
+  return {
+    id: row.job_id,
+    num,
+    image,
+    target,
+    parentEntryId: null,
+    state: uiState,
+    progress: 0,
+    verifyProgress: 0,
+    speed: '—',
+    eta: '—',
+    elapsed: '—',
+    errorCode: row.error_code || undefined,
+    errorMessage: row.error_message || undefined,
+    verification: null,
+    validation,
+    validationDetail: null,
+    partitions: null,
+    boot: null,
+    finishedAt: row.finished_at || undefined,
+  };
+}
+
 // Rebuild map+order from an array. Preserves original insertion order
 // for any ID already in `state.order`; appends new IDs (shouldn't
 // happen for the existing reducers but the fallback keeps the shape
@@ -50,24 +122,67 @@ export const useQueueStore = create((set, get) => ({
 
   // -- mutations driven by user actions -----------------------------
 
+  // Pull every non-success row from burn_jobs into the store. Called
+  // once at app mount so the queue survives a parent-app or dev-server
+  // restart. Success rows are intentionally excluded — they'd cause
+  // the operator to see ancient already-finished jobs every relaunch.
+  async hydrate() {
+    try {
+      const rows = await invoke('burn_jobs_active');
+      if (!Array.isArray(rows)) return;
+      // DB returns oldest-first (ORDER BY queued_at ASC); flip so the
+      // most recently queued row appears at the top of the visual queue.
+      const ordered = rows.slice().reverse();
+      const jobs = {};
+      const order = [];
+      ordered.forEach((row, i) => {
+        const j = jobFromBackend(row, i + 1);
+        jobs[j.id] = j;
+        order.push(j.id);
+      });
+      set({ jobs, order });
+      // Re-kick image validation for any rehydrated idle row whose
+      // image_path looks usable. Without this, every queued row from
+      // a previous session sits at validation='pending' forever — the
+      // Burn button stays grey because the arm gate also checks valid.
+      for (const id of order) {
+        const j = jobs[id];
+        if (j.state === 'idle' && j.image && j.image.path) {
+          startValidation(j.id, j.image.path);
+        }
+      }
+    } catch (e) {
+      console.error('hydrate failed', e);
+    }
+  },
+
   addImage(image, requestedCopies) {
     const requested = Math.max(1, Math.floor(Number(requestedCopies) || 1));
-    // Use the eventual num so the generated ID matches the row label.
+    // New rows land at the TOP of the queue — operators expect the row they
+    // just added to be visible without scrolling, and the `num` we stamp is
+    // just a stable label that doesn't have to mirror insertion order.
     const num = get().order.length + 1;
     const job = makeJob(num, image, null);
     if (requested === 1) {
       set((s) => ({
         jobs: { ...s.jobs, [job.id]: job },
-        order: [...s.order, job.id],
+        order: [job.id, ...s.order],
       }));
     } else {
       const entry = makeEntry(image, requested);
       set((s) => ({
         jobs: { ...s.jobs, [job.id]: { ...job, parentEntryId: entry.id } },
-        order: [...s.order, job.id],
+        order: [job.id, ...s.order],
         entries: [...s.entries, { ...entry, copiesRemaining: entry.copiesRemaining - 1 }],
       }));
     }
+    fire('enqueue_burn', {
+      jobId: job.id,
+      imagePath: image.path,
+      imageName: image.name,
+      imageBytes: image.bytes || 0,
+      targetDevice: '',
+    });
     return job.id;
   },
 
@@ -79,11 +194,18 @@ export const useQueueStore = create((set, get) => ({
     const job = makeJob(num, entry.image, null, entry.id);
     set((cur) => ({
       jobs: { ...cur.jobs, [job.id]: job },
-      order: [...cur.order, job.id],
+      order: [job.id, ...cur.order],
       entries: cur.entries
         .map((en) => (en.id === entryId ? decrementEntry(en) : en))
         .filter((en) => en.copiesRemaining > 0),
     }));
+    fire('enqueue_burn', {
+      jobId: job.id,
+      imagePath: entry.image.path,
+      imageName: entry.image.name,
+      imageBytes: entry.image.bytes || 0,
+      targetDevice: '',
+    });
   },
 
   setTarget(jobId, disk) {
@@ -92,6 +214,9 @@ export const useQueueStore = create((set, get) => ({
       if (!j) return s;
       return { jobs: { ...s.jobs, [jobId]: { ...j, target: disk } } };
     });
+    if (disk?.device) {
+      fire('set_burn_target', { jobId, targetDevice: disk.device });
+    }
   },
 
   removeJob(jobId) {
@@ -100,45 +225,71 @@ export const useQueueStore = create((set, get) => ({
       const { [jobId]: _drop, ...rest } = s.jobs;
       return { jobs: rest, order: s.order.filter((id) => id !== jobId) };
     });
+    fire('remove_burn_job', { jobId });
   },
 
   clearDone() {
+    const removed = [];
     set((s) => {
-      const survivors = s.order.filter((id) => s.jobs[id].state !== 'success');
-      if (survivors.length === s.order.length) return s;
-      const nextJobs = {};
-      for (const id of survivors) nextJobs[id] = s.jobs[id];
-      return { jobs: nextJobs, order: survivors };
-    });
-  },
-
-  removeStaleSuccess(thresholdMs) {
-    set((s) => {
-      const now = Date.now();
       const survivors = s.order.filter((id) => {
-        const j = s.jobs[id];
-        if (j.state !== 'success') return true;
-        if (!j.finishedAt) return true;
-        return (now - j.finishedAt) < thresholdMs;
+        if (s.jobs[id].state === 'success') {
+          removed.push(id);
+          return false;
+        }
+        return true;
       });
       if (survivors.length === s.order.length) return s;
       const nextJobs = {};
       for (const id of survivors) nextJobs[id] = s.jobs[id];
       return { jobs: nextJobs, order: survivors };
     });
+    removed.forEach((jobId) => fire('remove_burn_job', { jobId }));
+  },
+
+  removeStaleSuccess(thresholdMs) {
+    const removed = [];
+    set((s) => {
+      const now = Date.now();
+      const survivors = s.order.filter((id) => {
+        const j = s.jobs[id];
+        if (j.state !== 'success') return true;
+        if (!j.finishedAt) return true;
+        if ((now - j.finishedAt) < thresholdMs) return true;
+        removed.push(id);
+        return false;
+      });
+      if (survivors.length === s.order.length) return s;
+      const nextJobs = {};
+      for (const id of survivors) nextJobs[id] = s.jobs[id];
+      return { jobs: nextJobs, order: survivors };
+    });
+    removed.forEach((jobId) => fire('remove_burn_job', { jobId }));
   },
 
   flashAnother(jobId) {
+    let newId = null;
+    let imageRef = null;
     set((s) => {
       const j = s.jobs[jobId];
       if (!j) return s;
       const num = s.order.length + 1;
       const newJob = makeJob(num, j.image, null);
+      newId = newJob.id;
+      imageRef = j.image;
       return {
         jobs: { ...s.jobs, [newJob.id]: newJob },
         order: [...s.order, newJob.id],
       };
     });
+    if (newId && imageRef) {
+      fire('enqueue_burn', {
+        jobId: newId,
+        imagePath: imageRef.path,
+        imageName: imageRef.name,
+        imageBytes: imageRef.bytes || 0,
+        targetDevice: '',
+      });
+    }
   },
 
   setRetrying(jobId, retrying) {
@@ -246,21 +397,6 @@ export const useQueueStore = create((set, get) => ({
       return { jobs: { ...s.jobs, [jobId]: { ...j, boot: boot || null } } };
     });
   },
-
-  setBurnParams(jobId, paramsJson) {
-    // Backend ships the snapshot as a JSON string so the inner shape
-    // can grow without bumping the IPC type — parse here once and
-    // store the decoded map so consumers don't have to.
-    let parsed = null;
-    if (paramsJson) {
-      try { parsed = JSON.parse(paramsJson); } catch { parsed = null; }
-    }
-    set((s) => {
-      const j = s.jobs[jobId];
-      if (!j) return s;
-      return { jobs: { ...s.jobs, [jobId]: { ...j, burnParams: parsed } } };
-    });
-  },
 }));
 
 // Selectors -- co-located so consumers import one symbol per concern.
@@ -319,12 +455,6 @@ export function attachQueueListeners({ onFdaError, onImageInvalid } = {}) {
       bootable: !!p.bootable,
       sources: Array.isArray(p.sources) ? p.sources : [],
     });
-  }).then((u) => subs.push(u));
-
-  listen('disk-cutter://burn-started', (e) => {
-    if (!mounted) return;
-    const p = e.payload;
-    useQueueStore.getState().setBurnParams(p.job_id, p.burn_params);
   }).then((u) => subs.push(u));
 
   return () => {

@@ -29,10 +29,9 @@ use std::path::{Path, PathBuf};
 use fs_core::{BlockRead, FileDevice};
 use partitions::probe::{probe, PartitionKind};
 use serde::Serialize;
-use std::io::Read;
 
+use crate::decoder_chain::DiskReader;
 use crate::inspect::{make_part_info, table_kind_label, PartitionSummary};
-use crate::readers::ImageReaderRegistry;
 use crate::validate::{classify_buffer, ValidationReport, SNIFF_WINDOW_BYTES};
 
 /// The container-format family of an image file. Used internally to
@@ -104,6 +103,7 @@ pub enum BootSource {
 /// either gets a `DiskImage` or it falls back to "invalid image" with
 /// the error's `to_string()`.
 #[derive(Debug)]
+#[allow(dead_code)]
 pub enum ImageError {
     Io(std::io::Error),
     UnsupportedFormat(String),
@@ -265,11 +265,8 @@ impl DiskImage {
 /// the byte count is `SNIFF_WINDOW_BYTES_INSPECT` (0x8200) so all
 /// FAT/NTFS/exFAT/ext/HFS+/ISO 9660 signatures are reachable.
 fn decompressed_prefix(path: &Path) -> Result<Backend, ImageError> {
-    let registry = ImageReaderRegistry::with_defaults();
-    let (_, factory) = registry
-        .probe(path)
-        .ok_or_else(|| ImageError::UnsupportedFormat(extension_string(path)))?;
-    let mut reader = factory.open(path).map_err(std::io::Error::other)?;
+    let mut reader =
+        DiskReader::open(path).map_err(|e| ImageError::Io(std::io::Error::other(e)))?;
     let mut buf = vec![0u8; SNIFF_WINDOW_BYTES];
     let mut filled = 0usize;
     while filled < buf.len() {
@@ -283,6 +280,7 @@ fn decompressed_prefix(path: &Path) -> Result<Backend, ImageError> {
     Ok(Backend::Compressed { prefix: buf })
 }
 
+#[allow(dead_code)]
 fn extension_string(path: &Path) -> String {
     path.extension()
         .and_then(|s| s.to_str())

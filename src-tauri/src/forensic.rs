@@ -8,7 +8,7 @@
 //! incident response ("which images touched this drive in the last
 //! 90 days"), and IT shops that need to prove what they did.
 //!
-//! Inputs are pure data: the `BurnRecord` + log rows already returned
+//! Inputs are pure data: the `BurnJob` + log rows already returned
 //! by the SQLite layer, plus a `HostInfo` struct that the caller
 //! gathers at export time. The render functions take those values
 //! by reference and return strings — no I/O, no database access, no
@@ -20,7 +20,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::db::{BurnLogRow, BurnRecord};
+use crate::db::{BurnJob, BurnLogRow};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HostInfo {
@@ -59,9 +59,9 @@ fn gethostname() -> Option<String> {
 
 #[cfg(windows)]
 fn gethostname() -> Option<String> {
-    // libc on Windows doesn't expose gethostname (it lives in WinSock and
-    // needs WSAStartup). %COMPUTERNAME% is set on every Windows session
-    // and reflects the NetBIOS hostname — good enough for the audit field.
+    // No libc::gethostname on Windows. COMPUTERNAME is set by the OS for
+    // every interactive + service session, which is the same answer
+    // GetComputerNameW would give for the local machine.
     std::env::var("COMPUTERNAME").ok()
 }
 
@@ -93,11 +93,6 @@ pub struct BurnSection {
     pub error_message: Option<String>,
     pub started_at_unix_ms: i64,
     pub finished_at_unix_ms: Option<i64>,
-    /// Decoded user-tunable write knobs captured at burn-start. Each
-    /// key/value comes from the `config` table snapshot taken by
-    /// `db::collect_burn_params`; absent keys mean the operator never
-    /// set them. `None` for rows from before 0002_burn_params.
-    pub burn_params: Option<BTreeMap<String, String>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -107,29 +102,8 @@ pub struct LogEntry {
     pub message: String,
 }
 
-/// Decode the JSON blob `db::collect_burn_params` writes back into a
-/// stable, sorted map for the report. Best-effort — a malformed blob
-/// reports as None and the report just omits the section.
-fn parse_burn_params_json(s: &str) -> Option<BTreeMap<String, String>> {
-    let value: serde_json::Value = serde_json::from_str(s).ok()?;
-    let obj = value.as_object()?;
-    let mut out = BTreeMap::new();
-    for (k, v) in obj {
-        if let Some(s) = v.as_str() {
-            out.insert(k.clone(), s.to_string());
-        } else {
-            out.insert(k.clone(), v.to_string());
-        }
-    }
-    if out.is_empty() {
-        None
-    } else {
-        Some(out)
-    }
-}
-
 /// Build a forensic report from already-fetched data. Pure — no I/O.
-pub fn build_report(burn: &BurnRecord, logs: &[BurnLogRow], host: HostInfo) -> ForensicReport {
+pub fn build_report(burn: &BurnJob, logs: &[BurnLogRow], host: HostInfo) -> ForensicReport {
     let burn_section = BurnSection {
         job_id: burn.job_id.clone(),
         image_name: burn.image_name.clone(),
@@ -146,9 +120,11 @@ pub fn build_report(burn: &BurnRecord, logs: &[BurnLogRow], host: HostInfo) -> F
         state: burn.state.clone(),
         error_code: burn.error_code.clone(),
         error_message: burn.error_message.clone(),
-        started_at_unix_ms: burn.started_at,
+        // started_at_unix_ms is nullable in the DB (a job may have
+        // been queued but never started before being report-exported);
+        // we fall back to queued_at so the field remains populated.
+        started_at_unix_ms: burn.started_at.unwrap_or(burn.queued_at),
         finished_at_unix_ms: burn.finished_at,
-        burn_params: burn.burn_params.as_deref().and_then(parse_burn_params_json),
     };
     let log_entries: Vec<LogEntry> = logs
         .iter()
@@ -278,13 +254,6 @@ pub fn to_markdown(report: &ForensicReport) -> String {
     if let Some(msg) = &report.burn.error_message {
         s.push_str(&format!("- Error message: {msg}\n"));
     }
-    if let Some(params) = &report.burn.burn_params {
-        s.push_str("\n## Burn parameters\n");
-        // BTreeMap iteration is already sorted by key — stable output.
-        for (k, v) in params {
-            s.push_str(&format!("- `{k}`: {v}\n"));
-        }
-    }
     s.push_str("\n## Host\n");
     s.push_str(&format!("- OS: {}\n", report.host.os));
     s.push_str(&format!("- Arch: {}\n", report.host.arch));
@@ -323,8 +292,8 @@ fn hex(bytes: impl AsRef<[u8]>) -> String {
 mod tests {
     use super::*;
 
-    fn sample_burn() -> BurnRecord {
-        BurnRecord {
+    fn sample_burn() -> BurnJob {
+        BurnJob {
             id: 1,
             job_id: "job-7".into(),
             image_path: "/tmp/ubuntu.iso".into(),
@@ -338,12 +307,14 @@ mod tests {
             elapsed_ms: Some(120_000),
             avg_write_bps: Some(40_000_000),
             avg_verify_bps: Some(80_000_000),
-            state: "completed".into(),
+            state: "success".into(),
             error_code: None,
             error_message: None,
-            started_at: 1_715_600_000_000,
+            queued_at: 1_715_600_000_000,
+            started_at: Some(1_715_600_000_000),
             finished_at: Some(1_715_600_120_000),
-            burn_params: Some(r#"{"writer.impl":"pipelined","chunk.bytes":"1048576"}"#.into()),
+            progress_file: None,
+            helper_pid: None,
         }
     }
 

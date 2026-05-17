@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { matchShortcut, isEditableTarget, queueReady } from '../src/keymap.js';
+import { matchShortcut, isEditableTarget } from '../src/keymap.js';
 
 const evt = (overrides = {}) => ({
   key: 'o',
@@ -75,29 +75,8 @@ describe('isEditableTarget', () => {
   });
 });
 
-describe('queueReady', () => {
-  it('is false when not confirmed', () => {
-    expect(queueReady([{ state: 'idle', target: { device: '/dev/x' }, validation: 'valid' }], false)).toBe(false);
-  });
-
-  it('is false when no idle+target job exists', () => {
-    expect(queueReady([{ state: 'idle', target: null }], true)).toBe(false);
-    expect(queueReady([{ state: 'writing', target: { device: '/dev/x' } }], true)).toBe(false);
-    expect(queueReady([], true)).toBe(false);
-  });
-
-  it('is true when confirmed and at least one idle+target job exists', () => {
-    expect(queueReady([{ state: 'idle', target: { device: '/dev/x' }, validation: 'valid' }], true)).toBe(true);
-  });
-
-  it('tolerates non-array jobs', () => {
-    expect(queueReady(null, true)).toBe(false);
-    expect(queueReady(undefined, true)).toBe(false);
-  });
-});
-
 // ---------------------------------------------------------------------------
-// Gap-fill: malformed events/bindings, non-string keys, queueReady mixed-state.
+// Gap-fill: malformed events/bindings, non-string keys.
 // ---------------------------------------------------------------------------
 
 describe('matchShortcut malformed-input handling', () => {
@@ -138,28 +117,3 @@ describe('isEditableTarget additional cases', () => {
   });
 });
 
-describe('queueReady additional cases', () => {
-  it('is true when at least one idle+target job is mixed with non-ready jobs', () => {
-    const jobs = [
-      { state: 'writing', target: { device: '/dev/x' } },
-      { state: 'idle', target: null },
-      { state: 'idle', target: { device: '/dev/y' }, validation: 'valid' },
-    ];
-    expect(queueReady(jobs, true)).toBe(true);
-  });
-
-  it('tolerates null entries in the jobs array', () => {
-    expect(queueReady([null, { state: 'idle', target: { device: '/dev/x' }, validation: 'valid' }], true)).toBe(true);
-    expect(queueReady([null, undefined], true)).toBe(false);
-  });
-
-  it('rejects success or error states even with target attached', () => {
-    expect(queueReady([{ state: 'success', target: { device: '/dev/x' } }], true)).toBe(false);
-    expect(queueReady([{ state: 'error', target: { device: '/dev/x' } }], true)).toBe(false);
-  });
-
-  it('rejects jobs whose validation is still pending or invalid', () => {
-    expect(queueReady([{ state: 'idle', target: { device: '/dev/x' }, validation: 'pending' }], true)).toBe(false);
-    expect(queueReady([{ state: 'idle', target: { device: '/dev/x' }, validation: 'invalid' }], true)).toBe(false);
-  });
-});

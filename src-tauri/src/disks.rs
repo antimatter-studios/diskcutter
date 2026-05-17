@@ -8,7 +8,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::db::{self, Db};
 use crate::pipeline::{self, BurnError, VerifyMismatch};
-use crate::readers::ImageReaderRegistry;
+use crate::source;
 #[cfg(unix)]
 use crate::writers::RawDeviceIo;
 use crate::writers::{DeviceIo, PlainFileDeviceIo};
@@ -27,10 +27,7 @@ pub struct ImageDetails {
 #[tauri::command]
 pub fn inspect_image(path: String) -> Result<ImageDetails, String> {
     let p = Path::new(&path);
-    let registry = ImageReaderRegistry::with_defaults();
-    let (info, _factory) = registry
-        .probe(p)
-        .ok_or_else(|| format!("unsupported image format: {path}"))?;
+    let info = source::probe(p).ok_or_else(|| format!("unsupported image format: {path}"))?;
     let name = p
         .file_name()
         .and_then(|s| s.to_str())
@@ -88,19 +85,6 @@ pub struct JobFailure {
     pub job_id: String,
     pub error_code: String,
     pub error_message: String,
-}
-
-/// Emitted once per burn the moment `record_burn_started` has run.
-/// Carries the JSON snapshot of the user-tunable write knobs so the
-/// frontend's JobDetail panel can show "wrote with: writer=pipelined,
-/// chunk=1 MiB, …" alongside the live progress.
-#[derive(Serialize, Clone)]
-pub struct BurnStartedPayload {
-    pub job_id: String,
-    /// JSON object — same shape `db::collect_burn_params` produces.
-    /// Keep as a raw string so the frontend can `JSON.parse` it
-    /// (the inner shape changes freely without bumping our IPC types).
-    pub burn_params: String,
 }
 
 #[derive(Default)]
@@ -672,44 +656,30 @@ pub fn start_write(
     target_device: String,
 ) -> Result<(), String> {
     let p = Path::new(&image_path);
-    let registry = ImageReaderRegistry::with_defaults();
-    let (info, _factory) = registry
-        .probe(p)
-        .ok_or_else(|| format!("unsupported image format: {image_path}"))?;
+    let info = source::probe(p).ok_or_else(|| format!("unsupported image format: {image_path}"))?;
     let image_name = p
         .file_name()
         .and_then(|s| s.to_str())
         .unwrap_or("")
         .to_string();
 
-    // Snapshot the user-tunable write knobs at burn-start time so the
-    // forensic record carries which pref values were in effect for
-    // this specific row. Done before any elevation/FDA gating so even
-    // failed-to-start rows show the params the operator had set.
-    let burn_params = {
+    {
+        // Idempotent w.r.t. enqueue_burn the frontend may have already
+        // called; this only inserts if no open row exists. Lifecycle
+        // flips to 'running' separately:
+        //   - in-process path: at the top of the burn thread below
+        //   - elevated path:   after osascript spawn, with helper_pid
+        //                      and progress_file populated
         let db = app.state::<Db>();
-        let snapshot = db::collect_burn_params(&db);
-        db::record_burn_started(
+        db::record_burn_queued(
             &db,
             &job_id,
             &image_path,
             &image_name,
             info.uncompressed_bytes,
             &target_device,
-            &snapshot,
         );
-        snapshot
-    };
-    // Surface the snapshot to the frontend so the JobDetail panel can
-    // display "wrote with: writer=pipelined, chunk=1 MiB, …" without
-    // having to query burn_history.
-    let _ = app.emit(
-        "disk-cutter://burn-started",
-        BurnStartedPayload {
-            job_id: job_id.clone(),
-            burn_params: burn_params.clone(),
-        },
-    );
+    }
 
     let needs_elevation = target_device.starts_with("/dev/") && !is_privileged();
     if needs_elevation {
@@ -756,6 +726,9 @@ pub fn start_write(
     let target = target_device;
 
     std::thread::spawn(move || {
+        // Flip queued → running at the moment the burn thread starts.
+        // No helper_pid/progress_file because this is in-process.
+        db::record_burn_started(&app.state::<Db>(), &id, None, None);
         let outcome = run_job(&app, &id, &image, &target, &flag);
         let _ = std::fs::remove_file(cancel_sentinel_path(&id));
         let db = app.state::<Db>();
@@ -903,6 +876,17 @@ fn spawn_elevated_burn_inner(
     if let Some(reg) = app.try_state::<ElevatedJobs>() {
         reg.0.lock().unwrap().insert(job_id.clone(), child.id());
     }
+    // Flip queued → running in the DB and stamp the reattach
+    // breadcrumbs (helper_pid + progress_file). If the parent app
+    // dies after this point, on next startup the reattach scan can
+    // find this row, confirm the pid is still alive, and re-spawn
+    // a tail_helper against the same progress file.
+    db::record_burn_started(
+        &app.state::<Db>(),
+        &job_id,
+        Some(&progress_path),
+        Some(child.id()),
+    );
 
     let app_for_tail = app.clone();
     let job_for_tail = job_id.clone();
@@ -1287,14 +1271,9 @@ fn run_job(
     let image = Path::new(image_path);
     let target = Path::new(target_device);
 
-    let registry = ImageReaderRegistry::with_defaults();
-    let (_info, factory) = registry
-        .probe(image)
-        .ok_or_else(|| fail(job_id, "EUNSUPPORTED", "unsupported image format"))?;
-
-    let mut reader = factory
-        .open(image)
-        .map_err(|e| fail(job_id, "EIMAGE", &format!("open image: {e}")))?;
+    let (mut reader, info) = source::open_streaming(image)
+        .map_err(|e| fail(job_id, "EUNSUPPORTED", &format!("open image: {e}")))?;
+    let total_bytes = info.uncompressed_bytes;
 
     let device_io: Box<dyn DeviceIo> = pick_device_io(target_device);
     let writer = device_io
@@ -1303,22 +1282,28 @@ fn run_job(
 
     let burn_id = job_id.to_string();
     let burn_app = app.clone();
-    let burn = pipeline::burn(&mut *reader, writer, pipeline::DEFAULT_CHUNK, cancel, |p| {
-        let _ = burn_app.emit(
-            "disk-cutter://job-update",
-            make_job_update(
-                &burn_id,
-                "writing",
-                p.bytes_done,
-                p.bytes_total,
-                p.bytes_per_sec,
-            ),
-        );
-    })
+    let burn = pipeline::burn(
+        &mut *reader,
+        total_bytes,
+        writer,
+        pipeline::DEFAULT_CHUNK,
+        cancel,
+        |p| {
+            let _ = burn_app.emit(
+                "disk-cutter://job-update",
+                make_job_update(
+                    &burn_id,
+                    "writing",
+                    p.bytes_done,
+                    p.bytes_total,
+                    p.bytes_per_sec,
+                ),
+            );
+        },
+    )
     .map_err(|e| fail_for_burn_error(job_id, &e))?;
 
-    let mut reader2 = factory
-        .open(image)
+    let (mut reader2, _) = source::open_streaming(image)
         .map_err(|e| fail(job_id, "EIMAGE", &format!("reopen image: {e}")))?;
     let mut device_reader = device_io
         .open_read(target)
@@ -1328,6 +1313,7 @@ fn run_job(
     let verify_app = app.clone();
     let verify = pipeline::verify(
         &mut *reader2,
+        total_bytes,
         &mut *device_reader,
         pipeline::DEFAULT_CHUNK,
         cancel,
@@ -1433,6 +1419,172 @@ fn format_eta(done: u64, total: u64, bps: u64) -> String {
         format!("{m}m")
     } else {
         format!("{m:02}:{s:02}")
+    }
+}
+
+// `kill -0 <pid>` probes for process existence without sending a real
+// signal — works for root-owned osascript pids because the parent app
+// doesn't need send-signal rights, only the existence check. The
+// alternative (libc::kill via the nix crate) would pull in another
+// dependency for one syscall.
+fn pid_alive(pid: u32) -> bool {
+    std::process::Command::new("kill")
+        .args(["-0", &pid.to_string()])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+/// Reattach the UI to helper processes that outlived the parent app.
+/// Called once at startup after the DB is open. Walks every
+/// non-terminal burn_jobs row; for the running ones, checks the
+/// recorded helper_pid + progress_file are both still alive and re-
+/// spawns a tail thread against the existing JSONL. Rows whose helper
+/// is gone get marked EORPHAN so the UI doesn't show them as eternally
+/// running.
+pub fn reattach_running_helpers(app: &AppHandle) {
+    use std::path::Path;
+    let db = app.state::<Db>();
+    let rows = match db::burn_jobs_reattachable_rows(&db) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("reattach: scan failed: {e}");
+            return;
+        }
+    };
+    for row in rows {
+        if row.state != "running" {
+            // Queued rows just rehydrate into the frontend queue and
+            // wait for the operator to press Start.
+            continue;
+        }
+        let job_id = row.job_id.clone();
+        let Some(pid_i) = row.helper_pid else {
+            db::record_burn_failed(
+                &db,
+                &job_id,
+                "EORPHAN",
+                "running row missing helper_pid; cannot reattach",
+            );
+            continue;
+        };
+        let pid = pid_i as u32;
+        let Some(progress_path) = row.progress_file.clone() else {
+            db::record_burn_failed(
+                &db,
+                &job_id,
+                "EORPHAN",
+                "running row missing progress_file; cannot reattach",
+            );
+            continue;
+        };
+        if !pid_alive(pid) {
+            db::record_burn_failed(
+                &db,
+                &job_id,
+                "EORPHAN",
+                "recorded helper pid is no longer alive",
+            );
+            continue;
+        }
+        if !Path::new(&progress_path).exists() {
+            db::record_burn_failed(
+                &db,
+                &job_id,
+                "EORPHAN",
+                "progress file no longer exists; helper may have crashed",
+            );
+            continue;
+        }
+        // Helper is still live. Re-register in the in-memory caches
+        // start_write would have populated, then spawn a reattach
+        // tail thread that polls pid liveness instead of waiting on
+        // an owned Child handle.
+        if let Some(reg) = app.try_state::<ElevatedJobs>() {
+            reg.0.lock().unwrap().insert(job_id.clone(), pid);
+        }
+        if let Some(active) = app.try_state::<ActiveBurns>() {
+            active.insert(ActiveBurn {
+                job_id: job_id.clone(),
+                target: row.target_device.clone(),
+                kind: BurnKind::Elevated,
+            });
+        }
+        let app_for_tail = app.clone();
+        let job_for_tail = job_id.clone();
+        let path_for_tail = progress_path;
+        std::thread::spawn(move || {
+            tail_helper_reattach(app_for_tail, job_for_tail, path_for_tail, pid);
+        });
+    }
+}
+
+// Reattach variant of tail_helper. Differs only in liveness detection:
+// the original takes ownership of a `Child` so it can call try_wait();
+// after a parent restart we have no Child handle, so we fall back to
+// kill(0) probes against the recorded pid. JSONL parsing/emission is
+// otherwise identical — emit_helper_line handles both ends.
+fn tail_helper_reattach(app: AppHandle, job_id: String, path: String, pid: u32) {
+    use std::io::{BufRead, BufReader, Seek, SeekFrom};
+    use std::time::{Duration, Instant};
+
+    let start = Instant::now();
+    let mut last_pos: u64 = 0;
+    let mut terminal_seen = false;
+
+    loop {
+        if std::path::Path::new(&path).exists() {
+            if let Ok(mut file) = std::fs::File::open(&path) {
+                let _ = file.seek(SeekFrom::Start(last_pos));
+                let mut reader = BufReader::new(file);
+                loop {
+                    let mut line = String::new();
+                    match reader.read_line(&mut line) {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            last_pos += n as u64;
+                            if let Some(kind) = emit_helper_line(&app, &job_id, &line) {
+                                if kind == "complete" || kind == "error" {
+                                    terminal_seen = true;
+                                }
+                            }
+                        }
+                        Err(_) => break,
+                    }
+                }
+            }
+        }
+        if terminal_seen {
+            break;
+        }
+        if !pid_alive(pid) {
+            // Helper exited without writing a terminal record.
+            db::record_burn_failed(
+                &app.state::<Db>(),
+                &job_id,
+                "EORPHAN",
+                "helper exited without finishing",
+            );
+            app.state::<ActiveBurns>().remove(&job_id);
+            let _ = app.emit(
+                "disk-cutter://job-error",
+                JobFailure {
+                    job_id: job_id.clone(),
+                    error_code: "EORPHAN".into(),
+                    error_message: "helper exited without finishing".into(),
+                },
+            );
+            break;
+        }
+        if start.elapsed() > Duration::from_secs(3600) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(cancel_sentinel_path(&job_id));
+    if let Some(reg) = app.try_state::<ElevatedJobs>() {
+        reg.0.lock().unwrap().remove(&job_id);
     }
 }
 
@@ -2015,7 +2167,11 @@ mod tests {
         std::fs::write(&p, vec![0u8; 4096]).unwrap();
         let info = inspect_image(p.to_string_lossy().into_owned()).unwrap();
         assert_eq!(info.name, "boot.iso");
-        assert_eq!(info.format, "ISO 9660 / RAW");
+        // Label shape changed in Phase 3 (decoder-chain migration): the
+        // legacy "ISO 9660 / RAW" combo label is gone — raw ISO sources
+        // now surface as a single "ISO 9660" string. Compression layered
+        // on top would surface as e.g. "XZ" instead of "ISO 9660 / XZ".
+        assert_eq!(info.format, "ISO 9660");
         assert_eq!(info.source_bytes, 4096);
         assert_eq!(info.uncompressed_bytes, 4096);
         assert_eq!(info.sectors, 4096 / 512);

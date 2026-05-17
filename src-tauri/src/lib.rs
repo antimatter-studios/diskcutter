@@ -3,6 +3,7 @@ pub mod catalog;
 pub mod cli;
 pub mod commands;
 mod db;
+pub mod decoder_chain;
 #[cfg(target_os = "macos")]
 mod disk_arb;
 mod disks;
@@ -16,21 +17,24 @@ pub mod pipeline;
 pub mod qemu;
 pub mod readers;
 pub mod snapshot;
+pub mod source;
 pub mod sparse;
 pub mod url_fetch;
 pub mod validate;
 pub mod writers;
+pub mod xz_footer;
 
 pub use cli::run_cli;
 pub use helper::run_helper;
 
 use db::{
-    burn_history_clear, burn_history_list, burn_logs_list, config_all, config_get, config_set, Db,
+    burn_jobs_active, burn_jobs_clear, burn_jobs_list, burn_logs_for_job, burn_logs_list,
+    config_all, config_get, config_set, enqueue_burn, remove_burn_job, set_burn_target, Db,
 };
 use disks::{
     abort_and_quit, app_info, cancel_write, check_fda, find_orphan_helpers, has_active_burns,
-    inspect_image, kill_orphan_helpers, list_disks, open_fda_settings, start_write, verify_image,
-    ActiveBurns, CancelRegistry, ElevatedJobs,
+    inspect_image, kill_orphan_helpers, list_disks, open_fda_settings, reattach_running_helpers,
+    start_write, verify_image, ActiveBurns, CancelRegistry, ElevatedJobs,
 };
 use std::sync::Mutex;
 use tauri::menu::{AboutMetadataBuilder, MenuBuilder, SubmenuBuilder};
@@ -83,9 +87,14 @@ pub fn run() {
             config_get,
             config_set,
             config_all,
-            burn_history_list,
-            burn_history_clear,
+            burn_jobs_list,
+            burn_jobs_active,
+            burn_jobs_clear,
+            enqueue_burn,
+            remove_burn_job,
+            set_burn_target,
             burn_logs_list,
+            burn_logs_for_job,
             commands::inspect_partitions,
             commands::inspect_image_partitions,
             commands::inspect_image_bootable,
@@ -103,14 +112,21 @@ pub fn run() {
             validate::validate_image_contents,
         ])
         .setup(|app| {
-            match db::open(app.handle()) {
-                Ok(conn) => {
-                    app.manage(Db(Mutex::new(conn)));
-                }
-                Err(e) => {
-                    eprintln!("db::open failed, continuing without persistence: {e}");
-                }
-            }
+            // Persistence is load-bearing: burn_jobs is the source of truth
+            // for both live queue and history, and every Tauri command on the
+            // burn hot-path expects Db state to be managed. A failed open
+            // must abort startup — a silent fallthrough leaves the app
+            // looking healthy until the operator clicks Burn and `state::<Db>()`
+            // panics mid-write.
+            let conn = db::open(app.handle()).map_err(|e| format!("db::open failed: {e}"))?;
+            app.manage(Db(Mutex::new(conn)));
+            // After the DB is managed: walk the non-terminal
+            // burn_jobs rows and rehook the UI to any helper
+            // processes that survived a prior parent-process
+            // restart. Rows whose helper is no longer alive
+            // get marked EORPHAN here so the frontend
+            // hydrate won't show them as eternally running.
+            reattach_running_helpers(app.handle());
 
             let authors: Vec<String> = env!("CARGO_PKG_AUTHORS")
                 .split(':')

@@ -58,6 +58,14 @@
   --line: 2px;
   --mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
   --display: 'Space Grotesk', 'Helvetica Neue', Helvetica, system-ui, sans-serif;
+
+  /* Uniform button height for every interactive control in a job row
+     (chevron, pick-target, burn, delete). Chips (num / vbadge) derive
+     their height naturally from a shared padding+line-height pattern.
+     Currently buttons are pulled down toward chip height so the whole
+     row reads as a single thin band — bump back to ~36px if click
+     targets feel cramped. */
+  --row-btn-h: 24px;
 }
 
 /* Dark palette — every surface var from :root gets a dark counterpart so the
@@ -429,7 +437,9 @@ input,select{font:inherit;color:inherit}
 
 .btn{
   font-family:var(--mono);font-size:11px;letter-spacing:.08em;
-  padding:8px 12px;background:transparent;border:0;cursor:pointer;font-weight:600;
+  padding:0 12px;background:transparent;border:0;cursor:pointer;font-weight:600;
+  height:var(--row-btn-h);box-sizing:border-box;
+  display:inline-flex;align-items:center;justify-content:center;
 }
 .btn-ghost{color:var(--ink)}
 .btn-ghost:hover{background:rgba(12,12,11,.08)}
@@ -470,8 +480,8 @@ input,select{font:inherit;color:inherit}
      empty in the header), trailing column is the remove button's
      gutter. Keeping the two grids in sync is the only reason the
      header reads as a header at all. */
-  grid-template-columns: 28px 38px 2.2fr 36px 1.6fr 60px 2.4fr 24px;
-  gap:16px;align-items:center;
+  grid-template-columns: 28px 38px 1fr 36px 280px 60px 200px 200px;
+  gap:16px;align-items:start;
   padding:12px 4px;border-bottom:1.5px solid var(--ink);
   letter-spacing:.06em;color:var(--mute);font-weight:600;
 }
@@ -486,17 +496,18 @@ input,select{font:inherit;color:inherit}
 
 .job-head{
   display:grid;
-  grid-template-columns: 28px 38px 2.2fr 36px 1.6fr 60px 2.4fr 24px;
-  gap:16px;align-items:center;
+  grid-template-columns: 28px 38px 1fr 36px 280px 60px 200px 200px;
+  gap:16px;align-items:start;
   padding:18px 4px;cursor:pointer;
 }
 .job--compact .job-head{padding:12px 4px}
 
 .job-num{
-  font-family:var(--mono);font-size:12px;font-weight:700;
+  font-family:var(--mono);font-size:10.5px;font-weight:700;
   letter-spacing:.04em;color:var(--ink);
-  border:1.5px solid var(--ink);padding:4px 0;text-align:center;
-  background:var(--bone);
+  border:1.5px solid var(--ink);text-align:center;background:var(--bone);
+  display:inline-flex;align-items:center;justify-content:center;
+  padding:1px 8px;box-sizing:border-box;line-height:1.35;
 }
 
 .job-image-name{font-family:var(--display);font-weight:700;font-size:15.5px;line-height:1.15;
@@ -514,15 +525,36 @@ input,select{font:inherit;color:inherit}
 
 .pick-target{
   font-family:var(--mono);font-size:11px;letter-spacing:.08em;
-  background:transparent;border:1.5px dashed var(--ink);padding:8px 12px;
-  cursor:pointer;width:100%;font-weight:600;
+  background:transparent;border:1.5px dashed var(--ink);padding:0 12px;
+  cursor:pointer;width:100%;font-weight:600;text-align:left;
+  height:var(--row-btn-h);box-sizing:border-box;
+  display:inline-flex;align-items:center;
 }
 .pick-target:hover{background:var(--ink);color:var(--bone);border-style:solid}
+.pick-target:hover .job-target-meta{color:var(--bone);opacity:.85}
+
+/* Reassign / readonly variants — same dashed chip as the unset state so the
+   target column reads consistently. Reassign is clickable (swap target on
+   idle/error rows); readonly is the same look minus the hover affordance
+   (writing/verifying/success rows where the target is locked in).
+   Inside the chip we use the mono caps style of the SELECT-TARGET label so
+   `/dev/disk4` doesn't look like raw debug text next to the unset chip. */
+.pick-target--reassign,.pick-target--readonly{padding:0 12px}
+.pick-target--readonly{cursor:default}
+.pick-target--readonly:hover{background:transparent;color:inherit;border-style:dashed}
+.pick-target--readonly:hover .job-target-meta{color:var(--ink-2);opacity:1}
+.pick-target--reassign .job-target-name,
+.pick-target--readonly  .job-target-name{
+  font-family:var(--mono);font-size:11px;font-weight:600;
+  letter-spacing:.08em;line-height:1.2;text-transform:uppercase;
+}
+.pick-target--reassign:hover .job-target-name{color:var(--bone)}
 
 .glyph{
-  width:36px;height:36px;border:2px solid var(--ink);
-  display:flex;align-items:center;justify-content:center;
-  font-family:var(--mono);font-weight:700;font-size:22px;line-height:1;
+  width:var(--row-btn-h);height:var(--row-btn-h);
+  border:1.5px solid var(--ink);box-sizing:border-box;
+  display:inline-flex;align-items:center;justify-content:center;
+  font-family:var(--mono);font-weight:700;font-size:18px;line-height:1;
   background:var(--bone);
 }
 .glyph--ok{background:var(--ink);color:var(--bone)}
@@ -530,30 +562,51 @@ input,select{font:inherit;color:inherit}
 .glyph--run{animation:pulse 1.2s steps(2) infinite}
 @keyframes pulse{50%{opacity:.45}}
 
+/* Status tags live in the .job-progress column on idle/error rows. Same
+   box dimensions across variants so the column reads as a column instead
+   of three differently-shaped chips; only the colour distinguishes them. */
 .status-tag{
-  display:inline-block;font-family:var(--mono);font-size:10.5px;
-  letter-spacing:.08em;padding:5px 9px;border:1.5px solid var(--ink);
-  background:var(--paper);font-weight:600;
+  display:inline-flex;align-items:center;justify-content:center;
+  font-family:var(--mono);font-size:10.5px;letter-spacing:.08em;
+  padding:0 12px;height:var(--row-btn-h);min-width:140px;
+  border:1.5px solid var(--ink);background:var(--paper);font-weight:600;
+  box-sizing:border-box;
 }
 .status-tag.faint{color:var(--mute);border-style:dashed}
 .status-tag--danger{background:var(--hazard);color:var(--on-accent);border-color:var(--ink)}
 
 .job-chev{
-  width:28px;height:28px;border:1.5px solid var(--ink);background:var(--bone);
+  width:var(--row-btn-h);height:var(--row-btn-h);
+  border:1.5px solid var(--ink);background:var(--bone);
   cursor:pointer;font-family:var(--mono);font-size:11px;
+  display:inline-flex;align-items:center;justify-content:center;padding:0;
 }
 .job-chev:hover{background:var(--ink);color:var(--bone)}
 
-.job-remove{
-  width:24px;height:24px;display:inline-flex;align-items:center;justify-content:center;
+.job-actions{display:flex;align-items:center;gap:8px}
+
+/* Delete button shares the bordered chip shape with the Burn button so the
+   pair reads as siblings; only colour/weight distinguish intent. Burn
+   armed-state below paints the accent fill on top of the same frame. */
+.job-actions .btn-ghost{
   border:1.5px solid var(--ink);background:var(--bone);
-  cursor:pointer;font-family:var(--mono);font-size:12px;line-height:1;color:var(--ink);
-  padding:0;
+  color:var(--ink);font-weight:600;
 }
-.job-remove:hover{background:var(--hazard);color:var(--on-accent);border-color:var(--ink)}
-.job-remove--disabled{
-  width:24px;height:24px;display:inline-block;visibility:hidden;
+.job-actions .btn-ghost:hover{background:rgba(12,12,11,.06)}
+
+.btn-burn{
+  font-family:var(--mono);font-size:11px;letter-spacing:.08em;font-weight:700;
+  padding:0 12px;border:1.5px solid var(--ink);background:var(--bone);
+  color:var(--ink);cursor:pointer;
+  height:var(--row-btn-h);box-sizing:border-box;
+  display:inline-flex;align-items:center;justify-content:center;
+  transition:background-color .12s ease, color .12s ease;
 }
+.btn-burn.is-armed{color:var(--on-accent)}
+.btn-burn.is-armed:hover{filter:brightness(1.05)}
+.btn-burn.is-disabled,
+.btn-burn:disabled{opacity:.4;cursor:not-allowed}
+.btn-ghost:disabled{opacity:.4;cursor:not-allowed}
 
 /* progress */
 .pb{display:flex;flex-direction:column;gap:5px;width:100%}
@@ -588,6 +641,23 @@ input,select{font:inherit;color:inherit}
   font-weight:700;margin-bottom:10px;color:var(--ink);
 }
 .detail-body{display:flex;flex-direction:column;gap:6px}
+
+/* Embedded per-job log viewer (inside JobDetail). Tight monospace rows in
+   a scrollable box so the operator sees what the helper wrote without
+   leaving the queue scene. Capped height keeps a long log from pushing
+   the rest of the drawer off-screen. */
+.job-log{
+  max-height:200px;overflow-y:auto;
+  border:1.5px solid var(--ink);background:var(--bone);
+  padding:6px 8px;font-size:11px;line-height:1.45;
+}
+.job-log--empty,.job-log--error{padding:8px;color:var(--mute)}
+.job-log-line{display:grid;grid-template-columns:auto 56px 1fr;gap:8px;align-items:baseline;padding:1px 0}
+.job-log-ts{color:var(--mute);font-variant-numeric:tabular-nums}
+.job-log-level{font-weight:700;letter-spacing:.04em;color:var(--ink-2)}
+.job-log-line--warn .job-log-level{color:#a0670c}
+.job-log-line--error .job-log-level{color:var(--hazard)}
+.job-log-msg{white-space:pre-wrap;word-break:break-word;color:var(--ink)}
 
 .kv{display:grid;grid-template-columns:160px 1fr;gap:14px;align-items:baseline;font-size:12.5px;line-height:1.5}
 .kv-k{font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;color:var(--mute);font-weight:600}
@@ -814,8 +884,8 @@ input,select{font:inherit;color:inherit}
 /* responsive scale-down */
 @media (max-width: 1280px){
   .main-title{font-size:34px}
-  .queue-head{grid-template-columns: 28px 38px 2fr 30px 1.4fr 50px 2.2fr 24px;gap:12px}
-  .job-head{grid-template-columns: 28px 38px 2fr 30px 1.4fr 50px 2.2fr 24px;gap:12px}
+  .queue-head{grid-template-columns: 28px 38px 1fr 30px 240px 50px 180px 180px;gap:12px}
+  .job-head{grid-template-columns: 28px 38px 1fr 30px 240px 50px 180px 180px;gap:12px}
 }
 
 /* ─────────── Prefs view ─────────── */
@@ -1053,11 +1123,10 @@ input,select{font:inherit;color:inherit}
    density=compact, full form (glyph + label) elsewhere. */
 .vbadge{
   display:inline-flex;align-items:center;gap:4px;
-  padding:1px 6px;
+  padding:1px 6px;box-sizing:border-box;
   border:1.5px solid currentColor;
   font-family:var(--mono);font-size:10.5px;letter-spacing:.04em;
-  text-transform:uppercase;
-  line-height:1.35;
+  text-transform:uppercase;line-height:1.35;
 }
 .vbadge-label{display:inline-block}
 .vbadge--pending{color:var(--mute);border-style:dashed}
@@ -1178,11 +1247,3 @@ input,select{font:inherit;color:inherit}
   color:var(--mute);
   font-size:10.5px;letter-spacing:.02em;
 }
-
-/* ─────────── Burn parameters panel ─────────── */
-
-/* List of K:V pairs mirrors the .kv layout used elsewhere in the
-   detail drawer — keep the keys mono so writer.impl / chunk.bytes /
-   etc. read as code, and stack pairs vertically. */
-.burn-params{display:flex;flex-direction:column;gap:4px}
-.burn-params .kv{grid-template-columns:200px 1fr}

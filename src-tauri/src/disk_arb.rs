@@ -62,6 +62,14 @@ mod ffi {
             c_str: *const c_char,
             encoding: u32,
         ) -> CFStringRef;
+        pub fn CFStringGetLength(the_string: CFStringRef) -> isize;
+        pub fn CFStringGetMaximumSizeForEncoding(length: isize, encoding: u32) -> isize;
+        pub fn CFStringGetCString(
+            the_string: CFStringRef,
+            buffer: *mut c_char,
+            buffer_size: isize,
+            encoding: u32,
+        ) -> u8;
         pub fn CFRelease(cf: CFTypeRef);
     }
 
@@ -94,6 +102,8 @@ mod ffi {
             status: DAReturn,
             string: CFStringRef,
         ) -> DADissenterRef;
+        pub fn DADissenterGetStatus(dissenter: DADissenterRef) -> DAReturn;
+        pub fn DADissenterGetStatusString(dissenter: DADissenterRef) -> CFStringRef;
         pub fn DADiskCreateFromBSDName(
             allocator: CFAllocatorRef,
             session: DASessionRef,
@@ -159,13 +169,70 @@ unsafe extern "C" fn unmount_done_cb(
     let result = if dissenter.is_null() {
         Ok(())
     } else {
-        Err("DA unmount dissented".to_string())
+        let status = unsafe { DADissenterGetStatus(dissenter) };
+        let detail = unsafe { cf_string_to_rust(DADissenterGetStatusString(dissenter)) };
+        Err(format_dissent(status, detail.as_deref()))
     };
     if let Ok(mut guard) = reply.lock() {
         if let Some(tx) = guard.take() {
             let _ = tx.send(result);
         }
     }
+}
+
+fn format_dissent(status: DAReturn, detail: Option<&str>) -> String {
+    let code = da_return_name(status)
+        .map(|n| n.to_string())
+        .unwrap_or_else(|| format!("0x{:08X}", status as u32));
+    match detail {
+        Some(d) if !d.is_empty() => format!("DA unmount dissented ({code}: {d})"),
+        _ => format!("DA unmount dissented ({code})"),
+    }
+}
+
+fn da_return_name(code: DAReturn) -> Option<&'static str> {
+    Some(match code as u32 {
+        0xF8DA_0001 => "kDAReturnError",
+        0xF8DA_0002 => "kDAReturnBusy",
+        0xF8DA_0003 => "kDAReturnBadArgument",
+        0xF8DA_0004 => "kDAReturnExclusiveAccess",
+        0xF8DA_0005 => "kDAReturnNoResources",
+        0xF8DA_0006 => "kDAReturnNotFound",
+        0xF8DA_0007 => "kDAReturnNotMounted",
+        0xF8DA_0008 => "kDAReturnNotPermitted",
+        0xF8DA_0009 => "kDAReturnNotPrivileged",
+        0xF8DA_000A => "kDAReturnNotReady",
+        0xF8DA_000B => "kDAReturnNotWritable",
+        0xF8DA_000C => "kDAReturnUnsupported",
+        _ => return None,
+    })
+}
+
+unsafe fn cf_string_to_rust(s: CFStringRef) -> Option<String> {
+    if s.is_null() {
+        return None;
+    }
+    let len = unsafe { CFStringGetLength(s) };
+    let max = unsafe { CFStringGetMaximumSizeForEncoding(len, K_CF_STRING_ENCODING_UTF8) };
+    if max <= 0 {
+        return None;
+    }
+    let cap = (max as usize).saturating_add(1);
+    let mut buf = vec![0u8; cap];
+    let ok = unsafe {
+        CFStringGetCString(
+            s,
+            buf.as_mut_ptr() as *mut c_char,
+            cap as isize,
+            K_CF_STRING_ENCODING_UTF8,
+        )
+    };
+    if ok == 0 {
+        return None;
+    }
+    let nul = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+    buf.truncate(nul);
+    String::from_utf8(buf).ok()
 }
 
 enum WorkerEvent {

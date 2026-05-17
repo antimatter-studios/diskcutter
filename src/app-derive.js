@@ -21,13 +21,6 @@ export function sceneToTitleKey(scene, verbose) {
   }
 }
 
-export function planStart(jobs) {
-  const ready = jobs.filter((j) => j.state === 'idle' && j.target && j.validation === 'valid');
-  const tooSmall = ready.filter((j) => j.target.bytes && j.image.bytes && j.target.bytes < j.image.bytes);
-  const okToBurn = ready.filter((j) => !tooSmall.includes(j));
-  return { ready, tooSmall, okToBurn };
-}
-
 export function computeSessionStats(jobs, sessionStartMs, nowMs) {
   const completed = jobs.filter((j) => typeof j.bytesWritten === 'number');
   const totalWritten = completed.reduce((s, j) => s + (j.bytesWritten || 0), 0);

@@ -41,7 +41,7 @@ impl PipelinedRawDeviceIo {
 
     #[allow(clippy::should_implement_trait, dead_code)]
     pub fn default() -> Self {
-        Self::new(4, 15)
+        Self::new(4, 16)
     }
 }
 
@@ -209,10 +209,10 @@ mod tests {
     }
 
     #[test]
-    fn pipelined_default_uses_4_workers_and_15_queue_depth() {
+    fn pipelined_default_uses_4_workers_and_16_queue_depth() {
         let io = PipelinedRawDeviceIo::default();
         assert_eq!(io.worker_threads, 4);
-        assert_eq!(io.queue_depth, 15);
+        assert_eq!(io.queue_depth, 16);
     }
 
     #[test]

@@ -96,15 +96,15 @@ Number of OS threads issuing `pwrite` in parallel. **Pipelined only.**
 
 Capacity of the producer→workers channel. **Pipelined only.**
 
-- **Default:** `15`.
+- **Default:** `16`.
 - **What it does:** the producer can have up to this many chunks
   in-flight (buffered in the channel + actively being written) before
   it blocks waiting for a worker to free a slot.
-- **Why the default:** 15 is Etcher's choice — enough headroom that
-  the producer almost never stalls waiting for slow workers, not so
-  large that we waste tens of MiB of RAM on buffered data we haven't
-  written yet. At 1 MiB per chunk this caps the in-flight working set
-  at ~15 MiB.
+- **Why the default:** 16 matches Etcher's ~16 in-flight window —
+  enough headroom that the producer almost never stalls waiting for
+  slow workers, not so large that we waste tens of MiB of RAM on
+  buffered data we haven't written yet. At 1 MiB per chunk this caps
+  the in-flight working set at ~16 MiB.
 - **When to change it:** lower (4, 8) makes the pipeline stall-prone
   if any single `pwrite` is unusually slow — useful only for diagnostic
   runs. Higher (32, 64) burns more RAM but rarely helps; once the
@@ -171,8 +171,8 @@ Upper bound on mismatch records collected by the slow-path verifier.
 
 | Goal                             | writer.impl | chunk.bytes | workers | queue | verify.skip |
 | -------------------------------- | ----------- | ----------- | ------- | ----- | ----------- |
-| Default (production flash)       | pipelined   | 1 MiB       | 4       | 15    | false       |
-| Maximum iteration speed (dev)    | pipelined   | 1 MiB       | 4       | 15    | true        |
+| Default (production flash)       | pipelined   | 1 MiB       | 4       | 16    | false       |
+| Maximum iteration speed (dev)    | pipelined   | 1 MiB       | 4       | 16    | true        |
 | Single-threaded reference        | raw         | 1 MiB       | —       | —     | false       |
 | Buffered-cache comparison        | block       | 1 MiB       | —       | —     | false       |
 

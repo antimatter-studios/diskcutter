@@ -9,7 +9,7 @@ use serde::Serialize;
 
 use crate::hash::HashAlgo;
 use crate::pipeline::{self, BurnError, VerifyMismatch};
-use crate::readers::ImageReaderRegistry;
+use crate::source;
 #[cfg(unix)]
 use crate::writers::{BlockDeviceIo, PipelinedRawDeviceIo, RawDeviceIo};
 use crate::writers::{DeviceIo, PlainFileDeviceIo};
@@ -71,7 +71,7 @@ pub fn run_helper(args: &[String]) -> i32 {
         .unwrap_or(4);
     let queue_depth: usize = arg_value(args, "--queue-depth=")
         .and_then(|v| v.parse().ok())
-        .unwrap_or(15);
+        .unwrap_or(16);
     let skip_verify: bool = arg_value(args, "--skip-verify=")
         .map(|v| v == "true")
         .unwrap_or(false);
@@ -97,28 +97,22 @@ pub fn run_helper(args: &[String]) -> i32 {
         }
     };
 
-    let registry = ImageReaderRegistry::with_defaults();
-    let factory = match registry.probe(Path::new(&image)) {
-        Some((_, f)) => f,
-        None => {
-            emit(&HelperMessage::Error {
-                error_code: "EUNSUPPORTED".into(),
-                error_message: "unsupported image format".into(),
-            });
-            return 1;
-        }
-    };
-
-    let mut reader = match factory.open(Path::new(&image)) {
-        Ok(r) => r,
+    let (mut reader, source_info) = match source::open_streaming(Path::new(&image)) {
+        Ok(v) => v,
         Err(e) => {
+            let code = if e.kind() == std::io::ErrorKind::InvalidInput {
+                "EUNSUPPORTED"
+            } else {
+                "EIMAGE"
+            };
             emit(&HelperMessage::Error {
-                error_code: "EIMAGE".into(),
+                error_code: code.into(),
                 error_message: format!("open image: {e}"),
             });
             return 1;
         }
     };
+    let image_total_bytes = source_info.uncompressed_bytes;
 
     let device_io: Box<dyn DeviceIo> =
         pick_device_io(&target, writer_choice.as_deref(), workers, queue_depth);
@@ -182,6 +176,7 @@ pub fn run_helper(args: &[String]) -> i32 {
     }
     let burn = match pipeline::burn_with_hash(
         &mut *reader,
+        image_total_bytes,
         dev_writer,
         chunk_size,
         hash_algo,
@@ -203,7 +198,7 @@ pub fn run_helper(args: &[String]) -> i32 {
             };
             emit(&HelperMessage::Error {
                 error_code: code.into(),
-                error_message: format!("{e:?}"),
+                error_message: format!("{e}"),
             });
             return 1;
         }
@@ -260,7 +255,7 @@ pub fn run_helper(args: &[String]) -> i32 {
             };
             emit(&HelperMessage::Error {
                 error_code: code.into(),
-                error_message: format!("{e:?}"),
+                error_message: format!("{e}"),
             });
             return 1;
         }
@@ -284,8 +279,8 @@ pub fn run_helper(args: &[String]) -> i32 {
     // Hash mismatch — fall back to the slow byte-compare path to collect
     // per-sector forensic detail (LBA/offset/expected/actual).
     drop(dev_reader);
-    let mut reader2 = match factory.open(Path::new(&image)) {
-        Ok(r) => r,
+    let (mut reader2, _) = match source::open_streaming(Path::new(&image)) {
+        Ok(v) => v,
         Err(e) => {
             emit(&HelperMessage::Error {
                 error_code: "EIMAGE".into(),
@@ -307,6 +302,7 @@ pub fn run_helper(args: &[String]) -> i32 {
 
     let verify = match pipeline::verify_with_hash(
         &mut *reader2,
+        image_total_bytes,
         &mut *dev_reader2,
         chunk_size,
         hash_algo,
@@ -328,7 +324,7 @@ pub fn run_helper(args: &[String]) -> i32 {
             };
             emit(&HelperMessage::Error {
                 error_code: code.into(),
-                error_message: format!("{e:?}"),
+                error_message: format!("{e}"),
             });
             return 1;
         }

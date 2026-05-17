@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
@@ -162,15 +162,11 @@ function DangerBanner({ confirmed, onConfirm, jobs, accent }) {
 /* ─────────── Toolbar ─────────── */
 
 function Toolbar({
-  onAdd, onAddFromUrl, onBrowseCatalog, onStart, onClearDone,
-  confirmed, jobs, accent, busy,
+  onAdd, onAddFromUrl, onBrowseCatalog, onClearDone,
+  jobs, accent,
   copies, onChangeCopies,
 }) {
   const { t } = useTranslation();
-  // Same gate as the Cmd+Enter shortcut path (see keymap.js::queueReady):
-  // burn requires confirmation AND at least one idle job that's been
-  // validated as a real disk image AND has a target picked.
-  const ready = confirmed && jobs.some(j => j.state === 'idle' && j.target && j.validation === 'valid');
   const hasDone = jobs.some(j => j.state === 'success');
   const copiesValue = Math.max(1, Math.floor(Number(copies) || 1));
   const setCopies = (n) => onChangeCopies && onChangeCopies(Math.max(1, Math.floor(n)));
@@ -206,14 +202,6 @@ function Toolbar({
         )}
         <div className="tb-sep" />
         <button className={"btn btn-ghost" + (hasDone ? "" : " is-disabled")} onClick={hasDone ? onClearDone : null}>[ {t('toolbar.clear_done')} ]</button>
-      </div>
-      <div className="toolbar-right">
-        <button
-          className={"btn btn-primary" + (ready ? "" : " is-disabled")}
-          style={{ background: ready ? accent : 'var(--disabled)' }}
-          onClick={ready ? onStart : null}>
-          {busy ? `▣ ${t('toolbar.running')}` : `▶ ${t('toolbar.start_queue')}`}
-        </button>
       </div>
     </div>
   );
@@ -441,19 +429,30 @@ function describeBootSources(boot, t) {
 
 /* ─────────── Job Row ─────────── */
 
-function JobRow({ job, accent, expanded, onToggle, onSelectTarget, onCancel, onRetry, onCopyHash, onCopyError, onFlashAnother, onRemove, density, fdaBlocked }) {
+function JobRow({ job, accent, expanded, onToggle, onSelectTarget, onBurn, onCancel, onRetry, onCopyHash, onCopyError, onFlashAnother, onRemove, density, fdaBlocked, confirmed }) {
   const { t } = useTranslation();
   const state = job.state;
   const danger = state === 'error';
   const writing = state === 'writing';
   const verifying = state === 'verifying';
   const success = state === 'success';
+  const burnable =
+    state === 'idle' &&
+    !!job.target &&
+    job.validation === 'valid' &&
+    !(job.target.bytes && job.image.bytes && job.target.bytes < job.image.bytes);
+  const burnArmed = burnable && confirmed;
 
   return (
     <div className={"job" + (danger ? " job--danger" : "") + (expanded ? " job--open" : "") + (density === 'compact' ? " job--compact" : "")}
          style={{ '--accent': accent }}>
-      <div className="job-head" onClick={onToggle}>
-        <button className="job-chev" onClick={(e) => { e.stopPropagation(); onToggle(); }}>
+      {/* Row toggle is targeted: clicks that land DIRECTLY on .job-head (the
+          empty gutter between columns) fire onToggle. Clicks that land on
+          a child element (button, image name, target chip, etc.) don't —
+          checked via e.target === e.currentTarget rather than propagation
+          games. Each child button still handles its own onClick directly. */}
+      <div className="job-head" onClick={(e) => { if (e.target === e.currentTarget) onToggle(); }}>
+        <button className="job-chev" onClick={onToggle} aria-label={expanded ? 'Collapse row' : 'Expand row'}>
           {expanded ? "▼" : "▶"}
         </button>
         <div className="job-num">#{job.num.toString().padStart(2,'0')}</div>
@@ -477,20 +476,42 @@ function JobRow({ job, accent, expanded, onToggle, onSelectTarget, onCancel, onR
         </div>
 
         <div className="job-target">
-          {job.target ? (
-            <>
-              <div className="job-target-name">{job.target.model}</div>
-              <div className="job-target-meta">
-                <span>{job.target.capacity}</span>
-                <span className="dot">·</span>
-                <span className="mono small">{job.target.bus}</span>
-              </div>
-            </>
-          ) : (
-            <button className="pick-target" onClick={(e) => { e.stopPropagation(); onSelectTarget(); }}>
-              [ {t('job.select_target')} ]
-            </button>
-          )}
+          {(() => {
+            // A row's target is re-pickable as long as nothing destructive is
+            // in-flight or already finished. idle and error rows both
+            // qualify — operators routinely swap to a different card after
+            // an ETARGET / DA-dissent / size-mismatch failure.
+            const canReassign = state === 'idle' || state === 'error';
+            if (!job.target) {
+              return (
+                <button className="pick-target" onClick={onSelectTarget}>
+                  [ {t('job.select_target')} ]
+                </button>
+              );
+            }
+            const summary = (
+              <>
+                <div className="job-target-name">{job.target.model || job.target.device}</div>
+                <div className="job-target-meta">
+                  {job.target.capacity && <span>{job.target.capacity}</span>}
+                  {job.target.capacity && job.target.bus && <span className="dot">·</span>}
+                  {job.target.bus && <span className="mono small">{job.target.bus}</span>}
+                </div>
+              </>
+            );
+            if (!canReassign) {
+              return <div className="pick-target pick-target--readonly">{summary}</div>;
+            }
+            return (
+              <button
+                className="pick-target pick-target--reassign"
+                onClick={onSelectTarget}
+                title={t('job.change_target', { defaultValue: 'Change target disk' })}
+              >
+                {summary}
+              </button>
+            );
+          })()}
         </div>
 
         <div className="job-state">
@@ -500,24 +521,32 @@ function JobRow({ job, accent, expanded, onToggle, onSelectTarget, onCancel, onR
         <div className="job-progress">
           {state === 'idle' && job.target && <div className="status-tag">{t('job.state.ready')}</div>}
           {state === 'idle' && !job.target && <div className="status-tag faint">{t('job.state.awaiting_target')}</div>}
-          {writing && <ProgressBar value={job.progress} label={t('job.state.write')} speed={job.speed} eta={job.eta} accent={accent} />}
-          {verifying && <ProgressBar value={job.verifyProgress} label={t('job.state.verify')} speed={job.speed} eta={job.eta} accent="var(--ink)" />}
+          {writing && <ProgressBar value={job.progress} label={t('job.state.write')} speed={job.speed} eta={job.eta} startedAt={job.startedAt} accent={accent} />}
+          {verifying && <ProgressBar value={job.verifyProgress} label={t('job.state.verify')} speed={job.speed} eta={job.eta} startedAt={job.startedAt} accent="var(--ink)" />}
           {success && <SuccessReadout job={job} />}
           {danger && <div className="status-tag status-tag--danger">{job.errorCode}</div>}
         </div>
 
-        {(writing || verifying) ? (
-          <span className="job-remove job-remove--disabled" aria-hidden="true" />
-        ) : (
-          <button
-            className="job-remove"
-            title={t('job.remove')}
-            aria-label={t('job.remove')}
-            onClick={(e) => { e.stopPropagation(); onRemove(); }}
-          >
-            ✕
-          </button>
-        )}
+        <div className="job-actions">
+          {burnable && (
+            <button
+              className={"btn btn-burn" + (burnArmed ? " is-armed" : " is-disabled")}
+              style={burnArmed ? { background: accent, borderColor: accent } : undefined}
+              onClick={burnArmed ? onBurn : undefined}
+              disabled={!burnArmed}
+              title={burnArmed ? undefined : t('job.burn_needs_arm')}
+            >
+              [ {t('job.burn')} ]
+            </button>
+          )}
+          {(writing || verifying) ? (
+            <button className="btn btn-ghost" disabled>[ {t('job.delete')} ]</button>
+          ) : (
+            <button className="btn btn-ghost" onClick={onRemove}>
+              [ {t('job.delete')} ]
+            </button>
+          )}
+        </div>
       </div>
 
       <PartitionStrip
@@ -528,7 +557,7 @@ function JobRow({ job, accent, expanded, onToggle, onSelectTarget, onCancel, onR
         boot={job.boot}
       />
 
-      {expanded && <JobDetail job={job} accent={accent} fdaBlocked={fdaBlocked} onCancel={onCancel} onRetry={onRetry} onCopyHash={onCopyHash} onCopyError={onCopyError} onFlashAnother={onFlashAnother} />}
+      {expanded && <JobDetail job={job} accent={accent} fdaBlocked={fdaBlocked} confirmed={confirmed} onCancel={onCancel} onRetry={onRetry} onCopyHash={onCopyHash} onCopyError={onCopyError} onFlashAnother={onFlashAnother} />}
     </div>
   );
 }
@@ -541,14 +570,27 @@ function StateGlyph({ state, accent }) {
   return <div className="glyph">·</div>;
 }
 
-function ProgressBar({ value, label, speed, eta, accent }) {
+function ProgressBar({ value, label, speed, eta, startedAt, accent }) {
   const { t } = useTranslation();
+  // Live elapsed ticks every second. The progress events re-render the row
+  // every ~250ms during a burn, but that stops if the helper goes quiet
+  // (slow disk, stalled IO) — the timer keeps the elapsed counter honest
+  // through dead stretches so the operator can tell "still running" from
+  // "wedged".
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!startedAt) return undefined;
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [startedAt]);
+  const elapsedStr = startedAt ? formatDuration(now - startedAt) : null;
   return (
     <div className="pb">
       <div className="pb-meta">
         <span className="pb-label">{label}</span>
         <span className="pb-pct">{value.toFixed(1)}%</span>
         <span className="pb-stat">{speed}</span>
+        {elapsedStr && <span className="pb-stat">{t('job.elapsed', { value: elapsedStr })}</span>}
         <span className="pb-stat">{t('job.eta', { value: eta })}</span>
       </div>
       <div className="pb-track">
@@ -578,28 +620,45 @@ function SuccessReadout({ job }) {
 
 /* ─────────── Job Detail (expanded drawer) ─────────── */
 
-function JobDetail({ job, accent, onCancel, onRetry, fdaBlocked }) {
+function JobDetail({ job, accent, onCancel, onRetry, fdaBlocked, confirmed }) {
   const { t } = useTranslation();
-  const retryDisabled = !!job.retrying || (job.errorCode === 'ENEEDS_FDA' && fdaBlocked);
+  const fdaWaiting = job.errorCode === 'ENEEDS_FDA' && fdaBlocked;
+  // Retry is destructive — same one-shot arm gate as Burn. Stays disabled
+  // until the danger-banner toggle is on (or until FDA is granted, when that
+  // is the reason this job errored). The handler in App.jsx clears confirmed
+  // on click so the next destructive action needs a fresh toggle.
+  const retryDisabled = !!job.retrying || fdaWaiting || !confirmed;
   return (
     <div className="job-detail">
       <div className="detail-grid">
         <DetailBlock label={t('detail.block.image')}>
           <KV k={t('detail.kv.path')} v={job.image.path} mono />
-          <KV k={t('detail.kv.size')} v={t('detail.kv.size_value', { size: job.image.size, bytes: job.image.bytes.toLocaleString() })} mono />
-          <KV k={t('detail.kv.sectors')} v={job.image.sectors.toLocaleString()} mono />
-          <KV k={t('detail.kv.format')} v={job.image.format} />
-          <KV k={t('detail.kv.sha256_source')} v={job.image.sha256} mono wrap />
+          <KV
+            k={t('detail.kv.size')}
+            v={job.image.size
+              ? t('detail.kv.size_value', { size: job.image.size, bytes: (job.image.bytes ?? 0).toLocaleString() })
+              : (job.image.bytes != null ? `${job.image.bytes.toLocaleString()} bytes` : '—')}
+            mono
+          />
+          <KV k={t('detail.kv.sectors')} v={job.image.sectors != null ? job.image.sectors.toLocaleString() : '—'} mono />
+          <KV k={t('detail.kv.format')} v={job.image.format || '—'} />
+          <KV k={t('detail.kv.sha256_source')} v={job.image.sha256 || '—'} mono wrap />
         </DetailBlock>
 
         <DetailBlock label={t('detail.block.target')}>
           {job.target ? (
             <>
               <KV k={t('detail.kv.device')} v={job.target.device} mono />
-              <KV k={t('detail.kv.model')} v={job.target.model} />
-              <KV k={t('detail.kv.capacity')} v={t('detail.kv.capacity_value', { capacity: job.target.capacity, bytes: job.target.bytes.toLocaleString() })} mono />
-              <KV k={t('detail.kv.bus')} v={job.target.bus} mono />
-              <KV k={t('detail.kv.partitions')} v={job.target.partitions} />
+              <KV k={t('detail.kv.model')} v={job.target.model || '—'} />
+              <KV
+                k={t('detail.kv.capacity')}
+                v={job.target.capacity
+                  ? t('detail.kv.capacity_value', { capacity: job.target.capacity, bytes: (job.target.bytes ?? 0).toLocaleString() })
+                  : (job.target.bytes != null ? `${job.target.bytes.toLocaleString()} bytes` : '—')}
+                mono
+              />
+              <KV k={t('detail.kv.bus')} v={job.target.bus || '—'} mono />
+              <KV k={t('detail.kv.partitions')} v={job.target.partitions ?? '—'} />
             </>
           ) : <div className="empty-line">{t('detail.kv.no_target')}</div>}
         </DetailBlock>
@@ -613,12 +672,12 @@ function JobDetail({ job, accent, onCancel, onRetry, fdaBlocked }) {
           />
         </DetailBlock>
 
-        <DetailBlock label={t('detail.block.burn_params')} full>
-          <BurnParamsPanel params={job.burnParams} />
-        </DetailBlock>
-
         <DetailBlock label={t('detail.block.verification')} full>
           <VerificationPanel job={job} accent={accent} />
+        </DetailBlock>
+
+        <DetailBlock label={t('detail.block.logs', { defaultValue: 'LOG' })} full>
+          <JobLogPanel jobId={job.id} state={job.state} accent={accent} />
         </DetailBlock>
       </div>
 
@@ -642,7 +701,6 @@ function JobDetail({ job, accent, onCancel, onRetry, fdaBlocked }) {
                     : t('detail.actions.retry')} ]
             </button>
             <button className="btn btn-ghost">[ {t('detail.actions.copy_error')} ]</button>
-            <button className="btn btn-ghost">[ {t('detail.actions.open_log')} ]</button>
           </>
         )}
         {job.state === 'success' && (
@@ -662,6 +720,69 @@ function DetailBlock({ label, full, children }) {
     <div className={"detail-block" + (full ? " detail-block--full" : "")}>
       <div className="detail-label">▌ {label}</div>
       <div className="detail-body">{children}</div>
+    </div>
+  );
+}
+
+// Per-job log viewer embedded in the JobDetail drawer. Fetches burn_logs
+// rows for the row's job_id, auto-refreshing while the burn is running and
+// whenever a job-complete/job-error event lands so the operator doesn't
+// have to flip to the global Logs view to see what happened.
+function JobLogPanel({ jobId, state, accent }) {
+  const { t } = useTranslation();
+  const [rows, setRows] = useState([]);
+  const [error, setError] = useState(null);
+
+  const refresh = React.useCallback(async () => {
+    try {
+      const r = await invoke('burn_logs_for_job', { jobId });
+      setRows(Array.isArray(r) ? r : []);
+      setError(null);
+    } catch (e) {
+      setError(String(e));
+    }
+  }, [jobId]);
+
+  useEffect(() => { refresh(); }, [refresh]);
+
+  // While active, poll the log periodically — helper inserts rows
+  // throughout the burn and we want them visible without manual refresh.
+  useEffect(() => {
+    if (state !== 'writing' && state !== 'verifying') return undefined;
+    const id = setInterval(refresh, 1500);
+    return () => clearInterval(id);
+  }, [state, refresh]);
+
+  // Job-complete / job-error fire once at the end — pick up the final
+  // burn_logs rows the helper wrote just before exit.
+  useEffect(() => {
+    let mounted = true;
+    const subs = [];
+    const onActivity = (e) => {
+      const p = e?.payload;
+      if (!mounted) return;
+      if (!p || p.job_id === jobId) refresh();
+    };
+    listen('disk-cutter://job-complete', onActivity).then((u) => subs.push(u));
+    listen('disk-cutter://job-error', onActivity).then((u) => subs.push(u));
+    return () => { mounted = false; subs.forEach((u) => u()); };
+  }, [jobId, refresh]);
+
+  if (error) {
+    return <div className="job-log job-log--error mono small" style={{ color: accent }}>{error}</div>;
+  }
+  if (rows.length === 0) {
+    return <div className="job-log job-log--empty mono small">{t('detail.log.empty', { defaultValue: 'No log entries yet.' })}</div>;
+  }
+  return (
+    <div className="job-log mono small">
+      {rows.map((r) => (
+        <div key={r.id} className={"job-log-line job-log-line--" + (r.level || 'info')}>
+          <span className="job-log-ts">{formatLogTimestampShort(r.ts)}</span>
+          <span className="job-log-level">{(r.level || 'info').toUpperCase()}</span>
+          <span className="job-log-msg">{r.message}</span>
+        </div>
+      ))}
     </div>
   );
 }
@@ -747,30 +868,6 @@ function PartitionTable({ partitions, validation, validationDetail, boot }) {
           ))}
         </tbody>
       </table>
-    </div>
-  );
-}
-
-/* ─────────── Burn parameters panel ─────────── */
-
-// User-tunable write knobs that fed into this burn (writer impl,
-// chunk size, worker count, etc.). Source-of-truth lives on the
-// backend in burn_history.burn_params; the store decodes the JSON
-// once and hands us a flat `{key: value}` map. `null` means the
-// burn hasn't started yet (or the job pre-dates 0002_burn_params).
-function BurnParamsPanel({ params }) {
-  const { t } = useTranslation();
-  if (!params || Object.keys(params).length === 0) {
-    return <div className="empty-line">{t('detail.kv.burn_params_pending')}</div>;
-  }
-  // Sort keys so the panel reads the same way every render — and so
-  // matches the forensic markdown / json export ordering.
-  const entries = Object.entries(params).sort(([a], [b]) => a.localeCompare(b));
-  return (
-    <div className="burn-params">
-      {entries.map(([k, v]) => (
-        <KV key={k} k={k} v={String(v)} mono />
-      ))}
     </div>
   );
 }
@@ -1003,7 +1100,7 @@ const PREFS_SECTIONS = [
       { key: 'workers.count', type: 'select',
         options: ['1','2','4','8','16'].map((v) => ({ value: v, label: v })) },
       { key: 'queue.depth', type: 'select',
-        options: ['4','8','15','32','64'].map((v) => ({ value: v, label: v })) },
+        options: ['4','8','16','32','64'].map((v) => ({ value: v, label: v })) },
       { key: 'verify.skip', type: 'toggle' },
       { key: 'hash.algo', type: 'select',
         options: [
@@ -1065,7 +1162,7 @@ const PREFS_DEFAULTS = {
   'writer.impl': 'pipelined',
   'chunk.bytes': '1048576',
   'workers.count': '4',
-  'queue.depth': '15',
+  'queue.depth': '16',
   'verify.skip': 'false',
   'hash.algo': 'sha256',
   'max.mismatches': '256',
@@ -1258,11 +1355,13 @@ function PrefsControl({ field, value, onChange }) {
 
 /* ─────────── Logs view ─────────── */
 
-// Field shape from `burn_history_list` (Rust → JSON, serde defaults so the
+// Field shape from `burn_jobs_list` (Rust → JSON, serde defaults so the
 // keys arrive snake_cased): id, job_id, image_path, image_name, image_bytes,
 // target_device, source_sha256, readback_sha256, verify_match, bytes_written,
 // elapsed_ms, avg_write_bps, avg_verify_bps, state, error_code, error_message,
-// started_at, finished_at.
+// queued_at, started_at, finished_at, progress_file, helper_pid. `started_at`
+// is nullable now that rows are inserted at enqueue time — fall back to
+// `queued_at` when displaying a "when" column for never-started rows.
 
 function formatLogTimestampShort(ms) {
   if (!ms) return '—';
@@ -1302,7 +1401,7 @@ function LogsView({ accent }) {
   const refresh = React.useCallback(async () => {
     setLoading(true);
     try {
-      const rows = await invoke('burn_history_list', { limit: 500 });
+      const rows = await invoke('burn_jobs_list', { limit: 500 });
       setBurns(Array.isArray(rows) ? rows : []);
       setError(null);
     } catch (e) {
@@ -1324,7 +1423,7 @@ function LogsView({ accent }) {
     return () => { mounted = false; subs.forEach((u) => u()); };
   }, [refresh]);
 
-  // Rows arrive newest-first from the backend (ORDER BY started_at DESC).
+  // Rows arrive newest-first from the backend (ORDER BY queued_at DESC).
   // Filter client-side per spec.
   const filtered = React.useMemo(() => {
     if (filter === 'done') return burns.filter((b) => b.state === 'success');
@@ -1405,7 +1504,7 @@ function LogsRow({ row, accent, expanded, onToggle }) {
   return (
     <div className={"logs-row-wrap" + (expanded ? " is-open" : "") + (isErr ? " is-err" : "")}>
       <button className="logs-row" onClick={onToggle}>
-        <span className="logs-when mono small">{formatLogTimestampShort(row.started_at)}</span>
+        <span className="logs-when mono small">{formatLogTimestampShort(row.started_at ?? row.queued_at)}</span>
         <span className="logs-image" title={row.image_name || row.image_path}>
           {truncateMid(row.image_name || row.image_path, 36)}
         </span>
@@ -1442,7 +1541,7 @@ function LogsRowDetail({ row, accent }) {
           <div className="detail-label">▌ {t('logs.detail.target')}</div>
           <div className="detail-body">
             <KV k={t('logs.kv.device')} v={row.target_device || '—'} mono />
-            <KV k={t('logs.kv.started')} v={formatLogTimestampShort(row.started_at)} mono />
+            <KV k={t('logs.kv.started')} v={formatLogTimestampShort(row.started_at ?? row.queued_at)} mono />
             <KV k={t('logs.kv.finished')} v={row.finished_at ? formatLogTimestampShort(row.finished_at) : '—'} mono />
             <KV k={t('logs.kv.duration')} v={formatDuration(row.elapsed_ms || 0)} mono />
           </div>

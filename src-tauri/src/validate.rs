@@ -33,10 +33,9 @@ use partitions::{
     sniff::{classify, FsKind},
 };
 use serde::Serialize;
-use std::io::Read;
 
+use crate::decoder_chain::DiskReader;
 use crate::inspect::format_fs_kind;
-use crate::readers::ImageReaderRegistry;
 
 /// Largest offset any signature check needs (ISO 9660 'CD001' at
 /// 0x8001 + 5 bytes). Round up to 0x8200 so we always have a small
@@ -126,16 +125,7 @@ pub fn validate_block(dev: &dyn BlockRead) -> ValidationReport {
 }
 
 fn validate_compressed(path: &Path) -> ValidationReport {
-    let registry = ImageReaderRegistry::with_defaults();
-    let factory = match registry.probe(path) {
-        Some((_, f)) => f,
-        None => {
-            return ValidationReport::Invalid {
-                reason: "compressed format not recognised".into(),
-            }
-        }
-    };
-    let mut reader = match factory.open(path) {
+    let mut reader = match DiskReader::open(path) {
         Ok(r) => r,
         Err(e) => {
             return ValidationReport::Invalid {

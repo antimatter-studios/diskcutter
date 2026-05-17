@@ -19,8 +19,8 @@
   },
   "scene": {
     "idle": {
-      "title": "WRITE THE QUEUE.",
-      "sub": "CONFIRM THE DESTRUCTIVE WRITE, THEN START THE QUEUE.",
+      "title": "READY TO BURN.",
+      "sub": "TOGGLE THE DESTRUCTIVE-WRITE BANNER, THEN HIT [ BURN ] ON EACH ROW.",
       "name": "IDLE"
     },
     "writing": {
@@ -86,8 +86,6 @@
     "from_url": "FROM URL",
     "browse_catalog": "BROWSE CATALOG",
     "clear_done": "CLEAR DONE",
-    "start_queue": "START QUEUE",
-    "running": "RUNNING…",
     "copies_label": "COPIES",
     "copies_inc": "increase copies",
     "copies_dec": "decrease copies"
@@ -187,14 +185,16 @@
     },
     "select_target": "SELECT TARGET DISK",
     "eta": "ETA {{value}}",
-    "remove": "REMOVE FROM QUEUE"
+    "elapsed": "ELAPSED {{value}}",
+    "burn": "BURN",
+    "burn_needs_arm": "Toggle the destructive-write banner above to arm this burn.",
+    "delete": "DELETE"
   },
   "detail": {
     "block": {
       "image": "IMAGE",
       "target": "TARGET",
       "partitions": "PARTITION LAYOUT",
-      "burn_params": "BURN PARAMETERS",
       "verification": "VERIFICATION"
     },
     "kv": {
@@ -210,8 +210,7 @@
       "capacity_value": "{{capacity}}  ({{bytes}} bytes)",
       "bus": "BUS",
       "partitions": "PARTITIONS",
-      "no_target": "NO TARGET SELECTED",
-      "burn_params_pending": "Recorded once the burn starts."
+      "no_target": "NO TARGET SELECTED"
     },
     "actions": {
       "abort": "ABORT WRITE",

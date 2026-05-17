@@ -17,12 +17,11 @@
 use std::fs::OpenOptions;
 use std::io::{Cursor, Read};
 use std::num::Wrapping;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 
 use diskcutter_lib::pipeline::{self, DEFAULT_CHUNK};
-use diskcutter_lib::readers::{ImageInfo, ImageReader};
 use diskcutter_lib::writers::{DeviceIo, PlainFileDeviceIo};
 
 #[cfg(unix)]
@@ -49,9 +48,11 @@ fn deterministic_bytes(len: usize, seed: u64) -> Vec<u8> {
     out
 }
 
-/// In-memory `ImageReader` backed by a `Cursor<Vec<u8>>`.
+/// In-memory image source. Reads as a `Read`-only cursor; `total_bytes()`
+/// is now what callers thread into `pipeline::burn` directly (the old
+/// `ImageReader` trait went away with the decoder-chain migration).
 struct MemImageReader {
-    info: ImageInfo,
+    total_bytes: u64,
     cursor: Cursor<Vec<u8>>,
 }
 
@@ -59,12 +60,7 @@ impl MemImageReader {
     fn new(data: Vec<u8>) -> Self {
         let len = data.len() as u64;
         Self {
-            info: ImageInfo {
-                path: PathBuf::from("/synthetic.img"),
-                format_label: "SYNTHETIC".into(),
-                source_bytes: len,
-                uncompressed_bytes: len,
-            },
+            total_bytes: len,
             cursor: Cursor::new(data),
         }
     }
@@ -77,12 +73,6 @@ impl MemImageReader {
 impl Read for MemImageReader {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         self.cursor.read(buf)
-    }
-}
-
-impl ImageReader for MemImageReader {
-    fn info(&self) -> &ImageInfo {
-        &self.info
     }
 }
 
@@ -117,8 +107,9 @@ fn run_one(label: &str, io: &dyn DeviceIo, source: &mut MemImageReader) -> Row {
     source.rewind();
     let writer = io.open_write(&target).expect("open_write");
     let write_started = Instant::now();
-    let burn_result =
-        pipeline::burn(source, writer, DEFAULT_CHUNK, &cancel, |_| {}).expect("burn succeeds");
+    let total_bytes = source.total_bytes;
+    let burn_result = pipeline::burn(source, total_bytes, writer, DEFAULT_CHUNK, &cancel, |_| {})
+        .expect("burn succeeds");
     let write_elapsed = write_started.elapsed();
 
     // Verify (hash-only read-back through the same impl).

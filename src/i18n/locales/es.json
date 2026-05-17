@@ -19,8 +19,8 @@
   },
   "scene": {
     "idle": {
-      "title": "ESCRIBE LA COLA.",
-      "sub": "CONFIRMA LA ESCRITURA DESTRUCTIVA Y LUEGO INICIA LA COLA.",
+      "title": "LISTO PARA GRABAR.",
+      "sub": "ACTIVA EL AVISO DE ESCRITURA DESTRUCTIVA, LUEGO PULSA [ GRABAR ] EN CADA FILA.",
       "name": "INACTIVO"
     },
     "writing": {
@@ -86,8 +86,6 @@
     "from_url": "DESDE URL",
     "browse_catalog": "CATÁLOGO",
     "clear_done": "LIMPIAR HECHO",
-    "start_queue": "INICIAR COLA",
-    "running": "EJECUTANDO…",
     "copies_label": "COPIAS",
     "copies_inc": "aumentar copias",
     "copies_dec": "disminuir copias"
@@ -187,14 +185,16 @@
     },
     "select_target": "SELECCIONAR DISCO DESTINO",
     "eta": "ETA {{value}}",
-    "remove": "QUITAR DE LA COLA"
+    "elapsed": "TRANSCURRIDO {{value}}",
+    "burn": "GRABAR",
+    "burn_needs_arm": "Active el aviso de escritura destructiva para armar este grabado.",
+    "delete": "ELIMINAR"
   },
   "detail": {
     "block": {
       "image": "IMAGEN",
       "target": "DESTINO",
       "partitions": "DISEÑO DE PARTICIONES",
-      "burn_params": "PARÁMETROS DE GRABACIÓN",
       "verification": "VERIFICACIÓN"
     },
     "kv": {
@@ -210,8 +210,7 @@
       "capacity_value": "{{capacity}}  ({{bytes}} bytes)",
       "bus": "BUS",
       "partitions": "PARTICIONES",
-      "no_target": "SIN DESTINO SELECCIONADO",
-      "burn_params_pending": "Se registra al iniciar la grabación."
+      "no_target": "SIN DESTINO SELECCIONADO"
     },
     "actions": {
       "abort": "ABORTAR ESCRITURA",

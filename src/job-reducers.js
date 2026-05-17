@@ -4,7 +4,12 @@ export function applyJobUpdate(jobs, u) {
   return jobs.map((j) => {
     if (j.id !== u.job_id) return j;
     if (u.state === 'writing') {
-      return { ...j, state: 'writing', progress: u.progress, speed: u.speed, eta: u.eta };
+      // Stamp startedAt on the transition INTO writing so the row can show a
+      // live elapsed counter alongside the ETA. Preserved across subsequent
+      // 'writing' progress events and across the writing→verifying handoff so
+      // the elapsed reflects the whole job run, not just the current phase.
+      const startedAt = (j.state === 'writing' || j.state === 'verifying') ? j.startedAt : Date.now();
+      return { ...j, state: 'writing', progress: u.progress, speed: u.speed, eta: u.eta, startedAt };
     }
     if (u.state === 'verifying') {
       return { ...j, state: 'verifying', verifyProgress: u.progress, speed: u.speed, eta: u.eta };

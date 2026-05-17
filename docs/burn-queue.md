@@ -84,7 +84,7 @@ failedCount  = jobs.filter(j => j.state === 'error').length
 
 `queueReady(jobs, confirmed)` (in `src/keymap.js`) gates the start
 shortcut. There is also a `queue.depth` config in preferences (default
-15) which is **unrelated** — it's the writer's internal pipelined-write
+16) which is **unrelated** — it's the writer's internal pipelined-write
 queue depth, not the user-facing burn queue.
 
 ### Backend

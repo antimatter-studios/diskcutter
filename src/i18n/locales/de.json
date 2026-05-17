@@ -19,8 +19,8 @@
   },
   "scene": {
     "idle": {
-      "title": "WARTESCHLANGE SCHREIBEN.",
-      "sub": "DESTRUKTIVES SCHREIBEN BESTÄTIGEN, DANN WARTESCHLANGE STARTEN.",
+      "title": "BEREIT ZUM BRENNEN.",
+      "sub": "SCHREIBWARNUNG SCHARFSCHALTEN, DANN [ BRENNEN ] IN JEDER ZEILE.",
       "name": "BEREIT"
     },
     "writing": {
@@ -86,8 +86,6 @@
     "from_url": "VON URL",
     "browse_catalog": "KATALOG",
     "clear_done": "FERTIGE LÖSCHEN",
-    "start_queue": "WARTESCHLANGE STARTEN",
-    "running": "LÄUFT…",
     "copies_label": "KOPIEN",
     "copies_inc": "Kopien erhöhen",
     "copies_dec": "Kopien verringern"
@@ -187,14 +185,16 @@
     },
     "select_target": "ZIEL-DATENTRÄGER WÄHLEN",
     "eta": "REST {{value}}",
-    "remove": "AUS WARTESCHLANGE ENTFERNEN"
+    "elapsed": "VERSTRICHEN {{value}}",
+    "burn": "BRENNEN",
+    "burn_needs_arm": "Aktivieren Sie oben die Schreibwarnung, um diesen Brennvorgang scharfzuschalten.",
+    "delete": "LÖSCHEN"
   },
   "detail": {
     "block": {
       "image": "ABBILD",
       "target": "ZIEL",
       "partitions": "PARTITIONSLAYOUT",
-      "burn_params": "BRENN-PARAMETER",
       "verification": "PRÜFUNG"
     },
     "kv": {
@@ -210,8 +210,7 @@
       "capacity_value": "{{capacity}}  ({{bytes}} Bytes)",
       "bus": "BUS",
       "partitions": "PARTITIONEN",
-      "no_target": "KEIN ZIEL GEWÄHLT",
-      "burn_params_pending": "Wird beim Brennstart aufgezeichnet."
+      "no_target": "KEIN ZIEL GEWÄHLT"
     },
     "actions": {
       "abort": "SCHREIBEN ABBRECHEN",

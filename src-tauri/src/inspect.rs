@@ -93,9 +93,14 @@ pub fn inspect_any(path: &Path) -> Option<PartitionSummary> {
             inspect_block_read(&r)
         }
         Some("gz") | Some("xz") | Some("bz2") | Some("bzip2") | Some("zst") | Some("zstd") => {
-            // Compressed sources need decompression before partition
-            // probe — outside the cheap-inspect scope.
-            None
+            // Phase 3 feature unlock: decode a bounded prefix from the
+            // chain and run the partition probe against it. Partitions
+            // whose start offset is past the prefix get reported with
+            // filesystem = None (the bounded-view BlockRead returns
+            // OutOfBounds for those reads); partitions inside the
+            // 4 MiB prefix probe normally.
+            let mut dr = crate::decoder_chain::DiskReader::open(path).ok()?;
+            dr.layout().ok().flatten()
         }
         _ => inspect_raw_image(path),
     }
@@ -487,13 +492,46 @@ mod tests {
     }
 
     #[test]
-    fn inspect_any_returns_none_for_compressed_extensions() {
+    fn inspect_any_returns_none_for_compressed_garbage() {
+        // Phase 3: the compressed-extension branch now decodes the
+        // first ~4 MiB via DiskReader and probes the decoded prefix.
+        // Garbage (no real magic, no partition table) yields None;
+        // a real compressed image carrying a partition table would
+        // now return Some. See decoder_chain::DiskReader::layout.
         let dir = tempfile::tempdir().unwrap();
         for ext in &["gz", "xz", "bz2", "zst"] {
             let p = dir.path().join(format!("img.iso.{ext}"));
             std::fs::write(&p, b"would need decompression").unwrap();
             assert!(inspect_any(&p).is_none(), "ext {ext} should be skipped");
         }
+    }
+
+    /// Phase 3 feature-unlock smoke test: a gzipped image with a real
+    /// MBR partition table should now probe via the decoder chain.
+    #[test]
+    fn inspect_any_probes_partition_table_inside_gzip() {
+        use flate2::write::GzEncoder;
+        use flate2::Compression;
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("disk.img.gz");
+        // Build a small MBR image inline (same shape as
+        // inspect_raw_image_reads_synthetic_mbr).
+        let mut image = vec![0u8; 32 * 1024];
+        let entry = 0x1BE;
+        image[entry] = 0x00;
+        image[entry + 4] = 0x83;
+        image[entry + 8..entry + 12].copy_from_slice(&2048u32.to_le_bytes());
+        image[entry + 12..entry + 16].copy_from_slice(&8u32.to_le_bytes());
+        image[510] = 0x55;
+        image[511] = 0xAA;
+        let mut e = GzEncoder::new(Vec::new(), Compression::default());
+        e.write_all(&image).unwrap();
+        std::fs::write(&p, e.finish().unwrap()).unwrap();
+        let summary = inspect_any(&p).expect("decoder chain + layout should yield summary");
+        assert_eq!(summary.table_kind, "MBR");
+        assert_eq!(summary.partitions.len(), 1);
+        assert_eq!(summary.partitions[0].kind_label, "Linux filesystem");
     }
 
     #[test]

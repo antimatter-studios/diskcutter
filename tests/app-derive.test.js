@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { computeScene, sceneToTitleKey, computeSessionStats, planStart } from '../src/app-derive.js';
+import { computeScene, sceneToTitleKey, computeSessionStats } from '../src/app-derive.js';
 
 const j = (state, extra = {}) => ({ state, ...extra });
 
@@ -87,68 +87,6 @@ describe('computeSessionStats', () => {
     const stats = computeSessionStats([{ state: 'error' }], 0, 0);
     expect(stats.written).toBe('—');
     expect(stats.avg).toBe('—');
-  });
-});
-
-describe('planStart', () => {
-  const job = (id, state, imageBytes, targetBytes, validation = 'valid') => ({
-    id,
-    state,
-    validation,
-    image: { bytes: imageBytes },
-    target: targetBytes != null ? { bytes: targetBytes, device: `/dev/${id}` } : null,
-  });
-
-  it('returns empty plan when nothing is idle', () => {
-    const r = planStart([job('a', 'writing', 100, 200), job('b', 'success', 100, 200)]);
-    expect(r.ready).toEqual([]);
-    expect(r.tooSmall).toEqual([]);
-    expect(r.okToBurn).toEqual([]);
-  });
-
-  it('skips idle jobs without a target', () => {
-    const without = job('a', 'idle', 100, null);
-    const r = planStart([without]);
-    expect(r.ready).toEqual([]);
-    expect(r.okToBurn).toEqual([]);
-  });
-
-  it('flags jobs whose target is smaller than the image as too small', () => {
-    const small = job('a', 'idle', 1000, 500);
-    const big = job('b', 'idle', 1000, 2000);
-    const r = planStart([small, big]);
-    expect(r.tooSmall).toContain(small);
-    expect(r.tooSmall).not.toContain(big);
-    expect(r.okToBurn).toEqual([big]);
-  });
-
-  it('treats missing image.bytes or target.bytes as non-flag (eligible to burn)', () => {
-    const noBytes = job('a', 'idle', 0, 500);    // image bytes 0 → falsy → not flagged
-    const noTarget = job('b', 'idle', 1000, 0);  // target bytes 0 → falsy → not flagged
-    const r = planStart([noBytes, noTarget]);
-    expect(r.tooSmall).toEqual([]);
-    expect(r.okToBurn).toEqual([noBytes, noTarget]);
-  });
-
-  it('returns equal-size as burnable (target.bytes >= image.bytes)', () => {
-    const eq = job('a', 'idle', 1000, 1000);
-    const r = planStart([eq]);
-    expect(r.tooSmall).toEqual([]);
-    expect(r.okToBurn).toEqual([eq]);
-  });
-
-  it('excludes jobs whose validation is still pending', () => {
-    const pending = job('a', 'idle', 1000, 2000, 'pending');
-    const r = planStart([pending]);
-    expect(r.ready).toEqual([]);
-    expect(r.okToBurn).toEqual([]);
-  });
-
-  it('excludes jobs whose validation came back invalid', () => {
-    const bad = job('a', 'idle', 1000, 2000, 'invalid');
-    const r = planStart([bad]);
-    expect(r.ready).toEqual([]);
-    expect(r.okToBurn).toEqual([]);
   });
 });
 
@@ -250,39 +188,3 @@ describe('computeSessionStats additional cases', () => {
   });
 });
 
-describe('planStart purity & additional cases', () => {
-  const job = (id, state, imageBytes, targetBytes, validation = 'valid') => ({
-    id,
-    state,
-    validation,
-    image: { bytes: imageBytes },
-    target: targetBytes != null ? { bytes: targetBytes, device: `/dev/${id}` } : null,
-  });
-
-  it('does not mutate input jobs', () => {
-    const jobs = [job('a', 'idle', 100, 50), job('b', 'idle', 100, 200)];
-    const snap = JSON.parse(JSON.stringify(jobs));
-    planStart(jobs);
-    expect(jobs).toEqual(snap);
-  });
-
-  it('partitions ready into okToBurn and tooSmall with no overlap', () => {
-    const small = job('a', 'idle', 1000, 500);
-    const big = job('b', 'idle', 1000, 2000);
-    const r = planStart([small, big]);
-    expect(r.ready).toEqual([small, big]);
-    // every job in `ready` is in exactly one of okToBurn / tooSmall
-    r.ready.forEach((rj) => {
-      const inSmall = r.tooSmall.includes(rj);
-      const inOk = r.okToBurn.includes(rj);
-      expect(inSmall !== inOk).toBe(true); // XOR — exactly one
-    });
-  });
-
-  it('empty input produces empty plan', () => {
-    const r = planStart([]);
-    expect(r.ready).toEqual([]);
-    expect(r.tooSmall).toEqual([]);
-    expect(r.okToBurn).toEqual([]);
-  });
-});

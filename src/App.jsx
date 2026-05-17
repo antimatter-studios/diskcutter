@@ -19,9 +19,9 @@ import {
   useQueueStore, attachQueueListeners, selectJobs, selectEntries, startValidation,
 } from './store/queue.js';
 import {
-  computeScene, sceneToTitleKey, computeSessionStats, planStart,
+  computeScene, sceneToTitleKey, computeSessionStats,
 } from './app-derive.js';
-import { matchShortcut, isEditableTarget, queueReady } from './keymap.js';
+import { matchShortcut, isEditableTarget } from './keymap.js';
 import {
   addToast, reapExpired, dismissToast, defaultTtlMs,
 } from './toast.js';
@@ -228,6 +228,12 @@ function App() {
     let mounted = true;
     const subs = [];
 
+    // Pull persisted (non-success) burn_jobs rows back into the queue
+    // before listeners attach. Without this the queue starts empty on
+    // every relaunch even though prior queued / running / errored
+    // jobs are still in the DB.
+    useQueueStore.getState().hydrate();
+
     // Queue-state event channels (job-update, job-complete, job-error,
     // image-validated) live in the store. We only pass back the FDA
     // and "image invalid" reactions because those touch UI state /
@@ -407,24 +413,36 @@ function App() {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  const startQueue = useCallback(async () => {
-    const { tooSmall, okToBurn } = planStart(jobs);
-    if (tooSmall.length) {
-      useQueueStore.getState().markTooSmall(tooSmall.map((j) => j.id));
+  // Per-row Burn. The danger-banner toggle is a one-shot arm: confirmed must
+  // be true to start a burn, and the click clears confirmed immediately so the
+  // next burn requires a fresh deliberate gesture. The in-flight ref guards
+  // against double-clicks landing two start_write spawns for the same job.
+  const burnJob = useCallback(async (jobId) => {
+    const job = jobs.find((j) => j.id === jobId);
+    if (!job || job.state !== 'idle' || !job.target || job.validation !== 'valid') return;
+    if (!confirmed) return;
+    if (retryInFlightRef.current.has(jobId)) return;
+    if (job.target.bytes && job.image.bytes && job.target.bytes < job.image.bytes) {
+      useQueueStore.getState().markTooSmall([jobId]);
+      return;
     }
-    for (const job of okToBurn) {
-      try {
-        await invoke('start_write', {
-          jobId: job.id,
-          imagePath: job.image.path,
-          targetDevice: job.target.device,
-        });
-      } catch (e) {
+    setConfirmed(false);
+    retryInFlightRef.current.add(jobId);
+    try {
+      await invoke('start_write', {
+        jobId: job.id,
+        imagePath: job.image.path,
+        targetDevice: job.target.device,
+      });
+    } catch (e) {
+      if (!String(e).includes('already in flight')) {
         console.error('start_write failed', e);
         pushToast('error', t('error.burn_start_failed', { error: e }));
       }
+    } finally {
+      retryInFlightRef.current.delete(jobId);
     }
-  }, [jobs, pushToast, t]);
+  }, [jobs, confirmed, pushToast, t]);
 
   // Global keyboard shortcuts. Skip when focus is in a text-entry surface so
   // we don't eat keystrokes the user expects to land in a form field. Cmd+Q
@@ -435,13 +453,6 @@ function App() {
       if (matchShortcut(e, { key: 'o', mod: true })) {
         e.preventDefault();
         addImage();
-        return;
-      }
-      if (matchShortcut(e, { key: 'Enter', mod: true })) {
-        if (queueReady(jobs, confirmed)) {
-          e.preventDefault();
-          startQueue();
-        }
         return;
       }
       if (matchShortcut(e, { key: ',', mod: true })) {
@@ -456,7 +467,7 @@ function App() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [addImage, startQueue, jobs, confirmed]);
+  }, [addImage]);
 
   const cancelJob = useCallback(async (jobId) => {
     try {
@@ -474,13 +485,15 @@ function App() {
     if (retryInFlightRef.current.has(jobId)) return;
     const job = jobs.find((j) => j.id === jobId);
     if (!job || !job.target) return;
-    // Don't bother the backend if we already know FDA is blocked. The user
-    // can still trigger an explicit prompt via the banner action; this just
-    // keeps the click from being a no-op storm.
     if (fda.blocked) {
       invoke('open_fda_settings').catch(() => {});
       return;
     }
+    // Retry is destructive — same one-shot arm gate as Burn. confirmed must
+    // be true and clears on click so the next destructive action needs a
+    // fresh toggle.
+    if (!confirmed) return;
+    setConfirmed(false);
     retryInFlightRef.current.add(jobId);
     useQueueStore.getState().setRetrying(jobId, true);
     try {
@@ -490,8 +503,6 @@ function App() {
         targetDevice: job.target.device,
       });
     } catch (e) {
-      // "already in flight" is the registry rejecting a duplicate spawn —
-      // expected when a click slips past the ref guard. Silent.
       if (!String(e).includes('already in flight')) {
         console.error('retry start_write failed', e);
         pushToast('error', `Retry failed: ${e}`);
@@ -500,7 +511,7 @@ function App() {
       retryInFlightRef.current.delete(jobId);
       useQueueStore.getState().setRetrying(jobId, false);
     }
-  }, [jobs, fda.blocked, pushToast]);
+  }, [jobs, fda.blocked, confirmed, pushToast]);
 
   const clearDone = useCallback(() => {
     useQueueStore.getState().clearDone();
@@ -574,7 +585,7 @@ function App() {
     onAdd: addImage,
     onAddFromUrl: addImageFromUrl,
     onBrowseCatalog: () => setCatalogOpen(true),
-    onStart: startQueue,
+    onBurn: burnJob,
     onCancelJob: cancelJob,
     onRetry: retryJob,
     onClearDone: clearDone,
@@ -657,7 +668,7 @@ function AppBody({
   onFdaRecheck,
   setPickerJob,
   entries, nextCopies, onChangeNextCopies, onDispatchFromEntry,
-  onAdd, onAddFromUrl, onBrowseCatalog, onStart, onCancelJob,
+  onAdd, onAddFromUrl, onBrowseCatalog, onBurn, onCancelJob,
   onRetry, onClearDone, onFlashAnother, onCopyText, onRemoveJob,
 }) {
   const { t } = useTranslation();
@@ -754,12 +765,9 @@ function AppBody({
             onAdd={onAdd}
             onAddFromUrl={onAddFromUrl}
             onBrowseCatalog={onBrowseCatalog}
-            onStart={onStart}
             onClearDone={onClearDone}
-            confirmed={confirmed}
             jobs={jobs}
             accent={accent}
-            busy={scene === 'writing' || scene === 'verifying'}
             copies={nextCopies}
             onChangeCopies={onChangeNextCopies}
           />
@@ -805,9 +813,11 @@ function AppBody({
                 accent={accent}
                 density={density}
                 fdaBlocked={fdaBlocked}
+                confirmed={confirmed}
                 expanded={!!expanded[job.id]}
                 onToggle={() => setExpanded((e) => ({ ...e, [job.id]: !e[job.id] }))}
                 onSelectTarget={() => setPickerJob(job.id)}
+                onBurn={() => onBurn(job.id)}
                 onCancel={() => onCancelJob(job.id)}
                 onCopyHash={() => onCopyText(job.verification?.sourceHash)}
                 onCopyError={() => onCopyText(job.errorMessage || job.errorCode)}

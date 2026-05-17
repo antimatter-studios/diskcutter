@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 //
 // Each entry: (label, sql). The sql must be a single statement that either
 // errors or returns a row matching the expected predicate in `run_health`.
-const REQUIRED_TABLES: &[&str] = &["config", "burn_history", "burn_logs", "schema_migrations"];
+const REQUIRED_TABLES: &[&str] = &["config", "burn_jobs", "burn_logs", "schema_migrations"];
 
 fn now_ms() -> i64 {
     std::time::SystemTime::now()
@@ -180,10 +180,10 @@ mod tests {
     }
 
     #[test]
-    fn initial_migration_creates_expected_tables() {
+    fn migrations_produce_expected_tables() {
         let mut conn = Connection::open_in_memory().unwrap();
         run(&mut conn).expect("migrations apply");
-        for table in ["config", "burn_history", "burn_logs"] {
+        for table in ["config", "burn_jobs", "burn_logs"] {
             let n: i64 = conn
                 .query_row(
                     "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
@@ -193,6 +193,63 @@ mod tests {
                 .unwrap();
             assert_eq!(n, 1, "table {table} missing after migrations");
         }
+        // burn_history should be gone after 0002.
+        let n: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='burn_history'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 0, "burn_history should have been renamed");
+    }
+
+    // burn_history → burn_jobs migration: pre-load 0001 rows, run 0002,
+    // confirm rows survive with their old started_at remapped to
+    // queued_at and the new columns present and NULL.
+    #[test]
+    fn burn_history_rows_migrate_into_burn_jobs() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        let m0001 = MIGRATIONS
+            .iter()
+            .find(|m| m.version == 1)
+            .expect("0001 migration present");
+        conn.execute_batch(BOOTSTRAP).unwrap();
+        conn.execute_batch(m0001.sql).unwrap();
+        conn.execute(
+            "INSERT INTO burn_history (job_id, image_path, image_name, image_bytes,
+                target_device, state, started_at)
+             VALUES ('legacy', '/tmp/x.iso', 'x.iso', 100, '/dev/disk5', 'success', 1715)",
+            [],
+        )
+        .unwrap();
+        // Stamp 0001 as applied so run() picks up at 0002.
+        conn.execute(
+            "INSERT INTO schema_migrations (version, name, applied_at) VALUES (1, ?1, 0)",
+            params![m0001.name],
+        )
+        .unwrap();
+        run(&mut conn).expect("0002 applies on populated 0001 schema");
+        let (job_id, queued_at, started_at, progress_file, helper_pid): (
+            String,
+            i64,
+            Option<i64>,
+            Option<String>,
+            Option<i64>,
+        ) = conn
+            .query_row(
+                "SELECT job_id, queued_at, started_at, progress_file, helper_pid
+                 FROM burn_jobs WHERE job_id='legacy'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+            )
+            .unwrap();
+        assert_eq!(job_id, "legacy");
+        assert_eq!(queued_at, 1715, "old started_at should become queued_at");
+        assert!(started_at.is_none());
+        assert!(progress_file.is_none());
+        assert!(helper_pid.is_none());
     }
 
     #[test]

@@ -23,12 +23,3 @@ export function isEditableTarget(target) {
   if (target.isContentEditable) return true;
   return false;
 }
-
-// Toolbar's `ready` predicate, mirrored here so the keyboard handler can
-// gate Cmd+Return without reaching into the component. Keep this in sync
-// with components.jsx's Toolbar.
-export function queueReady(jobs, confirmed) {
-  if (!confirmed) return false;
-  if (!Array.isArray(jobs)) return false;
-  return jobs.some((j) => j && j.state === 'idle' && j.target && j.validation === 'valid');
-}

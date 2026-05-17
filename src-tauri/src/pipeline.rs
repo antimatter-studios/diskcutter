@@ -3,7 +3,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use crate::hash::{self, HashAlgo};
-use crate::readers::ImageReader;
 use crate::writers::{DeviceReader, DeviceWriter};
 
 // 1 MiB matches typical USB-MSC max transfer length on macOS, avoiding
@@ -23,6 +22,34 @@ pub enum BurnError {
 impl From<std::io::Error> for BurnError {
     fn from(e: std::io::Error) -> Self {
         BurnError::Io(e)
+    }
+}
+
+impl std::fmt::Display for BurnError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BurnError::Cancelled => write!(f, "cancelled"),
+            BurnError::SizeMismatch { expected, actual } => write!(
+                f,
+                "size mismatch: expected {expected} bytes, wrote {actual} bytes"
+            ),
+            BurnError::Io(e) => {
+                // Map common macOS errnos to operator-readable hints so the
+                // error strip doesn't show raw Debug noise like
+                // `Io(Os { code: 6, kind: Uncategorized, ... })`.
+                let hint = e.raw_os_error().and_then(|code| match code {
+                    5 => Some("I/O error from device"),
+                    6 => Some("target device unavailable (was it ejected?)"),
+                    16 => Some("target device busy"),
+                    28 => Some("no space left on target"),
+                    _ => None,
+                });
+                match hint {
+                    Some(h) => write!(f, "{h} ({e})"),
+                    None => write!(f, "{e}"),
+                }
+            }
+        }
     }
 }
 
@@ -47,8 +74,15 @@ pub struct BurnResult {
 /// Backward-compatible wrapper around `burn_with_hash`; existing call sites
 /// (disks.rs, tests) keep their current signature. New call sites that want
 /// to pick the algorithm at runtime should call `burn_with_hash` directly.
+///
+/// `total_bytes` is the expected uncompressed source size — used only for
+/// progress totals. Callers that don't know the size up front (compressed
+/// sources without a recoverable footer) pass `0`, which still produces
+/// correct byte-by-byte output but with `bytes_total == bytes_done` in the
+/// final progress callback.
 pub fn burn(
-    reader: &mut dyn ImageReader,
+    reader: &mut dyn Read,
+    total_bytes: u64,
     writer: Box<dyn DeviceWriter>,
     chunk_size: usize,
     cancel: &AtomicBool,
@@ -56,6 +90,7 @@ pub fn burn(
 ) -> Result<BurnResult, BurnError> {
     burn_with_hash(
         reader,
+        total_bytes,
         writer,
         chunk_size,
         HashAlgo::Sha256,
@@ -69,14 +104,15 @@ pub fn burn(
 /// regardless of algorithm (the field name is historical; for xxh64 it
 /// holds a 16-char hex u64).
 pub fn burn_with_hash(
-    reader: &mut dyn ImageReader,
+    reader: &mut dyn Read,
+    total_bytes: u64,
     writer: Box<dyn DeviceWriter>,
     chunk_size: usize,
     hash_algo: HashAlgo,
     cancel: &AtomicBool,
     mut on_progress: impl FnMut(BurnProgress),
 ) -> Result<BurnResult, BurnError> {
-    let total = reader.info().uncompressed_bytes;
+    let total = total_bytes;
     let mut writer = writer;
     let mut hasher = hash::new(hash_algo);
     let mut buf = vec![0u8; chunk_size];
@@ -254,7 +290,8 @@ pub fn verify_hash_only_with_hash(
 
 /// SHA-256 variant kept for backward compatibility — see `verify_with_hash`.
 pub fn verify(
-    source: &mut dyn ImageReader,
+    source: &mut dyn Read,
+    total_bytes: u64,
     device: &mut dyn DeviceReader,
     chunk_size: usize,
     cancel: &AtomicBool,
@@ -262,6 +299,7 @@ pub fn verify(
 ) -> Result<VerifyResult, BurnError> {
     verify_with_hash(
         source,
+        total_bytes,
         device,
         chunk_size,
         HashAlgo::Sha256,
@@ -273,15 +311,19 @@ pub fn verify(
 /// Byte-compare-and-hash verify path using the chosen algorithm for the
 /// source/readback digests. The byte-level mismatch collection is
 /// algorithm-independent — it always inspects raw bytes.
+///
+/// `total_bytes` is the expected uncompressed size — used for progress
+/// totals only. Pass `0` if unknown.
 pub fn verify_with_hash(
-    source: &mut dyn ImageReader,
+    source: &mut dyn Read,
+    total_bytes: u64,
     device: &mut dyn DeviceReader,
     chunk_size: usize,
     hash_algo: HashAlgo,
     cancel: &AtomicBool,
     mut on_progress: impl FnMut(VerifyProgress),
 ) -> Result<VerifyResult, BurnError> {
-    let total = source.info().uncompressed_bytes;
+    let total = total_bytes;
     let mut src_hasher = hash::new(hash_algo);
     let mut dev_hasher = hash::new(hash_algo);
     let mut src_buf = vec![0u8; chunk_size];
@@ -416,43 +458,33 @@ fn hex_bytes(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::readers::{ImageInfo, ImageReader};
     use crate::writers::{DeviceReader, DeviceWriter};
     use sha2::{Digest, Sha256};
     use std::cell::RefCell;
     use std::io::{Cursor, Read as IoRead, Write as IoWrite};
-    use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
 
-    struct MockImageReader {
-        info: ImageInfo,
+    /// In-memory source: a `Cursor<Vec<u8>>` paired with its known total
+    /// length. Tests build it once, then pass `(&mut src.inner, src.total)`
+    /// to the pipeline funcs.
+    struct MockSource {
         inner: Cursor<Vec<u8>>,
+        total: u64,
     }
 
-    impl MockImageReader {
+    impl MockSource {
         fn new(data: Vec<u8>) -> Self {
-            let len = data.len() as u64;
+            let total = data.len() as u64;
             Self {
-                info: ImageInfo {
-                    path: PathBuf::from("/mock.img"),
-                    format_label: "MOCK".into(),
-                    source_bytes: len,
-                    uncompressed_bytes: len,
-                },
                 inner: Cursor::new(data),
+                total,
             }
         }
     }
 
-    impl IoRead for MockImageReader {
+    impl IoRead for MockSource {
         fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
             self.inner.read(buf)
-        }
-    }
-
-    impl ImageReader for MockImageReader {
-        fn info(&self) -> &ImageInfo {
-            &self.info
         }
     }
 
@@ -510,11 +542,13 @@ mod tests {
     #[test]
     fn burn_writes_all_source_bytes() {
         let data: Vec<u8> = (0..10_000u32).map(|i| (i % 256) as u8).collect();
-        let mut reader = MockImageReader::new(data.clone());
+        let mut reader = MockSource::new(data.clone());
+        let total = reader.total;
         let (writer, sink, finished) = make_writer();
         let cancel = AtomicBool::new(false);
 
-        let result = burn(&mut reader, writer, DEFAULT_CHUNK, &cancel, |_| {}).expect("burn ok");
+        let result =
+            burn(&mut reader, total, writer, DEFAULT_CHUNK, &cancel, |_| {}).expect("burn ok");
 
         assert_eq!(result.bytes_written, data.len() as u64);
         assert_eq!(result.source_sha256, sha256_of(&data));
@@ -528,12 +562,14 @@ mod tests {
         // paths of xxh64. Compare against the standalone hash::new(Xxhash)
         // applied to the same buffer — should match byte for byte.
         let data: Vec<u8> = (0..10_000u32).map(|i| (i % 256) as u8).collect();
-        let mut reader = MockImageReader::new(data.clone());
+        let mut reader = MockSource::new(data.clone());
+        let total = reader.total;
         let (writer, sink, _) = make_writer();
         let cancel = AtomicBool::new(false);
 
         let result = burn_with_hash(
             &mut reader,
+            total,
             writer,
             DEFAULT_CHUNK,
             HashAlgo::Xxhash,
@@ -562,12 +598,14 @@ mod tests {
         // Uses the in-memory CollectingWriter + CursorDeviceReader so we
         // don't need a real disk to assert the algorithm threads through.
         let data: Vec<u8> = (0..32_768u32).map(|i| ((i * 7) % 256) as u8).collect();
-        let mut reader = MockImageReader::new(data.clone());
+        let mut reader = MockSource::new(data.clone());
+        let total = reader.total;
         let (writer, sink, _) = make_writer();
         let cancel = AtomicBool::new(false);
 
         let burn_res = burn_with_hash(
             &mut reader,
+            total,
             writer,
             DEFAULT_CHUNK,
             HashAlgo::Xxhash,
@@ -600,7 +638,8 @@ mod tests {
     #[test]
     fn verify_with_hash_xxhash_matches_identical_streams() {
         let data: Vec<u8> = (0..4096u32).map(|i| (i % 256) as u8).collect();
-        let mut src = MockImageReader::new(data.clone());
+        let mut src = MockSource::new(data.clone());
+        let total = src.total;
         let mut dev = CursorDeviceReader {
             inner: Cursor::new(data),
         };
@@ -608,6 +647,7 @@ mod tests {
 
         let result = verify_with_hash(
             &mut src,
+            total,
             &mut dev,
             DEFAULT_CHUNK,
             HashAlgo::Xxhash,
@@ -625,11 +665,12 @@ mod tests {
     #[test]
     fn burn_handles_data_larger_than_one_chunk() {
         let data: Vec<u8> = vec![0xAB; DEFAULT_CHUNK + 1_000];
-        let mut reader = MockImageReader::new(data.clone());
+        let mut reader = MockSource::new(data.clone());
+        let total = reader.total;
         let (writer, sink, _) = make_writer();
         let cancel = AtomicBool::new(false);
 
-        let result = burn(&mut reader, writer, DEFAULT_CHUNK, &cancel, |_| {}).unwrap();
+        let result = burn(&mut reader, total, writer, DEFAULT_CHUNK, &cancel, |_| {}).unwrap();
 
         assert_eq!(result.bytes_written, data.len() as u64);
         assert_eq!(*sink.lock().unwrap(), data);
@@ -637,11 +678,12 @@ mod tests {
 
     #[test]
     fn burn_returns_cancelled_when_flag_set_before_start() {
-        let mut reader = MockImageReader::new(vec![0u8; 1024]);
+        let mut reader = MockSource::new(vec![0u8; 1024]);
+        let total = reader.total;
         let (writer, _, _) = make_writer();
         let cancel = AtomicBool::new(true);
 
-        match burn(&mut reader, writer, DEFAULT_CHUNK, &cancel, |_| {}) {
+        match burn(&mut reader, total, writer, DEFAULT_CHUNK, &cancel, |_| {}) {
             Err(BurnError::Cancelled) => {}
             Err(e) => panic!("expected Cancelled, got {e:?}"),
             Ok(_) => panic!("expected Err, got Ok"),
@@ -650,12 +692,13 @@ mod tests {
 
     #[test]
     fn burn_emits_final_progress_at_completion() {
-        let mut reader = MockImageReader::new(vec![1u8; 64]);
+        let mut reader = MockSource::new(vec![1u8; 64]);
+        let total = reader.total;
         let (writer, _, _) = make_writer();
         let cancel = AtomicBool::new(false);
         let progress = RefCell::new(Vec::<BurnProgress>::new());
 
-        burn(&mut reader, writer, DEFAULT_CHUNK, &cancel, |p| {
+        burn(&mut reader, total, writer, DEFAULT_CHUNK, &cancel, |p| {
             progress.borrow_mut().push(p)
         })
         .unwrap();
@@ -668,13 +711,14 @@ mod tests {
     #[test]
     fn verify_matches_identical_streams() {
         let data: Vec<u8> = (0..2048u32).map(|i| (i % 256) as u8).collect();
-        let mut src = MockImageReader::new(data.clone());
+        let mut src = MockSource::new(data.clone());
+        let total = src.total;
         let mut dev = CursorDeviceReader {
             inner: Cursor::new(data.clone()),
         };
         let cancel = AtomicBool::new(false);
 
-        let result = verify(&mut src, &mut dev, DEFAULT_CHUNK, &cancel, |_| {}).unwrap();
+        let result = verify(&mut src, total, &mut dev, DEFAULT_CHUNK, &cancel, |_| {}).unwrap();
 
         assert!(result.match_);
         assert!(result.mismatches.is_empty());
@@ -688,13 +732,14 @@ mod tests {
         let mut dev_bytes = src_bytes.clone();
         dev_bytes[100] = 0xFF;
         dev_bytes[200] = 0xAA;
-        let mut src = MockImageReader::new(src_bytes);
+        let mut src = MockSource::new(src_bytes);
+        let total = src.total;
         let mut dev = CursorDeviceReader {
             inner: Cursor::new(dev_bytes),
         };
         let cancel = AtomicBool::new(false);
 
-        let result = verify(&mut src, &mut dev, DEFAULT_CHUNK, &cancel, |_| {}).unwrap();
+        let result = verify(&mut src, total, &mut dev, DEFAULT_CHUNK, &cancel, |_| {}).unwrap();
 
         assert!(!result.match_);
         assert!(!result.mismatches.is_empty());
@@ -705,13 +750,14 @@ mod tests {
     fn verify_reports_mismatches_when_device_truncated() {
         let src_bytes = vec![1u8; 1024];
         let dev_bytes = vec![1u8; 512];
-        let mut src = MockImageReader::new(src_bytes);
+        let mut src = MockSource::new(src_bytes);
+        let total = src.total;
         let mut dev = CursorDeviceReader {
             inner: Cursor::new(dev_bytes),
         };
         let cancel = AtomicBool::new(false);
 
-        let result = verify(&mut src, &mut dev, DEFAULT_CHUNK, &cancel, |_| {}).unwrap();
+        let result = verify(&mut src, total, &mut dev, DEFAULT_CHUNK, &cancel, |_| {}).unwrap();
 
         assert!(!result.match_);
         assert!(!result.mismatches.is_empty());
@@ -721,26 +767,28 @@ mod tests {
     fn verify_caps_at_max_mismatches() {
         let src_bytes = vec![0u8; 16 * 1024];
         let dev_bytes = vec![0xFFu8; 16 * 1024];
-        let mut src = MockImageReader::new(src_bytes);
+        let mut src = MockSource::new(src_bytes);
+        let total = src.total;
         let mut dev = CursorDeviceReader {
             inner: Cursor::new(dev_bytes),
         };
         let cancel = AtomicBool::new(false);
 
-        let result = verify(&mut src, &mut dev, DEFAULT_CHUNK, &cancel, |_| {}).unwrap();
+        let result = verify(&mut src, total, &mut dev, DEFAULT_CHUNK, &cancel, |_| {}).unwrap();
 
         assert!(result.mismatches.len() <= MAX_MISMATCHES);
     }
 
     #[test]
     fn verify_returns_cancelled_when_flag_set_first() {
-        let mut src = MockImageReader::new(vec![0u8; 1024]);
+        let mut src = MockSource::new(vec![0u8; 1024]);
+        let total = src.total;
         let mut dev = CursorDeviceReader {
             inner: Cursor::new(vec![0u8; 1024]),
         };
         let cancel = AtomicBool::new(true);
 
-        match verify(&mut src, &mut dev, DEFAULT_CHUNK, &cancel, |_| {}) {
+        match verify(&mut src, total, &mut dev, DEFAULT_CHUNK, &cancel, |_| {}) {
             Err(BurnError::Cancelled) => {}
             Err(e) => panic!("expected Cancelled, got {e:?}"),
             Ok(_) => panic!("expected Err, got Ok"),
