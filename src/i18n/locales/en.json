@@ -190,6 +190,9 @@
     "burn_needs_arm": "Toggle the destructive-write banner above to arm this burn.",
     "delete": "DELETE"
   },
+  "scan": {
+    "scanning": "SCANNING IMAGE"
+  },
   "detail": {
     "block": {
       "image": "IMAGE",
@@ -221,7 +224,8 @@
       "open_log": "OPEN LOG",
       "eject": "EJECT",
       "copy_hash": "COPY HASH",
-      "flash_another": "FLASH ANOTHER"
+      "flash_another": "FLASH ANOTHER",
+      "refresh": "REFRESH"
     }
   },
   "verify": {
@@ -357,7 +361,8 @@
       "performance": "PERFORMANCE",
       "display": "DISPLAY",
       "behavior": "BEHAVIOR",
-      "catalog": "CATALOG"
+      "catalog": "CATALOG",
+      "diagnostics": "DIAGNOSTICS"
     },
     "label": {
       "writer_impl": "WRITER IMPL",
@@ -373,7 +378,8 @@
       "auto_eject": "AUTO EJECT",
       "auto_clear_done_seconds": "AUTO CLEAR DONE",
       "catalog_url": "CATALOG URL",
-      "catalog_refresh_hours": "CATALOG REFRESH"
+      "catalog_refresh_hours": "CATALOG REFRESH",
+      "debug_logging": "VERBOSE LOGGING"
     },
     "catalog_refresh": {
       "off": "MANUAL ONLY",

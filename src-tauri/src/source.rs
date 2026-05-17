@@ -25,6 +25,7 @@ use std::path::{Path, PathBuf};
 use fs_core::BlockReadStreamer;
 
 use crate::decoder_chain::DiskReader;
+use crate::joblog::{JobLogger, NullLogger};
 use crate::readers::magic;
 
 /// Metadata about an image source that callers want before/while
@@ -87,31 +88,57 @@ pub fn probe(path: &Path) -> Option<SourceInfo> {
 /// Open a streaming reader for `path`. The returned reader yields raw
 /// disk-image bytes regardless of the underlying format; the paired
 /// `SourceInfo` tells the caller what they're dealing with for display.
+///
+/// No per-item logging — see `open_streaming_with_log` for the burn path.
 pub fn open_streaming(path: &Path) -> io::Result<(Box<dyn Read + Send>, SourceInfo)> {
+    open_streaming_with_log(path, &NullLogger)
+}
+
+/// Like `open_streaming` but emits debug/info entries into the per-item
+/// log via `log`. Used by the burn path so a row's log captures the
+/// decoder chain's behaviour for that specific image.
+pub fn open_streaming_with_log(
+    path: &Path,
+    log: &dyn JobLogger,
+) -> io::Result<(Box<dyn Read + Send>, SourceInfo)> {
     let info = probe(path)
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "unsupported image format"))?;
+    log.info(&format!(
+        "source: probed {} as {} ({} bytes on disk, {} bytes uncompressed)",
+        path.display(),
+        info.format_label,
+        info.source_bytes,
+        info.uncompressed_bytes,
+    ));
     let reader: Box<dyn Read + Send> = match classify(&info.format_label) {
         Family::Qcow2 => {
+            log.debug("source: family=qcow2, routing to Qcow2Reader (random-access)");
             let r = qcow2::Qcow2Reader::open(path)
                 .map_err(|e| io::Error::other(format!("qcow2: {e:?}")))?;
             Box::new(BlockReadStreamer::new(r))
         }
         Family::Vhd => {
+            log.debug("source: family=vhd, routing to VhdReader (random-access)");
             let r =
                 vhd::VhdReader::open(path).map_err(|e| io::Error::other(format!("vhd: {e:?}")))?;
             Box::new(BlockReadStreamer::new(r))
         }
         Family::Vhdx => {
+            log.debug("source: family=vhdx, routing to VhdxReader (random-access)");
             let r = vhdx::VhdxReader::open(path)
                 .map_err(|e| io::Error::other(format!("vhdx: {e:?}")))?;
             Box::new(BlockReadStreamer::new(r))
         }
         Family::Vmdk => {
+            log.debug("source: family=vmdk, routing to VmdkReader (random-access)");
             let r = vmdk::VmdkReader::open(path)
                 .map_err(|e| io::Error::other(format!("vmdk: {e:?}")))?;
             Box::new(BlockReadStreamer::new(r))
         }
-        Family::Streaming => Box::new(DiskReader::open(path)?),
+        Family::Streaming => {
+            log.debug("source: family=streaming, routing to DiskReader (decoder chain)");
+            Box::new(DiskReader::open_with_log(path, log)?)
+        }
     };
     Ok((reader, info))
 }

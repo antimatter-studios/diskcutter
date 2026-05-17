@@ -169,7 +169,8 @@ mod tests {
 
         let leaf: Box<dyn ReaderInterface> = Box::new(RawFilehandle::open(&p).unwrap());
         let registry: &[&'static dyn FormatTryOpen] = &[&BZIP2_FORMAT];
-        let (mut chain, labels) = identify_data_stream(leaf, registry).unwrap();
+        let (mut chain, labels) =
+            identify_data_stream(leaf, registry, &crate::joblog::NullLogger).unwrap();
         assert_eq!(labels, vec!["bzip2", "raw"]);
         let drained = drain(&mut *chain);
         assert_eq!(drained, payload);

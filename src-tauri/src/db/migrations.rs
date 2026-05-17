@@ -26,7 +26,13 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 //
 // Each entry: (label, sql). The sql must be a single statement that either
 // errors or returns a row matching the expected predicate in `run_health`.
-const REQUIRED_TABLES: &[&str] = &["config", "burn_jobs", "burn_logs", "schema_migrations"];
+const REQUIRED_TABLES: &[&str] = &[
+    "config",
+    "burn_jobs",
+    "burn_logs",
+    "image_scans",
+    "schema_migrations",
+];
 
 fn now_ms() -> i64 {
     std::time::SystemTime::now()

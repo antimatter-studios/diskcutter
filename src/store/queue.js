@@ -397,6 +397,60 @@ export const useQueueStore = create((set, get) => ({
       return { jobs: { ...s.jobs, [jobId]: { ...j, boot: boot || null } } };
     });
   },
+
+  // Patch the row's deep-scan progress. `null` clears the bar; `{done,
+  // total}` drives it. Cleared explicitly on scan-complete so the row
+  // returns to its normal layout without the progress strip.
+  applyScanProgress(jobId, scanProgress) {
+    set((s) => {
+      const j = s.jobs[jobId];
+      if (!j) return s;
+      return { jobs: { ...s.jobs, [jobId]: { ...j, scanProgress } } };
+    });
+  },
+
+  // Patch one partition's filesystem label as the scan worker discovers
+  // it. Keeps the rest of the partition entry intact so the table only
+  // refreshes the column that actually changed.
+  applyPartitionFs(jobId, partitionIndex, filesystem) {
+    set((s) => {
+      const j = s.jobs[jobId];
+      if (!j || !j.partitions || !Array.isArray(j.partitions.partitions)) return s;
+      const next = j.partitions.partitions.map((p) =>
+        p.index === partitionIndex ? { ...p, filesystem: filesystem || null } : p
+      );
+      return {
+        jobs: {
+          ...s.jobs,
+          [jobId]: { ...j, partitions: { ...j.partitions, partitions: next } },
+        },
+      };
+    });
+  },
+
+  // Patch the row's image data in place after a re-scan, and reset the
+  // downstream probe fields so the UI shows "pending" while the validation
+  // and partition/boot probes re-run. Identity / target / queue position
+  // are preserved — this is distinct from removing and re-adding the row.
+  refreshImage(jobId, image) {
+    set((s) => {
+      const j = s.jobs[jobId];
+      if (!j) return s;
+      return {
+        jobs: {
+          ...s.jobs,
+          [jobId]: {
+            ...j,
+            image,
+            validation: 'pending',
+            validationDetail: null,
+            partitions: null,
+            boot: null,
+          },
+        },
+      };
+    });
+  },
 }));
 
 // Selectors -- co-located so consumers import one symbol per concern.
@@ -457,6 +511,31 @@ export function attachQueueListeners({ onFdaError, onImageInvalid } = {}) {
     });
   }).then((u) => subs.push(u));
 
+  // Deep-scan progressive events — see src-tauri/src/image_scan.rs.
+  // `image-scan-progress` drives the strip under the row; partition-fs
+  // fills filesystem labels as superblock samples land; complete clears
+  // the strip and the row settles into its final state.
+  listen('disk-cutter://image-scan-progress', (e) => {
+    if (!mounted) return;
+    const p = e.payload;
+    useQueueStore.getState().applyScanProgress(p.job_id, {
+      done: p.bytes_done,
+      total: p.bytes_total,
+    });
+  }).then((u) => subs.push(u));
+
+  listen('disk-cutter://image-scan-partition-fs', (e) => {
+    if (!mounted) return;
+    const p = e.payload;
+    useQueueStore.getState().applyPartitionFs(p.job_id, p.partition_index, p.filesystem);
+  }).then((u) => subs.push(u));
+
+  listen('disk-cutter://image-scan-complete', (e) => {
+    if (!mounted) return;
+    const p = e.payload;
+    useQueueStore.getState().applyScanProgress(p.job_id, null);
+  }).then((u) => subs.push(u));
+
   return () => {
     mounted = false;
     subs.forEach((u) => u());
@@ -469,4 +548,20 @@ export function attachQueueListeners({ onFdaError, onImageInvalid } = {}) {
 export function startValidation(jobId, path) {
   return invoke('validate_image_contents', { jobId, path })
     .catch((e) => console.error('validate_image_contents failed', e));
+}
+
+// Kicks off the deep-scan backend worker for this row. The worker short-
+// circuits when the image already has a fresh cached scan, so it is safe
+// to call after every add and after every REFRESH; subsequent jobs that
+// point at the same image hit the cache.
+export function startScan(jobId, path) {
+  return invoke('scan_image_for_row', { jobId, imagePath: path })
+    .catch((e) => console.error('scan_image_for_row failed', e));
+}
+
+// Invalidate the cached scan for an image path so the next add/expand
+// triggers a fresh pass. Wired to the REFRESH button in JobDetail.
+export function clearScanCache(path) {
+  return invoke('image_scan_clear', { imagePath: path })
+    .catch((e) => console.error('image_scan_clear failed', e));
 }

@@ -16,6 +16,7 @@
 
 use super::format::FormatTryOpen;
 use super::interface::ReaderInterface;
+use crate::joblog::JobLogger;
 use std::io;
 
 /// Safety cap on chain depth. 16 is generous: real-world stacks are
@@ -29,23 +30,46 @@ const MAX_DEPTH: usize = 16;
 /// `labels[0]` is the outermost format that matched, `labels[last]`
 /// is always `"raw"` — appended unconditionally so callers can rely
 /// on a non-empty chain ending in the raw-bytes producer.
+///
+/// `log` receives one debug entry per layer attempt and one info entry
+/// summarising the final chain. Pass `&NullLogger` for probe/inspect
+/// callers not attached to a queue item.
 pub fn identify_data_stream(
     mut src: Box<dyn ReaderInterface>,
     registry: &[&'static dyn FormatTryOpen],
+    log: &dyn JobLogger,
 ) -> io::Result<(Box<dyn ReaderInterface>, Vec<&'static str>)> {
     let mut labels: Vec<&'static str> = Vec::new();
-    for _ in 0..MAX_DEPTH {
-        match try_one_round(src, registry) {
+    for depth in 0..MAX_DEPTH {
+        if log.debug_enabled() {
+            log.debug(&format!(
+                "decoder_chain: identify depth={depth} trying {n} formats",
+                n = registry.len()
+            ));
+        }
+        match try_one_round(src, registry, log) {
             Ok((wrapped, label)) => {
+                if log.debug_enabled() {
+                    log.debug(&format!("decoder_chain: matched layer {depth} = {label}"));
+                }
                 labels.push(label);
                 src = wrapped;
             }
             Err(unchanged) => {
+                if log.debug_enabled() {
+                    log.debug(&format!(
+                        "decoder_chain: no format claimed depth={depth}, terminating at raw"
+                    ));
+                }
                 labels.push("raw");
+                log.info(&format!("decoder_chain: {}", labels.join(" → ")));
                 return Ok((unchanged, labels));
             }
         }
     }
+    log.error(&format!(
+        "decoder_chain: exceeded MAX_DEPTH ({MAX_DEPTH}) — possible recursive format bomb"
+    ));
     Err(io::Error::new(
         io::ErrorKind::InvalidData,
         format!("decoder chain exceeded MAX_DEPTH ({MAX_DEPTH}) — possible recursive format bomb"),
@@ -62,11 +86,18 @@ type RoundResult = Result<(Box<dyn ReaderInterface>, &'static str), Box<dyn Read
 fn try_one_round(
     mut src: Box<dyn ReaderInterface>,
     registry: &[&'static dyn FormatTryOpen],
+    log: &dyn JobLogger,
 ) -> RoundResult {
     for fmt in registry {
         match fmt.try_open(src) {
             Ok(wrapped) => return Ok((wrapped, fmt.label())),
             Err(returned) => {
+                if log.debug_enabled() {
+                    log.debug(&format!(
+                        "decoder_chain: format {label} declined",
+                        label = fmt.label()
+                    ));
+                }
                 src = returned;
             }
         }

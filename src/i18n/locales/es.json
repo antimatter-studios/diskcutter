@@ -190,6 +190,9 @@
     "burn_needs_arm": "Active el aviso de escritura destructiva para armar este grabado.",
     "delete": "ELIMINAR"
   },
+  "scan": {
+    "scanning": "ESCANEANDO IMAGEN"
+  },
   "detail": {
     "block": {
       "image": "IMAGEN",
@@ -221,7 +224,8 @@
       "open_log": "ABRIR LOG",
       "eject": "EXPULSAR",
       "copy_hash": "COPIAR HASH",
-      "flash_another": "GRABAR OTRO"
+      "flash_another": "GRABAR OTRO",
+      "refresh": "ACTUALIZAR"
     }
   },
   "verify": {
@@ -357,7 +361,8 @@
       "performance": "RENDIMIENTO",
       "display": "PANTALLA",
       "behavior": "COMPORTAMIENTO",
-      "catalog": "CATÁLOGO"
+      "catalog": "CATÁLOGO",
+      "diagnostics": "DIAGNÓSTICO"
     },
     "label": {
       "writer_impl": "ESCRITOR",
@@ -373,7 +378,8 @@
       "auto_eject": "AUTO EXPULSAR",
       "auto_clear_done_seconds": "AUTO LIMPIAR HECHO",
       "catalog_url": "URL DEL CATÁLOGO",
-      "catalog_refresh_hours": "ACTUALIZAR CATÁLOGO"
+      "catalog_refresh_hours": "ACTUALIZAR CATÁLOGO",
+      "debug_logging": "REGISTRO DETALLADO"
     },
     "catalog_refresh": {
       "off": "SOLO MANUAL",

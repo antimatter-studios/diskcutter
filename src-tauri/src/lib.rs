@@ -12,7 +12,9 @@ pub mod forensic;
 pub mod hash;
 mod helper;
 pub mod image;
+pub mod image_scan;
 pub mod inspect;
+pub mod joblog;
 pub mod pipeline;
 pub mod qemu;
 pub mod readers;
@@ -29,7 +31,8 @@ pub use helper::run_helper;
 
 use db::{
     burn_jobs_active, burn_jobs_clear, burn_jobs_list, burn_logs_for_job, burn_logs_list,
-    config_all, config_get, config_set, enqueue_burn, remove_burn_job, set_burn_target, Db,
+    config_all, config_get, config_set, enqueue_burn, image_scan_clear, image_scan_lookup,
+    remove_burn_job, set_burn_target, Db,
 };
 use disks::{
     abort_and_quit, app_info, cancel_write, check_fda, find_orphan_helpers, has_active_burns,
@@ -95,9 +98,12 @@ pub fn run() {
             set_burn_target,
             burn_logs_list,
             burn_logs_for_job,
+            image_scan_lookup,
+            image_scan_clear,
             commands::inspect_partitions,
             commands::inspect_image_partitions,
             commands::inspect_image_bootable,
+            commands::scan_image_for_row,
             commands::capture_snapshot,
             commands::restore_snapshot,
             commands::export_burn_report,

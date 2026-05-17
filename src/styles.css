@@ -657,6 +657,19 @@ input,select{font:inherit;color:inherit}
 .job-log-level{font-weight:700;letter-spacing:.04em;color:var(--ink-2)}
 .job-log-line--warn .job-log-level{color:#a0670c}
 .job-log-line--error .job-log-level{color:var(--hazard)}
+.job-log-line--debug .job-log-level,.job-log-line--debug .job-log-msg{color:var(--mute)}
+
+/* Deep-scan progress strip — sits between the row's main line and the
+   expanded detail. Visible only while a scan is in flight. */
+.scan-strip{
+  display:grid;grid-template-columns:auto 1fr auto;gap:10px;align-items:center;
+  padding:5px 14px;border-top:1.5px dashed var(--ink-2);
+  background:var(--bone);color:var(--ink-2);font-size:10.5px;letter-spacing:.06em;
+}
+.scan-strip-label{font-weight:700;color:var(--ink-2)}
+.scan-strip-bar{position:relative;height:4px;background:rgba(0,0,0,.08);overflow:hidden}
+.scan-strip-fill{position:absolute;inset:0 auto 0 0;background:var(--accent,#3a3a3a);transition:width .2s ease}
+.scan-strip-pct{font-variant-numeric:tabular-nums;color:var(--ink-2);min-width:36px;text-align:right}
 .job-log-msg{white-space:pre-wrap;word-break:break-word;color:var(--ink)}
 
 .kv{display:grid;grid-template-columns:160px 1fr;gap:14px;align-items:baseline;font-size:12.5px;line-height:1.5}

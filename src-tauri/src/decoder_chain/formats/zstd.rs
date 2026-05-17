@@ -173,7 +173,8 @@ mod tests {
 
         let leaf: Box<dyn ReaderInterface> = Box::new(RawFilehandle::open(&p).unwrap());
         let registry: &[&'static dyn FormatTryOpen] = &[&ZSTD_FORMAT];
-        let (mut chain, labels) = identify_data_stream(leaf, registry).unwrap();
+        let (mut chain, labels) =
+            identify_data_stream(leaf, registry, &crate::joblog::NullLogger).unwrap();
         assert_eq!(labels, vec!["zstd", "raw"]);
         assert_eq!(drain(&mut *chain), payload);
     }

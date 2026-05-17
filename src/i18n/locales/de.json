@@ -190,6 +190,9 @@
     "burn_needs_arm": "Aktivieren Sie oben die Schreibwarnung, um diesen Brennvorgang scharfzuschalten.",
     "delete": "LÖSCHEN"
   },
+  "scan": {
+    "scanning": "ABBILD WIRD GESCANNT"
+  },
   "detail": {
     "block": {
       "image": "ABBILD",
@@ -221,7 +224,8 @@
       "open_log": "LOG ÖFFNEN",
       "eject": "AUSWERFEN",
       "copy_hash": "HASH KOPIEREN",
-      "flash_another": "WEITEREN SCHREIBEN"
+      "flash_another": "WEITEREN SCHREIBEN",
+      "refresh": "AKTUALISIEREN"
     }
   },
   "verify": {
@@ -357,7 +361,8 @@
       "performance": "LEISTUNG",
       "display": "ANZEIGE",
       "behavior": "VERHALTEN",
-      "catalog": "KATALOG"
+      "catalog": "KATALOG",
+      "diagnostics": "DIAGNOSE"
     },
     "label": {
       "writer_impl": "SCHREIBER",
@@ -373,7 +378,8 @@
       "auto_eject": "AUTO-AUSWURF",
       "auto_clear_done_seconds": "AUTO. FERTIGE LÖSCHEN",
       "catalog_url": "KATALOG-URL",
-      "catalog_refresh_hours": "KATALOG-AKTUALISIERUNG"
+      "catalog_refresh_hours": "KATALOG-AKTUALISIERUNG",
+      "debug_logging": "AUSFÜHRLICHE PROTOKOLLIERUNG"
     },
     "catalog_refresh": {
       "off": "NUR MANUELL",

@@ -72,3 +72,81 @@ Today an encrypted image would fail with a generic `Error::Unsupported`. Disk Cu
 ### Considered, not pursued
 
 - **Async / tokio support in the qcow2 crate** — Disk Cutter runs reads on `std::thread::spawn`. No tokio surface needed.
+
+### Image-scan caching — phased plan
+
+We currently slurp a 4 MiB prefix at row-expand time and run the partition / boot
+probes over it. Per-partition filesystem labels for compressed sources need bytes
+past the prefix, and a future "extract one partition to a target's empty region"
+feature needs the full partition bytes. Work is phased so each step solves a real
+problem without over-building.
+
+**Phase 1 (in progress)** — `image_scans` table + eager-on-add single-pass scan
++ progressive UI events. Triggered when the user adds an image (or clicks
+REFRESH); not lazy on row-expand — the disk cost is small (partition samples
+only, ~hundreds of KB) and we'd rather have the data ready by the time the
+user picks a target. One sequential decompression per `(image_path, size,
+mtime)`, stopping at `last_partition_start + 64 KB`. Outputs cached: format
+chain, true uncompressed size (xz only — see trade-off note below),
+partition table, per-partition filesystem labels, boot sources. Cached row
+shared across every burn_job pointing at the same image path, so adding the
+same image to 10 burn_jobs scans once.
+
+**Phase 1 trade-offs to revisit:**
+- Source SHA-256 is *not* computed (would require draining the full stream).
+  The user-facing "SHA-256 (SOURCE)" KV was removed from the queue UI, so this
+  has no immediate cost; revisit if the field returns or if the burn pipeline
+  ever wants to skip its own source-hash pass.
+- True uncompressed size is *only* recoverable for xz (footer index parsed
+  via `xz_footer::read_total_uncompressed`). gzip / bzip2 / zstd report the
+  compressed file size as an over-conservative placeholder — fine for the
+  progress bar's "we've at least decoded this much" denominator, less fine
+  for an exact value to display. Revisit if the UI starts depending on
+  exact decompressed bytes for a non-xz compressed source.
+
+**Phase 2 (deferred)** — temp-file materialization for compressed multi-copy
+queues only. Decisions locked in:
+
+  1. **Trigger**: only when the queue entry has `copies > 1`. Single-copy
+     burns stream-decompress as today.
+  2. **Timing**: temp file is materialized when the burn process *begins*,
+     not when the image is added to the queue. Avoids the worst case of
+     "user adds 10 × 31 GB images = 310 GB temp on queue-add."
+  3. **Location**: `~/Library/Caches/com.antimatter-studios.diskcutter/scratch/`
+     on macOS; OS-equivalents elsewhere; pref-overridable.
+  4. **Cleanup**: ref-counted — temp file lives until the last burn from
+     that queue entry's copy-pool finishes (success / error / cancelled).
+  5. **Disk-space guardrail**: refuse and warn before materializing if
+     we'd consume more than 50% of free space on the cache volume.
+
+Once Phase 2 lands, the offset-map / per-format restart-point machinery from
+Phase 3 below becomes obsolete for any image that's been materialized.
+
+**Phase 3 (deferred until a feature needs it)** — partition extraction without
+full materialization. Add per-format restart points (xz native block index,
+bzip2 magic-marker scan, zstd frame boundaries, gzip zran-style window
+snapshots) so a single partition can be extracted from a compressed source
+without decompressing the whole file or keeping a temp `.img`. Only relevant
+on systems where temp-file materialization is undesirable (low disk, sealed
+storage). The gzip leg is the expensive one — needs a gzip lib that can
+resume from injected window state, or a fallback to Phase 2.
+
+The clean shape for this: a `DiskOffset` trait alongside the existing
+`FormatTryOpen` / `ReaderInterface`, one impl per format:
+
+```rust
+pub trait DiskOffset: Send + Sync {
+    fn to_json(&self) -> serde_json::Value;
+    fn open_at(&self, path: &Path) -> io::Result<Box<dyn ReaderInterface>>;
+}
+```
+
+Each format stores only what it needs (xz/bzip2/zstd: 8 bytes; gzip:
+8 bytes + 32 KB window snapshot). Consumers call `offset.open_at(path)`
+and drain — format-specific machinery stays encapsulated. The
+`image_scans.partition_offsets` column is the persistence target.
+
+**Future feature this all enables**: "write one partition from a disk image
+to an empty region of the target drive, without wiping the rest." Phase 2 is
+sufficient (random-access on the temp file); Phase 3 is the disk-frugal
+alternative.
