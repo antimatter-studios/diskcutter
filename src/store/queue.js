@@ -135,8 +135,14 @@ export const useQueueStore = create((set, get) => ({
       const ordered = rows.slice().reverse();
       const jobs = {};
       const order = [];
+      // Defend against duplicate job_id rows — a past code path
+      // INSERTed instead of UPDATEd on retry, leaving two physical
+      // rows that share the same logical job. Without this guard
+      // `order` would list the same id twice and the UI would render
+      // duplicate visual rows (both showing the same num).
       ordered.forEach((row, i) => {
         const j = jobFromBackend(row, i + 1);
+        if (jobs[j.id]) return;
         jobs[j.id] = j;
         order.push(j.id);
       });
@@ -154,9 +160,20 @@ export const useQueueStore = create((set, get) => ({
       // cheap when the image hasn't changed.
       for (const id of order) {
         const j = jobs[id];
-        if (j.state === 'idle' && j.image && j.image.path) {
+        if (!j.image || !j.image.path) continue;
+        if (j.state === 'idle') {
           startValidation(j.id, j.image.path);
           startScan(j.id, j.image.path);
+        } else {
+          // Terminal rows (success / error) deliberately skip
+          // re-validation, but they still need partition + boot data
+          // for the expanded detail to render anything other than the
+          // "no partition table" fallback. Both probes serve from the
+          // image_scans cache when fresh, so this is cheap.
+          invoke('inspect_image_partitions', { jobId: j.id, path: j.image.path })
+            .catch((e) => console.error('inspect_image_partitions failed', e));
+          invoke('inspect_image_bootable', { jobId: j.id, path: j.image.path })
+            .catch((e) => console.error('inspect_image_bootable failed', e));
         }
       }
     } catch (e) {
