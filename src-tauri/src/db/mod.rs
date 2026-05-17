@@ -332,11 +332,11 @@ fn map_image_scan_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<ImageScanRow> {
 }
 
 /// Look up the cached scan for an image path. Returns `None` if no row
-/// exists. Returns `Some(row)` regardless of whether the cached `file_size`
-/// + `file_mtime` still match the live file — callers do their own
-/// freshness check via `image_scan_is_fresh` so a stale row isn't silently
-/// discarded (the partition probe might still be useful for a quick view
-/// even when the file has been touched).
+/// exists. Returns `Some(row)` regardless of whether the cached
+/// `file_size` and `file_mtime` still match the live file — callers do
+/// their own freshness check via `image_scan_is_fresh` so a stale row
+/// isn't silently discarded (the partition probe might still be useful
+/// for a quick view even when the file has been touched).
 pub fn image_scan_get(db: &Db, image_path: &str) -> Option<ImageScanRow> {
     let conn = db.0.lock().ok()?;
     let sql = format!("SELECT {IMAGE_SCAN_COLS} FROM image_scans WHERE image_path = ?1");
