@@ -193,14 +193,28 @@ fn check_eject_backend() -> Check {
 }
 
 fn check_app_data_writable() -> Check {
-    let dir = std::env::temp_dir().join("disk-cutter-doctor-write");
-    let result = std::fs::write(&dir, b"ok").and_then(|_| std::fs::remove_file(&dir));
+    // Unique-per-call filename so parallel callers (the test suite, two
+    // doctor instances, two running app processes) don't race on a shared
+    // path. A fixed name like "disk-cutter-doctor-write" caused
+    // intermittent Fail verdicts when one caller's `remove_file` deleted
+    // the file out from under another caller's pending `write`/`remove`
+    // sequence.
+    let name = format!(
+        "disk-cutter-doctor-write-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    );
+    let path = std::env::temp_dir().join(name);
+    let result = std::fs::write(&path, b"ok").and_then(|_| std::fs::remove_file(&path));
     match result {
         Ok(_) => Check::pass(
             "tmpdir",
             "Temp directory writable",
             "core",
-            &format!("wrote {} successfully", dir.display()),
+            &format!("wrote {} successfully", path.display()),
         ),
         Err(e) => Check::fail(
             "tmpdir",
