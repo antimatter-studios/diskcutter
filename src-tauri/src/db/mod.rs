@@ -63,6 +63,28 @@ pub struct BurnLogRow {
     pub message: String,
 }
 
+/// Cached deep-scan results for a disk image. Lookup key is `image_path`;
+/// `file_size` + `file_mtime` are the freshness check (read returns None
+/// when they don't match the live file). All JSON-typed fields are stored
+/// as strings the frontend deserialises.
+#[derive(Serialize, Clone)]
+pub struct ImageScanRow {
+    pub id: i64,
+    pub image_path: String,
+    pub file_size: i64,
+    pub file_mtime: i64,
+    pub scanned_at: i64,
+    pub scan_complete: bool,
+    pub format_chain: Option<String>,
+    pub uncompressed_bytes: Option<i64>,
+    pub image_sha256: Option<String>,
+    pub validation_result: Option<String>,
+    pub validation_detail: Option<String>,
+    pub partition_table: Option<String>,
+    pub boot_sources: String,
+    pub partition_offsets: String,
+}
+
 fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -276,6 +298,194 @@ pub fn record_burn_failed(db: &Db, job_id: &str, code: &str, message: &str) {
         "INSERT INTO burn_logs (burn_id, ts, level, message) VALUES (?1, ?2, 'error', ?3)",
         params![id, now_ms(), format!("{code}: {message}")],
     );
+}
+
+// ----------------------------------------------------------------------------
+// image_scans cache. Keyed by image_path; freshness is verified on read via
+// file_size + file_mtime. Helpers below all take `&Db` directly so scan
+// workers (which run on `std::thread::spawn` and don't hold a Tauri State)
+// can call them through the captured AppHandle.
+// ----------------------------------------------------------------------------
+
+const IMAGE_SCAN_COLS: &str = "id, image_path, file_size, file_mtime, scanned_at,
+    scan_complete, format_chain, uncompressed_bytes, image_sha256,
+    validation_result, validation_detail, partition_table, boot_sources,
+    partition_offsets";
+
+fn map_image_scan_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<ImageScanRow> {
+    Ok(ImageScanRow {
+        id: r.get(0)?,
+        image_path: r.get(1)?,
+        file_size: r.get(2)?,
+        file_mtime: r.get(3)?,
+        scanned_at: r.get(4)?,
+        scan_complete: r.get::<_, i64>(5)? != 0,
+        format_chain: r.get(6)?,
+        uncompressed_bytes: r.get(7)?,
+        image_sha256: r.get(8)?,
+        validation_result: r.get(9)?,
+        validation_detail: r.get(10)?,
+        partition_table: r.get(11)?,
+        boot_sources: r.get(12)?,
+        partition_offsets: r.get(13)?,
+    })
+}
+
+/// Look up the cached scan for an image path. Returns `None` if no row
+/// exists. Returns `Some(row)` regardless of whether the cached `file_size`
+/// + `file_mtime` still match the live file — callers do their own
+/// freshness check via `image_scan_is_fresh` so a stale row isn't silently
+/// discarded (the partition probe might still be useful for a quick view
+/// even when the file has been touched).
+pub fn image_scan_get(db: &Db, image_path: &str) -> Option<ImageScanRow> {
+    let conn = db.0.lock().ok()?;
+    let sql = format!("SELECT {IMAGE_SCAN_COLS} FROM image_scans WHERE image_path = ?1");
+    conn.query_row(&sql, params![image_path], map_image_scan_row)
+        .ok()
+}
+
+/// True when the cached scan's `file_size` + `file_mtime` still match the
+/// live file on disk. Used by callers to decide whether to short-circuit
+/// a fresh scan.
+pub fn image_scan_is_fresh(row: &ImageScanRow) -> bool {
+    let Ok(meta) = std::fs::metadata(&row.image_path) else {
+        return false;
+    };
+    let size = meta.len() as i64;
+    let mtime = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    size == row.file_size && mtime == row.file_mtime
+}
+
+/// Mark a scan as in-progress for `image_path`. Overwrites any stale row.
+/// Called at the start of a scan so the UI can read partial data via the
+/// progress events while the worker continues.
+#[allow(clippy::too_many_arguments)]
+pub fn image_scan_begin(db: &Db, image_path: &str, file_size: i64, file_mtime: i64) -> Option<i64> {
+    let conn = db.0.lock().ok()?;
+    conn.execute(
+        "INSERT INTO image_scans (image_path, file_size, file_mtime, scanned_at,
+            scan_complete, boot_sources, partition_offsets)
+         VALUES (?1, ?2, ?3, ?4, 0, '[]', '{}')
+         ON CONFLICT(image_path) DO UPDATE SET
+            file_size = excluded.file_size,
+            file_mtime = excluded.file_mtime,
+            scanned_at = excluded.scanned_at,
+            scan_complete = 0,
+            format_chain = NULL,
+            uncompressed_bytes = NULL,
+            image_sha256 = NULL,
+            validation_result = NULL,
+            validation_detail = NULL,
+            partition_table = NULL,
+            boot_sources = '[]',
+            partition_offsets = '{}'",
+        params![image_path, file_size, file_mtime, now_ms()],
+    )
+    .ok()?;
+    Some(conn.last_insert_rowid())
+}
+
+/// Patch the cached scan with a partial update. Each `Option` field is
+/// applied only when `Some(...)` — call sites can land one field at a
+/// time as the scan worker discovers it. Always updates `scanned_at` so
+/// freshness reflects the most recent write.
+#[derive(Default, Debug, Clone)]
+pub struct ImageScanPatch {
+    pub format_chain: Option<String>,
+    pub uncompressed_bytes: Option<i64>,
+    pub image_sha256: Option<String>,
+    pub validation_result: Option<String>,
+    pub validation_detail: Option<String>,
+    pub partition_table: Option<String>,
+    pub boot_sources: Option<String>,
+    pub partition_offsets: Option<String>,
+    pub scan_complete: Option<bool>,
+}
+
+pub fn image_scan_patch(db: &Db, image_path: &str, patch: ImageScanPatch) {
+    let Ok(conn) = db.0.lock() else { return };
+    let mut sets: Vec<String> = Vec::new();
+    let mut vals: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+    if let Some(v) = patch.format_chain {
+        sets.push(format!("format_chain = ?{}", sets.len() + 1));
+        vals.push(Box::new(v));
+    }
+    if let Some(v) = patch.uncompressed_bytes {
+        sets.push(format!("uncompressed_bytes = ?{}", sets.len() + 1));
+        vals.push(Box::new(v));
+    }
+    if let Some(v) = patch.image_sha256 {
+        sets.push(format!("image_sha256 = ?{}", sets.len() + 1));
+        vals.push(Box::new(v));
+    }
+    if let Some(v) = patch.validation_result {
+        sets.push(format!("validation_result = ?{}", sets.len() + 1));
+        vals.push(Box::new(v));
+    }
+    if let Some(v) = patch.validation_detail {
+        sets.push(format!("validation_detail = ?{}", sets.len() + 1));
+        vals.push(Box::new(v));
+    }
+    if let Some(v) = patch.partition_table {
+        sets.push(format!("partition_table = ?{}", sets.len() + 1));
+        vals.push(Box::new(v));
+    }
+    if let Some(v) = patch.boot_sources {
+        sets.push(format!("boot_sources = ?{}", sets.len() + 1));
+        vals.push(Box::new(v));
+    }
+    if let Some(v) = patch.partition_offsets {
+        sets.push(format!("partition_offsets = ?{}", sets.len() + 1));
+        vals.push(Box::new(v));
+    }
+    if let Some(v) = patch.scan_complete {
+        sets.push(format!("scan_complete = ?{}", sets.len() + 1));
+        vals.push(Box::new(v as i64));
+    }
+    sets.push(format!("scanned_at = ?{}", sets.len() + 1));
+    vals.push(Box::new(now_ms()));
+    if sets.is_empty() {
+        return;
+    }
+    let sql = format!(
+        "UPDATE image_scans SET {} WHERE image_path = ?{}",
+        sets.join(", "),
+        sets.len() + 1
+    );
+    vals.push(Box::new(image_path.to_string()));
+    let params_dyn: Vec<&dyn rusqlite::ToSql> = vals.iter().map(|b| b.as_ref()).collect();
+    let _ = conn.execute(&sql, params_dyn.as_slice());
+}
+
+/// Delete any cached scan row for `image_path`. Used by the frontend's
+/// REFRESH action so a re-expand triggers a fresh scan.
+pub fn image_scan_invalidate(db: &Db, image_path: &str) {
+    let Ok(conn) = db.0.lock() else { return };
+    let _ = conn.execute(
+        "DELETE FROM image_scans WHERE image_path = ?1",
+        params![image_path],
+    );
+}
+
+#[tauri::command]
+pub fn image_scan_lookup(db: State<'_, Db>, image_path: String) -> Option<ImageScanRow> {
+    let row = image_scan_get(&db, &image_path)?;
+    if image_scan_is_fresh(&row) {
+        Some(row)
+    } else {
+        None
+    }
+}
+
+#[tauri::command]
+pub fn image_scan_clear(db: State<'_, Db>, image_path: String) -> Result<(), String> {
+    image_scan_invalidate(&db, &image_path);
+    Ok(())
 }
 
 #[allow(dead_code)]

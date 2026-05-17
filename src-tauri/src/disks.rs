@@ -842,6 +842,9 @@ fn spawn_elevated_burn_inner(
     let skip_verify = read_config("verify.skip")
         .map(|v| v == "true")
         .unwrap_or(false);
+    let debug_logging = read_config("debug.logging")
+        .map(|v| v == "true")
+        .unwrap_or(false);
 
     let helper_cmd = build_helper_command(
         &exe.to_string_lossy(),
@@ -854,6 +857,7 @@ fn spawn_elevated_burn_inner(
         workers_count,
         queue_depth,
         skip_verify,
+        debug_logging,
     );
     let prompt = "Disk Cutter needs administrator access to write the disk image directly to the device you selected.";
     let script = build_osascript_script(&helper_cmd, prompt);
@@ -915,6 +919,7 @@ fn build_helper_command(
     workers: Option<usize>,
     queue_depth: Option<usize>,
     skip_verify: bool,
+    debug_logging: bool,
 ) -> String {
     let mut cmd = format!(
         "'{}' --helper-burn --image='{}' --target='{}' --job='{}' --progress='{}'",
@@ -938,6 +943,9 @@ fn build_helper_command(
     }
     if skip_verify {
         cmd.push_str(" --skip-verify=true");
+    }
+    if debug_logging {
+        cmd.push_str(" --debug=true");
     }
     cmd
 }
@@ -1027,6 +1035,7 @@ enum HelperEvent {
     Progress(JobUpdate),
     Complete(JobComplete),
     Failure(JobFailure),
+    Log { level: String, message: String },
 }
 
 fn parse_helper_line(job_id: &str, line: &str) -> Option<HelperEvent> {
@@ -1108,6 +1117,19 @@ fn parse_helper_line(job_id: &str, line: &str) -> Option<HelperEvent> {
                 .unwrap_or("")
                 .to_string(),
         })),
+        "log" => {
+            let level = val
+                .get("level")
+                .and_then(|v| v.as_str())
+                .unwrap_or("info")
+                .to_string();
+            let message = val
+                .get("message")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            Some(HelperEvent::Log { level, message })
+        }
         _ => None,
     }
 }
@@ -1144,6 +1166,10 @@ fn emit_helper_line(app: &AppHandle, job_id: &str, line: &str) -> Option<&'stati
             app.state::<ActiveBurns>().remove(&failure.job_id);
             let _ = app.emit("disk-cutter://job-error", failure);
             Some("error")
+        }
+        HelperEvent::Log { level, message } => {
+            db::append_log(&app.state::<Db>(), job_id, &level, &message);
+            Some("log")
         }
     }
 }
@@ -1271,7 +1297,11 @@ fn run_job(
     let image = Path::new(image_path);
     let target = Path::new(target_device);
 
-    let (mut reader, info) = source::open_streaming(image)
+    // Snapshot the debug toggle at burn start so toggling mid-run doesn't
+    // half-apply.
+    let job_log = crate::joblog::db_logger_for(app, job_id);
+
+    let (mut reader, info) = source::open_streaming_with_log(image, &job_log)
         .map_err(|e| fail(job_id, "EUNSUPPORTED", &format!("open image: {e}")))?;
     let total_bytes = info.uncompressed_bytes;
 
@@ -1303,7 +1333,7 @@ fn run_job(
     )
     .map_err(|e| fail_for_burn_error(job_id, &e))?;
 
-    let (mut reader2, _) = source::open_streaming(image)
+    let (mut reader2, _) = source::open_streaming_with_log(image, &job_log)
         .map_err(|e| fail(job_id, "EIMAGE", &format!("reopen image: {e}")))?;
     let mut device_reader = device_io
         .open_read(target)
@@ -1991,6 +2021,35 @@ mod tests {
     }
 
     #[test]
+    fn parse_helper_line_log_yields_log_event() {
+        let line =
+            r#"{"kind":"log","level":"debug","message":"decoder_chain: matched layer 0 = xz"}"#;
+        let ev = parse_helper_line("j", line).expect("parsed");
+        match ev {
+            HelperEvent::Log { level, message } => {
+                assert_eq!(level, "debug");
+                assert_eq!(message, "decoder_chain: matched layer 0 = xz");
+            }
+            _ => panic!("expected Log"),
+        }
+    }
+
+    #[test]
+    fn parse_helper_line_log_defaults_missing_fields() {
+        // Robustness: a malformed helper line shouldn't kill the tail
+        // thread. Missing level defaults to info, missing message to "".
+        let line = r#"{"kind":"log"}"#;
+        let ev = parse_helper_line("j", line).expect("parsed");
+        match ev {
+            HelperEvent::Log { level, message } => {
+                assert_eq!(level, "info");
+                assert_eq!(message, "");
+            }
+            _ => panic!("expected Log"),
+        }
+    }
+
+    #[test]
     fn parse_helper_line_error_passes_code_and_message_through() {
         let line = r#"{"kind":"error","error_code":"EIO","error_message":"disk gone"}"#;
         let ev = parse_helper_line("j", line).unwrap();
@@ -2016,6 +2075,7 @@ mod tests {
             None,
             None,
             false,
+            false,
         );
         assert_eq!(
             s,
@@ -2039,6 +2099,7 @@ mod tests {
             None,
             None,
             false,
+            false,
         );
         assert!(s.contains("--image='/tmp/it'\\''s a test.iso'"), "got {s}");
     }
@@ -2056,12 +2117,14 @@ mod tests {
             Some(8),
             Some(31),
             true,
+            true,
         );
         assert!(s.contains("--writer='pipelined'"), "got {s}");
         assert!(s.contains("--chunk-bytes=2097152"), "got {s}");
         assert!(s.contains("--workers=8"), "got {s}");
         assert!(s.contains("--queue-depth=31"), "got {s}");
         assert!(s.contains("--skip-verify=true"), "got {s}");
+        assert!(s.contains("--debug=true"), "got {s}");
     }
 
     #[test]
@@ -2077,11 +2140,13 @@ mod tests {
             None,
             None,
             false,
+            false,
         );
         assert!(!s.contains("--chunk-bytes="), "got {s}");
         assert!(!s.contains("--workers="), "got {s}");
         assert!(!s.contains("--queue-depth="), "got {s}");
         assert!(!s.contains("--skip-verify="), "got {s}");
+        assert!(!s.contains("--debug="), "got {s}");
     }
 
     #[test]

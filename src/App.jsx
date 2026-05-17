@@ -16,7 +16,7 @@ import {
 import { useShallow } from 'zustand/react/shallow';
 import { formatBytes } from './format.js';
 import {
-  useQueueStore, attachQueueListeners, selectJobs, selectEntries, startValidation,
+  useQueueStore, attachQueueListeners, selectJobs, selectEntries, startValidation, startScan, clearScanCache,
 } from './store/queue.js';
 import {
   computeScene, sceneToTitleKey, computeSessionStats,
@@ -316,6 +316,10 @@ function App() {
       // 'disk-cutter://image-validated' and flips job.validation; the
       // START QUEUE gate refuses to burn until it's 'valid'.
       startValidation(jobId, details.path);
+      // And the deep scan — populates per-partition filesystem labels
+      // and runs the progress bar under the row. Cached by image_path
+      // so adding the same file to N jobs only scans once.
+      startScan(jobId, details.path);
     } catch (e) {
       console.error('inspect_image failed', e);
       pushToast('error', t('error.could_not_add_image', { error: e }));
@@ -478,6 +482,38 @@ function App() {
     }
   }, [pushToast, t]);
 
+  // Re-scan an existing row's image and patch the row in place. Same Tauri
+  // call as the initial add path (inspect_image → validate → partitions +
+  // bootable), but without creating a new row or re-firing enqueue_burn.
+  // Useful when the image on disk changed, or to clear a stale validation
+  // verdict after the operator fixed something externally.
+  const refreshJob = useCallback(async (jobId) => {
+    const job = jobs.find((j) => j.id === jobId);
+    if (!job || !job.image?.path) return;
+    const path = job.image.path;
+    try {
+      const details = await invoke('inspect_image', { path });
+      const image = {
+        name: details.name,
+        path: details.path,
+        size: formatBytes(details.uncompressed_bytes),
+        bytes: details.uncompressed_bytes,
+        sectors: details.sectors,
+        format: details.format,
+        sha256: details.sha256 || '—',
+      };
+      useQueueStore.getState().refreshImage(jobId, image);
+      startValidation(jobId, details.path);
+      // REFRESH invalidates any cached deep scan for this image path so
+      // the new scan starts from scratch instead of short-circuiting.
+      await clearScanCache(details.path);
+      startScan(jobId, details.path);
+    } catch (e) {
+      console.error('refresh inspect_image failed', e);
+      pushToast('error', t('error.could_not_add_image', { error: e }));
+    }
+  }, [jobs, t, pushToast]);
+
   const retryJob = useCallback(async (jobId) => {
     // Debounce: ignore extra clicks while the previous start_write is still
     // pending. Without this, every click stacks another osascript+helper for
@@ -588,6 +624,7 @@ function App() {
     onBurn: burnJob,
     onCancelJob: cancelJob,
     onRetry: retryJob,
+    onRefreshJob: refreshJob,
     onClearDone: clearDone,
     onFlashAnother: flashAnother,
     onCopyText: copyText,
@@ -669,7 +706,7 @@ function AppBody({
   setPickerJob,
   entries, nextCopies, onChangeNextCopies, onDispatchFromEntry,
   onAdd, onAddFromUrl, onBrowseCatalog, onBurn, onCancelJob,
-  onRetry, onClearDone, onFlashAnother, onCopyText, onRemoveJob,
+  onRetry, onRefreshJob, onClearDone, onFlashAnother, onCopyText, onRemoveJob,
 }) {
   const { t } = useTranslation();
   const writingCount = jobs.filter((j) => j.state === 'writing').length;
@@ -823,6 +860,7 @@ function AppBody({
                 onCopyError={() => onCopyText(job.errorMessage || job.errorCode)}
                 onFlashAnother={() => onFlashAnother(job.id)}
                 onRetry={() => onRetry(job.id)}
+                onRefresh={() => onRefreshJob(job.id)}
                 onRemove={() => onRemoveJob(job.id)}
               />
             ))}

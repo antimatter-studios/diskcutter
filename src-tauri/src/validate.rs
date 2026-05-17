@@ -213,14 +213,28 @@ pub fn validate_image_contents(
     path: String,
 ) -> Result<(), String> {
     use crate::image::DiskImage;
+    use crate::joblog::JobLogger;
     use tauri::Emitter;
     std::thread::spawn(move || {
-        let report = match DiskImage::open(Path::new(&path)) {
+        let log = crate::joblog::db_logger_for(&app, &job_id);
+        log.info(&format!("scan: validating contents of {path}"));
+        let report = match DiskImage::open_with_log(Path::new(&path), &log) {
             Ok(img) => img.validate(),
-            Err(e) => ValidationReport::Invalid {
-                reason: e.to_string(),
-            },
+            Err(e) => {
+                log.warn(&format!("scan: could not open image for validation: {e}"));
+                ValidationReport::Invalid {
+                    reason: e.to_string(),
+                }
+            }
         };
+        match &report {
+            ValidationReport::Valid { detail } => {
+                log.info(&format!("scan: validation = VALID ({detail})"));
+            }
+            ValidationReport::Invalid { reason } => {
+                log.info(&format!("scan: validation = INVALID ({reason})"));
+            }
+        }
         #[derive(serde::Serialize, Clone)]
         struct Payload {
             job_id: String,

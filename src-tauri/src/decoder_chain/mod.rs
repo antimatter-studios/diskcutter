@@ -153,6 +153,90 @@ mod tests {
         out
     }
 
+    /// In-test logger that records every entry so assertions can see what
+    /// the chain reported. Mirrors the `RecordingLogger` in joblog's own
+    /// test module — that one isn't reachable from here, so we keep a
+    /// small copy for chain-level diagnostics.
+    struct DiagRecorder {
+        entries: std::sync::Mutex<Vec<(crate::joblog::LogLevel, String)>>,
+    }
+    impl DiagRecorder {
+        fn new() -> Self {
+            Self {
+                entries: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+        fn lines(&self) -> Vec<String> {
+            self.entries
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|(lv, m)| format!("[{}] {m}", lv.as_str()))
+                .collect()
+        }
+    }
+    impl crate::joblog::JobLogger for DiagRecorder {
+        fn log(&self, level: crate::joblog::LogLevel, message: &str) {
+            self.entries
+                .lock()
+                .unwrap()
+                .push((level, message.to_string()));
+        }
+        fn debug_enabled(&self) -> bool {
+            true
+        }
+    }
+
+    /// End-to-end shape check for `.img.xz`: exactly the case the user is
+    /// asking about. Builds a real xz-compressed payload, opens it through
+    /// `DiskReader::open_with_log`, and asserts the chain reports the
+    /// expected two-link result (`xz → raw`) — no phantom "img" layer,
+    /// because `.img` is a filename convention, not a format.
+    #[test]
+    fn img_xz_chain_yields_xz_then_raw_with_expected_log_lines() {
+        use std::io::Write;
+        use xz2::write::XzEncoder;
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("payload.img.xz");
+        let payload: Vec<u8> = (0..4_096u32).map(|i| (i % 251) as u8).collect();
+        let mut e = XzEncoder::new(Vec::new(), 1);
+        e.write_all(&payload).unwrap();
+        std::fs::write(&p, e.finish().unwrap()).unwrap();
+
+        let rec = DiagRecorder::new();
+        let mut dr = DiskReader::open_with_log(&p, &rec).expect("open_with_log");
+        assert_eq!(dr.format_chain(), vec!["xz", "raw"]);
+
+        // Drain to prove decompression works end-to-end.
+        let mut out = Vec::new();
+        let mut buf = [0u8; 128];
+        loop {
+            match dr.read(&mut buf).unwrap() {
+                0 => break,
+                n => out.extend_from_slice(&buf[..n]),
+            }
+        }
+        assert_eq!(out, payload);
+
+        // Verify the log trail surfaces every link the user expects to
+        // see. Substring matching keeps the test resilient to wording.
+        let lines = rec.lines();
+        let dump = lines.join("\n");
+        let must_have = [
+            "opening",
+            "head[0..",
+            "matched layer 0 = xz",
+            "no format claimed depth=1, terminating at raw",
+            "xz → raw",
+        ];
+        for needle in must_have {
+            assert!(
+                lines.iter().any(|l| l.contains(needle)),
+                "expected a log line containing {needle:?}, got:\n{dump}"
+            );
+        }
+    }
+
     #[test]
     fn raw_filehandle_reads_bytes_from_file() {
         let dir = tempfile::tempdir().unwrap();
@@ -179,7 +263,8 @@ mod tests {
         let body: Vec<u8> = (10u8..50).collect();
         let src: Box<dyn ReaderInterface> = Box::new(MemReader::new(body.clone()));
         let registry: &[&'static dyn FormatTryOpen] = &[];
-        let (mut chain, labels) = identify_data_stream(src, registry).unwrap();
+        let (mut chain, labels) =
+            identify_data_stream(src, registry, &crate::joblog::NullLogger).unwrap();
         assert_eq!(labels, vec!["raw"]);
         assert_eq!(drain(&mut *chain), body);
     }
@@ -199,7 +284,8 @@ mod tests {
         body.extend_from_slice(b"hello world");
         let src: Box<dyn ReaderInterface> = Box::new(MemReader::new(body.clone()));
         let registry: &[&'static dyn FormatTryOpen] = &[&FAKE_A];
-        let (mut chain, labels) = identify_data_stream(src, registry).unwrap();
+        let (mut chain, labels) =
+            identify_data_stream(src, registry, &crate::joblog::NullLogger).unwrap();
         assert_eq!(labels, vec!["fakeA", "raw"]);
         assert_eq!(drain(&mut *chain), b"hello world");
     }
@@ -210,7 +296,8 @@ mod tests {
         body.extend_from_slice(b"payload");
         let src: Box<dyn ReaderInterface> = Box::new(MemReader::new(body.clone()));
         let registry: &[&'static dyn FormatTryOpen] = &[&FAKE_A, &FAKE_B];
-        let (mut chain, labels) = identify_data_stream(src, registry).unwrap();
+        let (mut chain, labels) =
+            identify_data_stream(src, registry, &crate::joblog::NullLogger).unwrap();
         assert_eq!(labels, vec!["fakeB", "fakeA", "raw"]);
         assert_eq!(drain(&mut *chain), b"payload");
     }
@@ -220,7 +307,8 @@ mod tests {
         let body = vec![0xCCu8, 1, 2, 3, 4];
         let src: Box<dyn ReaderInterface> = Box::new(MemReader::new(body.clone()));
         let registry: &[&'static dyn FormatTryOpen] = &[&FAKE_A, &FAKE_B];
-        let (mut chain, labels) = identify_data_stream(src, registry).unwrap();
+        let (mut chain, labels) =
+            identify_data_stream(src, registry, &crate::joblog::NullLogger).unwrap();
         assert_eq!(labels, vec!["raw"]);
         assert_eq!(drain(&mut *chain), body);
     }

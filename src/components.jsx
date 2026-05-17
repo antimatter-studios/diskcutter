@@ -429,7 +429,7 @@ function describeBootSources(boot, t) {
 
 /* ─────────── Job Row ─────────── */
 
-function JobRow({ job, accent, expanded, onToggle, onSelectTarget, onBurn, onCancel, onRetry, onCopyHash, onCopyError, onFlashAnother, onRemove, density, fdaBlocked, confirmed }) {
+function JobRow({ job, accent, expanded, onToggle, onSelectTarget, onBurn, onCancel, onRetry, onRefresh, onCopyHash, onCopyError, onFlashAnother, onRemove, density, fdaBlocked, confirmed }) {
   const { t } = useTranslation();
   const state = job.state;
   const danger = state === 'error';
@@ -557,7 +557,34 @@ function JobRow({ job, accent, expanded, onToggle, onSelectTarget, onBurn, onCan
         boot={job.boot}
       />
 
-      {expanded && <JobDetail job={job} accent={accent} fdaBlocked={fdaBlocked} confirmed={confirmed} onCancel={onCancel} onRetry={onRetry} onCopyHash={onCopyHash} onCopyError={onCopyError} onFlashAnother={onFlashAnother} />}
+      {job.scanProgress && <ScanProgressStrip progress={job.scanProgress} accent={accent} />}
+      {expanded && <JobDetail job={job} accent={accent} fdaBlocked={fdaBlocked} confirmed={confirmed} onCancel={onCancel} onRetry={onRetry} onRefresh={onRefresh} onCopyHash={onCopyHash} onCopyError={onCopyError} onFlashAnother={onFlashAnother} />}
+    </div>
+  );
+}
+
+// Slim progress strip that sits between the row's main line and the
+// expanded detail section while the deep scan is running. Shows percent
+// when total is known, falls back to an indeterminate-style "scanning…"
+// label when the total can't be predicted (non-xz compressed sources
+// whose uncompressed size we don't recover up front).
+function ScanProgressStrip({ progress, accent }) {
+  const { t } = useTranslation();
+  const done = Number(progress.done) || 0;
+  const total = Number(progress.total) || 0;
+  const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : null;
+  return (
+    <div className="scan-strip mono small" style={{ '--accent': accent }}>
+      <span className="scan-strip-label">{t('scan.scanning', { defaultValue: 'SCANNING IMAGE' })}</span>
+      <div className="scan-strip-bar">
+        <div
+          className="scan-strip-fill"
+          style={{ width: (pct ?? 50) + '%', opacity: pct == null ? 0.5 : 1 }}
+        />
+      </div>
+      <span className="scan-strip-pct">
+        {pct != null ? `${pct}%` : '...'}
+      </span>
     </div>
   );
 }
@@ -620,7 +647,7 @@ function SuccessReadout({ job }) {
 
 /* ─────────── Job Detail (expanded drawer) ─────────── */
 
-function JobDetail({ job, accent, onCancel, onRetry, fdaBlocked, confirmed }) {
+function JobDetail({ job, accent, onCancel, onRetry, onRefresh, fdaBlocked, confirmed }) {
   const { t } = useTranslation();
   const fdaWaiting = job.errorCode === 'ENEEDS_FDA' && fdaBlocked;
   // Retry is destructive — same one-shot arm gate as Burn. Stays disabled
@@ -628,6 +655,10 @@ function JobDetail({ job, accent, onCancel, onRetry, fdaBlocked, confirmed }) {
   // is the reason this job errored). The handler in App.jsx clears confirmed
   // on click so the next destructive action needs a fresh toggle.
   const retryDisabled = !!job.retrying || fdaWaiting || !confirmed;
+  // Refresh re-scans the image and re-runs validation; non-destructive, so
+  // available in every state — except while the burn is actively reading
+  // the file, where another open could race the in-flight stream.
+  const refreshDisabled = job.state === 'writing' || job.state === 'verifying';
   return (
     <div className="job-detail">
       <div className="detail-grid">
@@ -710,6 +741,13 @@ function JobDetail({ job, accent, onCancel, onRetry, fdaBlocked, confirmed }) {
             <button className="btn btn-ghost">[ {t('detail.actions.flash_another')} ]</button>
           </>
         )}
+        <button
+          className={"btn btn-ghost" + (refreshDisabled ? " is-disabled" : "")}
+          onClick={refreshDisabled ? null : onRefresh}
+          aria-disabled={refreshDisabled || undefined}
+        >
+          [ {t('detail.actions.refresh')} ]
+        </button>
       </div>
     </div>
   );
@@ -1154,6 +1192,12 @@ const PREFS_SECTIONS = [
         ] },
     ],
   },
+  {
+    key: 'diagnostics',
+    fields: [
+      { key: 'debug.logging', type: 'toggle' },
+    ],
+  },
 ];
 
 // Keep this in sync with App.jsx — both consult the same defaults when
@@ -1173,6 +1217,7 @@ const PREFS_DEFAULTS = {
   'auto.clear_done.seconds': '0',
   'catalog.url': 'https://diskcutter.app/catalog.json',
   'catalog.refresh_hours': '24',
+  'debug.logging': 'false',
 };
 
 function prefsLabelKey(configKey) {

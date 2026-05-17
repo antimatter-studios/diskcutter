@@ -158,7 +158,8 @@ mod tests {
         let leaf = RawFilehandle::open(&p).unwrap();
         let src: Box<dyn ReaderInterface> = Box::new(leaf);
         let registry: &[&'static dyn FormatTryOpen] = &[&XZ_FORMAT];
-        let (mut chain, labels) = identify_data_stream(src, registry).unwrap();
+        let (mut chain, labels) =
+            identify_data_stream(src, registry, &crate::joblog::NullLogger).unwrap();
         assert_eq!(labels, vec!["xz", "raw"]);
         assert_eq!(drain(&mut *chain), payload);
     }

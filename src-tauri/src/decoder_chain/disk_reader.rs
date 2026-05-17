@@ -13,6 +13,7 @@ use std::io;
 use std::path::Path;
 
 use crate::inspect::{inspect_block_read, PartitionSummary};
+use crate::joblog::{JobLogger, NullLogger};
 
 use super::block_view::{slurp_prefix, PrefixBlockView, DEFAULT_PREFIX_BYTES};
 use super::identify::identify_data_stream;
@@ -34,9 +35,35 @@ impl DiskReader {
     /// Walks the registered formats once per layer until the source
     /// is raw bytes. `format_chain()` afterwards reports the labels
     /// seen, innermost first, always terminating in `"raw"`.
+    ///
+    /// No per-item logging — see `open_with_log` for the burn path.
     pub fn open(path: &Path) -> io::Result<Self> {
+        Self::open_with_log(path, &NullLogger)
+    }
+
+    /// Open `path` and resolve its decoder chain, emitting debug/info
+    /// entries into the per-item log via `log`.
+    pub fn open_with_log(path: &Path, log: &dyn JobLogger) -> io::Result<Self> {
+        log.debug(&format!("decoder_chain: opening {}", path.display()));
+        if log.debug_enabled() {
+            // Cheap independent peek of the first 16 bytes for diagnostic
+            // hex display — useful for "why didn't it match xz?" forensics.
+            // Done before we hand the file to RawFilehandle so the chain's
+            // own peek-and-rewind stays untouched.
+            use std::io::Read;
+            let mut head = [0u8; 16];
+            if let Ok(mut f) = std::fs::File::open(path) {
+                let n = f.read(&mut head).unwrap_or(0);
+                let hex: String = head[..n]
+                    .iter()
+                    .map(|b| format!("{:02x}", b))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                log.debug(&format!("decoder_chain: head[0..{n}] = {hex}"));
+            }
+        }
         let leaf: Box<dyn ReaderInterface> = Box::new(RawFilehandle::open(path)?);
-        let (chain, labels) = identify_data_stream(leaf, READERS)?;
+        let (chain, labels) = identify_data_stream(leaf, READERS, log)?;
         Ok(Self { chain, labels })
     }
 
@@ -48,7 +75,7 @@ impl DiskReader {
         src: Box<dyn ReaderInterface>,
         registry: &[&'static dyn super::format::FormatTryOpen],
     ) -> io::Result<Self> {
-        let (chain, labels) = identify_data_stream(src, registry)?;
+        let (chain, labels) = identify_data_stream(src, registry, &NullLogger)?;
         Ok(Self { chain, labels })
     }
 

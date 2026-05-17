@@ -32,7 +32,7 @@ use serde::Serialize;
 
 use crate::decoder_chain::DiskReader;
 use crate::inspect::{make_part_info, table_kind_label, PartitionSummary};
-use crate::validate::{classify_buffer, ValidationReport, SNIFF_WINDOW_BYTES};
+use crate::validate::{ValidationReport, SNIFF_WINDOW_BYTES};
 
 /// The container-format family of an image file. Used internally to
 /// pick the right reader and to surface a stable string for the UI.
@@ -150,37 +150,87 @@ impl DiskImage {
     /// reader is opened (or, for compressed sources, the prefix is
     /// decompressed) inside this call so subsequent question-asking is
     /// constant-time.
+    ///
+    /// No per-item logging — see `open_with_log` for the scan path.
     pub fn open(path: &Path) -> Result<Self, ImageError> {
+        Self::open_with_log(path, &crate::joblog::NullLogger)
+    }
+
+    /// Same as `open`, but emits debug entries into the per-item log via
+    /// `log`. Use this from scan-time commands (validate / inspect
+    /// partitions / inspect bootable) so the row's log captures format
+    /// identification, container metadata, and (for compressed inputs)
+    /// the decoder chain layers.
+    pub fn open_with_log(
+        path: &Path,
+        log: &dyn crate::joblog::JobLogger,
+    ) -> Result<Self, ImageError> {
+        log.debug(&format!("scan: opening image {}", path.display()));
+        if let Ok(meta) = std::fs::metadata(path) {
+            log.debug(&format!("scan: file size = {} bytes", meta.len()));
+        }
         let ext = path
             .extension()
             .and_then(|s| s.to_str())
             .map(|s| s.to_ascii_lowercase());
+        log.debug(&format!(
+            "scan: extension = {}",
+            ext.as_deref().unwrap_or("(none)")
+        ));
         let (format, backend) = match ext.as_deref() {
             Some("qcow2") | Some("qcow") => {
                 let r = qcow2::Qcow2Reader::open(path).map_err(std::io::Error::other)?;
+                log.debug(&format!(
+                    "scan: qcow2 v{} cluster={} bytes virtual_size={} bytes",
+                    r.version(),
+                    r.cluster_size(),
+                    r.virtual_size()
+                ));
                 (ImageFormat::Qcow2, Backend::Block(Box::new(r)))
             }
             Some("vhd") => {
                 let r = vhd::VhdReader::open(path).map_err(std::io::Error::other)?;
+                log.debug(&format!(
+                    "scan: vhd virtual_size={} bytes",
+                    r.virtual_size()
+                ));
                 (ImageFormat::Vhd, Backend::Block(Box::new(r)))
             }
             Some("vhdx") => {
                 let r = vhdx::VhdxReader::open(path).map_err(std::io::Error::other)?;
+                log.debug(&format!(
+                    "scan: vhdx virtual_size={} bytes",
+                    r.virtual_size()
+                ));
                 (ImageFormat::Vhdx, Backend::Block(Box::new(r)))
             }
             Some("vmdk") => {
                 let r = vmdk::VmdkReader::open(path).map_err(std::io::Error::other)?;
+                log.debug(&format!(
+                    "scan: vmdk virtual_size={} bytes",
+                    r.virtual_size()
+                ));
                 (ImageFormat::Vmdk, Backend::Block(Box::new(r)))
             }
-            Some("gz") => (ImageFormat::CompressedGz, decompressed_prefix(path)?),
-            Some("xz") => (ImageFormat::CompressedXz, decompressed_prefix(path)?),
-            Some("bz2") | Some("bzip2") => (ImageFormat::CompressedBz2, decompressed_prefix(path)?),
-            Some("zst") | Some("zstd") => (ImageFormat::CompressedZst, decompressed_prefix(path)?),
+            Some("gz") => (ImageFormat::CompressedGz, decompressed_prefix(path, log)?),
+            Some("xz") => (ImageFormat::CompressedXz, decompressed_prefix(path, log)?),
+            Some("bz2") | Some("bzip2") => {
+                (ImageFormat::CompressedBz2, decompressed_prefix(path, log)?)
+            }
+            Some("zst") | Some("zstd") => {
+                (ImageFormat::CompressedZst, decompressed_prefix(path, log)?)
+            }
             _ => {
                 let r = FileDevice::open(path).map_err(std::io::Error::other)?;
+                log.debug(&format!(
+                    "scan: raw image size_bytes={} ({} sectors @ 512B)",
+                    r.size_bytes(),
+                    r.size_bytes() / 512
+                ));
                 (ImageFormat::Raw, Backend::Block(Box::new(r)))
             }
         };
+        log.info(&format!("scan: format identified as {:?}", format));
         Ok(Self {
             path: path.to_path_buf(),
             format,
@@ -208,27 +258,36 @@ impl DiskImage {
         }
     }
 
-    /// Partition + filesystem summary. `None` for compressed sources or
-    /// images with no recognised table.
+    /// Partition + filesystem summary. `None` for images with no recognised
+    /// table. For compressed sources the probe runs over the slurped prefix
+    /// via `PrefixBlockView` — partitions whose start LBA is inside the
+    /// prefix get full filesystem detail; entries that point past the
+    /// prefix still appear in the table, just with `filesystem: None`.
     pub fn partitions(&self) -> Option<&PartitionSummary> {
         self.partitions
             .get_or_init(|| match &self.backend {
                 Backend::Block(dev) => summarise(dev.as_ref()).ok(),
-                Backend::Compressed { .. } => None,
+                Backend::Compressed { prefix } => {
+                    let view =
+                        crate::decoder_chain::block_view::PrefixBlockView::new(prefix.clone());
+                    summarise(&view).ok()
+                }
             })
             .as_ref()
     }
 
     /// Every boot signal this image presents. Empty = not bootable by
     /// any of the mechanisms we recognise. See [`BootSource`] for the
-    /// individual cases.
+    /// individual cases. For compressed sources the probe runs over the
+    /// slurped prefix — most boot signals (MBR boot code, GPT EFI System
+    /// Partition, El Torito at 0x8800) sit inside the default prefix size.
     pub fn boot_sources(&self) -> &[BootSource] {
         self.boot_sources.get_or_init(|| match &self.backend {
             Backend::Block(dev) => compute_boot_sources(dev.as_ref(), self.partitions()),
-            // Compressed sources: we could in principle look for the
-            // ISO 9660 boot record inside the prefix, but the offset
-            // (0x8800) is past most realistic prefix windows. Skip.
-            Backend::Compressed { .. } => Vec::new(),
+            Backend::Compressed { prefix } => {
+                let view = crate::decoder_chain::block_view::PrefixBlockView::new(prefix.clone());
+                compute_boot_sources(&view, self.partitions())
+            }
         })
     }
 
@@ -244,12 +303,14 @@ impl DiskImage {
         match &self.backend {
             Backend::Block(dev) => crate::validate::validate_block(dev.as_ref()),
             Backend::Compressed { prefix } => {
-                // Same fall-through as the original validate_compressed:
-                // if the prefix classifies cleanly we accept it; if not,
-                // we don't want the literal "boot sector / unrecognised"
-                // hint a raw classify would return, because the user
-                // can't action that for a compressed source.
-                match classify_buffer(prefix) {
+                // Run the same partition-table-first / filesystem-sniff
+                // logic as the Block path, just over the decompressed
+                // prefix. Falls back to the softer "not a recognised
+                // disk image" message when nothing matches so the UI
+                // doesn't surface the partition-probe's internal hints
+                // (which the user can't action on a compressed source).
+                let view = crate::decoder_chain::block_view::PrefixBlockView::new(prefix.clone());
+                match crate::validate::validate_block(&view) {
                     v @ ValidationReport::Valid { .. } => v,
                     ValidationReport::Invalid { .. } => ValidationReport::Invalid {
                         reason: "compressed contents are not a recognised disk image".into(),
@@ -264,9 +325,16 @@ impl DiskImage {
 /// prefix. Mirrors what `validate::validate_compressed` used to do —
 /// the byte count is `SNIFF_WINDOW_BYTES_INSPECT` (0x8200) so all
 /// FAT/NTFS/exFAT/ext/HFS+/ISO 9660 signatures are reachable.
-fn decompressed_prefix(path: &Path) -> Result<Backend, ImageError> {
-    let mut reader =
-        DiskReader::open(path).map_err(|e| ImageError::Io(std::io::Error::other(e)))?;
+fn decompressed_prefix(
+    path: &Path,
+    log: &dyn crate::joblog::JobLogger,
+) -> Result<Backend, ImageError> {
+    let mut reader = DiskReader::open_with_log(path, log)
+        .map_err(|e| ImageError::Io(std::io::Error::other(e)))?;
+    log.debug(&format!(
+        "scan: decompressing first {} bytes of prefix for fs sniff",
+        SNIFF_WINDOW_BYTES
+    ));
     let mut buf = vec![0u8; SNIFF_WINDOW_BYTES];
     let mut filled = 0usize;
     while filled < buf.len() {
@@ -277,6 +345,7 @@ fn decompressed_prefix(path: &Path) -> Result<Backend, ImageError> {
         }
     }
     buf.truncate(filled);
+    log.debug(&format!("scan: decompressed prefix = {} bytes", buf.len()));
     Ok(Backend::Compressed { prefix: buf })
 }
 
@@ -309,7 +378,10 @@ fn summarise(dev: &dyn BlockRead) -> partitions::Result<PartitionSummary> {
 /// boolean. We list partition-level signals first (more specific) and
 /// then fall back to disk-level (less specific). El Torito is checked
 /// separately because it lives outside the partition-table world.
-fn compute_boot_sources(dev: &dyn BlockRead, parts: Option<&PartitionSummary>) -> Vec<BootSource> {
+pub(crate) fn compute_boot_sources(
+    dev: &dyn BlockRead,
+    parts: Option<&PartitionSummary>,
+) -> Vec<BootSource> {
     let mut out = Vec::new();
 
     // Per-partition signals. The active/attribute/type-GUID values
@@ -518,7 +590,93 @@ mod tests {
         let img = DiskImage::open(&p).unwrap();
         assert_eq!(img.format(), ImageFormat::CompressedGz);
         assert!(matches!(img.validate(), ValidationReport::Valid { .. }));
-        // Compressed sources skip boot probes.
-        assert!(img.boot_sources().is_empty());
+        // The FAT32 OEM string at offset 0x52 lives inside the MBR boot
+        // code region, so has_mbr_bootloader fires — that's the correct
+        // probe result for a real FAT32 boot sector, surfaced through
+        // the prefix view.
+        assert!(img.boot_sources().contains(&BootSource::MbrBootloader));
+    }
+
+    /// Build a minimal MBR image with one Linux partition, compress it
+    /// four different ways, and verify each `DiskImage` surfaces the
+    /// partition table through the per-format decoder chain → prefix
+    /// view → partition probe pipeline.
+    ///
+    /// Regression coverage for the bug where `Backend::Compressed`
+    /// short-circuited `partitions()` / `boot_sources()` to `None` /
+    /// empty regardless of what the prefix actually contained.
+    #[test]
+    fn compressed_formats_surface_partition_table_through_prefix_view() {
+        use std::io::Write;
+        let dir = tempdir().unwrap();
+
+        let mut image = vec![0u8; 32 * 1024];
+        let entry = 0x1BE;
+        image[entry] = 0x80; // active
+        image[entry + 4] = 0x83; // Linux
+        image[entry + 8..entry + 12].copy_from_slice(&2048u32.to_le_bytes());
+        image[entry + 12..entry + 16].copy_from_slice(&8u32.to_le_bytes());
+        image[510] = 0x55;
+        image[511] = 0xAA;
+
+        let gz_bytes = {
+            use flate2::write::GzEncoder;
+            use flate2::Compression;
+            let mut e = GzEncoder::new(Vec::new(), Compression::default());
+            e.write_all(&image).unwrap();
+            e.finish().unwrap()
+        };
+        let xz_bytes = {
+            use xz2::write::XzEncoder;
+            let mut e = XzEncoder::new(Vec::new(), 1);
+            e.write_all(&image).unwrap();
+            e.finish().unwrap()
+        };
+        let bz2_bytes = {
+            use bzip2::write::BzEncoder;
+            let mut e = BzEncoder::new(Vec::new(), bzip2::Compression::default());
+            e.write_all(&image).unwrap();
+            e.finish().unwrap()
+        };
+        let zst_bytes = zstd::encode_all(&image[..], 0).unwrap();
+
+        let cases: [(&str, &[u8], ImageFormat); 4] = [
+            ("disk.img.gz", &gz_bytes, ImageFormat::CompressedGz),
+            ("disk.img.xz", &xz_bytes, ImageFormat::CompressedXz),
+            ("disk.img.bz2", &bz2_bytes, ImageFormat::CompressedBz2),
+            ("disk.img.zst", &zst_bytes, ImageFormat::CompressedZst),
+        ];
+
+        for (name, body, expected_format) in cases {
+            let p = dir.path().join(name);
+            std::fs::write(&p, body).unwrap();
+            let img = DiskImage::open(&p).unwrap_or_else(|e| panic!("open {name}: {e}"));
+            assert_eq!(img.format(), expected_format, "format for {name}");
+
+            let parts = img
+                .partitions()
+                .unwrap_or_else(|| panic!("{name}: partitions() returned None"));
+            assert_eq!(parts.table_kind, "MBR", "{name}: table kind");
+            assert_eq!(parts.partitions.len(), 1, "{name}: partition count");
+            assert_eq!(
+                parts.partitions[0].kind_label, "Linux filesystem",
+                "{name}: partition type"
+            );
+
+            assert!(
+                matches!(img.validate(), ValidationReport::Valid { .. }),
+                "{name}: validate should report Valid"
+            );
+
+            // The partition is flagged active in the MBR, so the boot
+            // probe should surface `MbrActive { index: 1 }`.
+            let sources = img.boot_sources();
+            assert!(
+                sources
+                    .iter()
+                    .any(|s| matches!(s, BootSource::MbrActive { index: 1 })),
+                "{name}: expected MbrActive boot source, got {sources:?}"
+            );
+        }
     }
 }

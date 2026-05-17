@@ -2,12 +2,13 @@ use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde::Serialize;
 
 use crate::hash::HashAlgo;
+use crate::joblog::{JobLogger, LogLevel};
 use crate::pipeline::{self, BurnError, VerifyMismatch};
 use crate::source;
 #[cfg(unix)]
@@ -37,6 +38,53 @@ enum HelperMessage {
         error_code: String,
         error_message: String,
     },
+    /// Per-job log entry. The parent's `tail_helper` parses these and
+    /// forwards them into the `burn_logs` row for the matching job_id,
+    /// so the per-item log captures decoder-chain / pipeline diagnostics
+    /// alongside the lifecycle events the parent writes directly.
+    Log { level: String, message: String },
+}
+
+/// Logger that emits `HelperMessage::Log` lines into the shared progress
+/// JSONL the parent tails. `debug_enabled` is taken from the helper's
+/// `--debug=` CLI arg (the parent reads the user's `debug.logging` pref
+/// at spawn time and passes it through). When off, `debug()` is a no-op
+/// — no JSONL line written, no string formatting cost incurred by
+/// debug_enabled()-guarded call sites.
+pub(crate) struct HelperLogger {
+    writer: Arc<Mutex<BufWriter<File>>>,
+    debug_enabled: bool,
+}
+
+impl HelperLogger {
+    fn new(writer: Arc<Mutex<BufWriter<File>>>, debug_enabled: bool) -> Self {
+        Self {
+            writer,
+            debug_enabled,
+        }
+    }
+}
+
+impl JobLogger for HelperLogger {
+    fn log(&self, level: LogLevel, message: &str) {
+        if level == LogLevel::Debug && !self.debug_enabled {
+            return;
+        }
+        let msg = HelperMessage::Log {
+            level: level.as_str().to_string(),
+            message: message.to_string(),
+        };
+        if let Ok(mut w) = self.writer.lock() {
+            if let Ok(s) = serde_json::to_string(&msg) {
+                let _ = writeln!(w, "{}", s);
+                let _ = w.flush();
+            }
+        }
+    }
+
+    fn debug_enabled(&self) -> bool {
+        self.debug_enabled
+    }
 }
 
 pub fn run_helper(args: &[String]) -> i32 {
@@ -75,6 +123,9 @@ pub fn run_helper(args: &[String]) -> i32 {
     let skip_verify: bool = arg_value(args, "--skip-verify=")
         .map(|v| v == "true")
         .unwrap_or(false);
+    let debug_enabled: bool = arg_value(args, "--debug=")
+        .map(|v| v == "true")
+        .unwrap_or(false);
     // TODO: once disks.rs is no longer hot, propagate config `hash.algo` via
     // spawn_elevated_burn's helper command line. Until then the helper defaults
     // to SHA-256 regardless of UI pref.
@@ -87,7 +138,7 @@ pub fn run_helper(args: &[String]) -> i32 {
         Ok(f) => f,
         Err(_) => return 2,
     };
-    let writer = std::sync::Mutex::new(BufWriter::new(file));
+    let writer = Arc::new(Mutex::new(BufWriter::new(file)));
     let emit = |msg: &HelperMessage| {
         if let Ok(mut w) = writer.lock() {
             if let Ok(s) = serde_json::to_string(msg) {
@@ -96,22 +147,29 @@ pub fn run_helper(args: &[String]) -> i32 {
             }
         }
     };
+    let job_log = HelperLogger::new(Arc::clone(&writer), debug_enabled);
+    if debug_enabled {
+        job_log.debug(&format!(
+            "helper: starting burn image={image} target={target} chunk={chunk_size} workers={workers} qdepth={queue_depth}"
+        ));
+    }
 
-    let (mut reader, source_info) = match source::open_streaming(Path::new(&image)) {
-        Ok(v) => v,
-        Err(e) => {
-            let code = if e.kind() == std::io::ErrorKind::InvalidInput {
-                "EUNSUPPORTED"
-            } else {
-                "EIMAGE"
-            };
-            emit(&HelperMessage::Error {
-                error_code: code.into(),
-                error_message: format!("open image: {e}"),
-            });
-            return 1;
-        }
-    };
+    let (mut reader, source_info) =
+        match source::open_streaming_with_log(Path::new(&image), &job_log) {
+            Ok(v) => v,
+            Err(e) => {
+                let code = if e.kind() == std::io::ErrorKind::InvalidInput {
+                    "EUNSUPPORTED"
+                } else {
+                    "EIMAGE"
+                };
+                emit(&HelperMessage::Error {
+                    error_code: code.into(),
+                    error_message: format!("open image: {e}"),
+                });
+                return 1;
+            }
+        };
     let image_total_bytes = source_info.uncompressed_bytes;
 
     let device_io: Box<dyn DeviceIo> =
@@ -279,7 +337,8 @@ pub fn run_helper(args: &[String]) -> i32 {
     // Hash mismatch — fall back to the slow byte-compare path to collect
     // per-sector forensic detail (LBA/offset/expected/actual).
     drop(dev_reader);
-    let (mut reader2, _) = match source::open_streaming(Path::new(&image)) {
+    job_log.info("helper: hash mismatch, reopening image for byte-compare diff");
+    let (mut reader2, _) = match source::open_streaming_with_log(Path::new(&image), &job_log) {
         Ok(v) => v,
         Err(e) => {
             emit(&HelperMessage::Error {

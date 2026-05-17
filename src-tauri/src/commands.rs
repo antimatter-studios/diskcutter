@@ -20,6 +20,7 @@ use crate::db::{self, Db};
 use crate::forensic::{self, HostInfo};
 use crate::image::{BootSource, DiskImage};
 use crate::inspect::PartitionSummary;
+use crate::joblog::JobLogger;
 use crate::snapshot::{self, RestoreResult, SnapshotResult, DEFAULT_SNAPSHOT_BYTES};
 
 /// Probe an image source for partition table + per-partition
@@ -52,9 +53,19 @@ pub fn inspect_image_partitions(
     path: String,
 ) -> Result<(), String> {
     std::thread::spawn(move || {
-        let summary = DiskImage::open(Path::new(&path))
+        let log = crate::joblog::db_logger_for(&app, &job_id);
+        log.debug("scan: partition probe starting");
+        let summary = DiskImage::open_with_log(Path::new(&path), &log)
             .ok()
             .and_then(|img| img.partitions().cloned());
+        match &summary {
+            Some(s) => log.info(&format!(
+                "scan: partition probe found {} partition(s), table = {}",
+                s.partitions.len(),
+                s.table_kind
+            )),
+            None => log.info("scan: partition probe found no recognised table"),
+        }
         #[derive(serde::Serialize, Clone)]
         struct Payload {
             job_id: String,
@@ -77,10 +88,21 @@ pub fn inspect_image_partitions(
 #[tauri::command]
 pub fn inspect_image_bootable(app: AppHandle, job_id: String, path: String) -> Result<(), String> {
     std::thread::spawn(move || {
-        let (bootable, sources) = match DiskImage::open(Path::new(&path)) {
+        let log = crate::joblog::db_logger_for(&app, &job_id);
+        log.debug("scan: bootability probe starting");
+        let (bootable, sources) = match DiskImage::open_with_log(Path::new(&path), &log) {
             Ok(img) => (img.is_bootable(), img.boot_sources().to_vec()),
-            Err(_) => (false, Vec::new()),
+            Err(e) => {
+                log.warn(&format!(
+                    "scan: bootability probe could not open image: {e}"
+                ));
+                (false, Vec::new())
+            }
         };
+        log.info(&format!(
+            "scan: bootability probe: bootable={bootable}, sources={}",
+            sources.len()
+        ));
         #[derive(serde::Serialize, Clone)]
         struct Payload {
             job_id: String,
@@ -96,6 +118,23 @@ pub fn inspect_image_bootable(app: AppHandle, job_id: String, path: String) -> R
             },
         );
     });
+    Ok(())
+}
+
+/// Trigger a deep scan for an image attached to a queue row. Spawns a
+/// worker thread that streams through the decoder chain, captures
+/// per-partition filesystem samples, and emits progressive Tauri events
+/// so the row UI can populate as data arrives. Cached results live in
+/// `image_scans` keyed by `image_path`; subsequent calls with the same
+/// path short-circuit to `image-scan-complete` if the cached row is
+/// still fresh (file size + mtime unchanged).
+#[tauri::command]
+pub fn scan_image_for_row(
+    app: AppHandle,
+    job_id: String,
+    image_path: String,
+) -> Result<(), String> {
+    crate::image_scan::spawn_scan(app, job_id, image_path);
     Ok(())
 }
 
