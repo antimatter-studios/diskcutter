@@ -362,7 +362,9 @@ fn summarise(dev: &dyn BlockRead) -> partitions::Result<PartitionSummary> {
     let mut out = Vec::with_capacity(parts.len());
     for (i, p) in parts.iter().enumerate() {
         let fs = partitions::sniff::sniff(dev, p).ok();
-        out.push(make_part_info((i + 1) as u32, p, fs));
+        let mut info = make_part_info((i + 1) as u32, p, fs);
+        info.fs_label = fs.and_then(|kind| read_fs_label(dev, p, kind));
+        out.push(info);
     }
     let any_bootable = out.iter().any(|p| p.bootable);
     Ok(PartitionSummary {
@@ -370,6 +372,23 @@ fn summarise(dev: &dyn BlockRead) -> partitions::Result<PartitionSummary> {
         partitions: out,
         any_bootable,
     })
+}
+
+/// Read up to 64 KB from the partition start and let the inspect
+/// parser pull out a volume label. Errors / short reads silently
+/// produce `None` — labels are decorative.
+fn read_fs_label(
+    dev: &dyn BlockRead,
+    p: &partitions::probe::Partition,
+    kind: partitions::sniff::FsKind,
+) -> Option<String> {
+    let take = (64 * 1024u64).min(p.length) as usize;
+    if take == 0 {
+        return None;
+    }
+    let mut buf = vec![0u8; take];
+    dev.read_at(p.start, &mut buf).ok()?;
+    crate::inspect::fs_label_from_sample(kind, &buf)
 }
 
 /// Walk every boot signal the image carries.

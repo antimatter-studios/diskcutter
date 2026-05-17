@@ -409,15 +409,17 @@ export const useQueueStore = create((set, get) => ({
     });
   },
 
-  // Patch one partition's filesystem label as the scan worker discovers
-  // it. Keeps the rest of the partition entry intact so the table only
-  // refreshes the column that actually changed.
-  applyPartitionFs(jobId, partitionIndex, filesystem) {
+  // Patch one partition's filesystem kind + volume label as the scan
+  // worker discovers them. Keeps the rest of the partition entry intact
+  // so the table only refreshes the columns that actually changed.
+  applyPartitionFs(jobId, partitionIndex, filesystem, fsLabel) {
     set((s) => {
       const j = s.jobs[jobId];
       if (!j || !j.partitions || !Array.isArray(j.partitions.partitions)) return s;
       const next = j.partitions.partitions.map((p) =>
-        p.index === partitionIndex ? { ...p, filesystem: filesystem || null } : p
+        p.index === partitionIndex
+          ? { ...p, filesystem: filesystem || null, fs_label: fsLabel || null }
+          : p
       );
       return {
         jobs: {
@@ -527,7 +529,7 @@ export function attachQueueListeners({ onFdaError, onImageInvalid } = {}) {
   listen('disk-cutter://image-scan-partition-fs', (e) => {
     if (!mounted) return;
     const p = e.payload;
-    useQueueStore.getState().applyPartitionFs(p.job_id, p.partition_index, p.filesystem);
+    useQueueStore.getState().applyPartitionFs(p.job_id, p.partition_index, p.filesystem, p.fs_label);
   }).then((u) => subs.push(u));
 
   listen('disk-cutter://image-scan-complete', (e) => {
