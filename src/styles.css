@@ -440,6 +440,10 @@ input,select{font:inherit;color:inherit}
   padding:0 12px;background:transparent;border:0;cursor:pointer;font-weight:600;
   height:var(--row-btn-h);box-sizing:border-box;
   display:inline-flex;align-items:center;justify-content:center;
+  /* Labels like `[ BURN ]` / `[ DELETE ]` are a single text node — without
+     nowrap, a tight grid column lets the trailing bracket break onto a
+     second line and the button visually doubles in height. */
+  white-space:nowrap;
 }
 .btn-ghost{color:var(--ink)}
 .btn-ghost:hover{background:rgba(12,12,11,.08)}
@@ -483,7 +487,11 @@ input,select{font:inherit;color:inherit}
      lets the cell shrink and clip; the filename cell handles the
      visual truncation with text-overflow: ellipsis below. */
   display:grid;
-  grid-template-columns: 28px 38px minmax(0, 1fr) 36px 280px 60px 200px 200px;
+  /* Last column sized to fit [ BURN ] + [ DELETE ] without internal
+     wrap; nowrap on .btn keeps the labels intact and `max-content`
+     guarantees the column grows to fit whatever the buttons need
+     across density / locale variants. */
+  grid-template-columns: 28px 38px minmax(0, 1fr) 36px 280px 60px 200px max-content;
   column-gap:16px;align-content:start;
 }
 
@@ -616,6 +624,7 @@ input,select{font:inherit;color:inherit}
   color:var(--ink);cursor:pointer;
   height:var(--row-btn-h);box-sizing:border-box;
   display:inline-flex;align-items:center;justify-content:center;
+  white-space:nowrap;
   transition:background-color .12s ease, color .12s ease;
 }
 .btn-burn.is-armed{color:var(--on-accent)}
