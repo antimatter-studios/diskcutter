@@ -57,7 +57,7 @@ pub struct Disk {
 
 #[derive(Serialize, Clone)]
 pub struct JobUpdate {
-    pub job_id: String,
+    pub job_id: i64,
     pub state: String,
     pub progress: f32,
     pub bytes_done: u64,
@@ -69,7 +69,7 @@ pub struct JobUpdate {
 
 #[derive(Serialize, Clone)]
 pub struct JobComplete {
-    pub job_id: String,
+    pub job_id: i64,
     pub bytes_written: u64,
     pub source_sha256: String,
     pub readback_sha256: String,
@@ -82,24 +82,24 @@ pub struct JobComplete {
 
 #[derive(Serialize, Clone)]
 pub struct JobFailure {
-    pub job_id: String,
+    pub job_id: i64,
     pub error_code: String,
     pub error_message: String,
 }
 
 #[derive(Default)]
-pub struct CancelRegistry(pub Mutex<HashMap<String, Arc<AtomicBool>>>);
+pub struct CancelRegistry(pub Mutex<HashMap<i64, Arc<AtomicBool>>>);
 
 /// Tracks burns currently in flight so a window-close request can ask "is
 /// anything writing right now?" without round-tripping through the DB. Both
 /// the in-process and the elevated-helper paths register here on entry to
 /// `start_write` and deregister on terminal event.
 #[derive(Default)]
-pub struct ActiveBurns(pub Mutex<HashMap<String, ActiveBurn>>);
+pub struct ActiveBurns(pub Mutex<HashMap<i64, ActiveBurn>>);
 
 #[derive(Clone, Debug)]
 pub struct ActiveBurn {
-    pub job_id: String,
+    pub job_id: i64,
     pub target: String,
     #[allow(dead_code)]
     pub kind: BurnKind,
@@ -117,12 +117,12 @@ pub enum BurnKind {
 impl ActiveBurns {
     pub fn insert(&self, burn: ActiveBurn) {
         if let Ok(mut g) = self.0.lock() {
-            g.insert(burn.job_id.clone(), burn);
+            g.insert(burn.job_id, burn);
         }
     }
-    pub fn remove(&self, job_id: &str) {
+    pub fn remove(&self, job_id: i64) {
         if let Ok(mut g) = self.0.lock() {
-            g.remove(job_id);
+            g.remove(&job_id);
         }
     }
     pub fn snapshot(&self) -> Vec<ActiveBurn> {
@@ -141,7 +141,7 @@ impl ActiveBurns {
 /// spawns a fresh osascript + helper, racing for the same /dev/diskN,
 /// stacking password prompts, and clobbering the progress JSONL file.
 #[derive(Default)]
-pub struct ElevatedJobs(pub Mutex<HashMap<String, u32>>);
+pub struct ElevatedJobs(pub Mutex<HashMap<i64, u32>>);
 
 #[derive(Serialize, Clone)]
 pub struct AppInfo {
@@ -651,35 +651,17 @@ pub fn start_write(
     cancel: State<'_, CancelRegistry>,
     active: State<'_, ActiveBurns>,
     elevated: State<'_, ElevatedJobs>,
-    job_id: String,
+    job_id: i64,
     image_path: String,
     target_device: String,
 ) -> Result<(), String> {
     let p = Path::new(&image_path);
-    let info = source::probe(p).ok_or_else(|| format!("unsupported image format: {image_path}"))?;
-    let image_name = p
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("")
-        .to_string();
-
-    {
-        // Idempotent w.r.t. enqueue_burn the frontend may have already
-        // called; this only inserts if no open row exists. Lifecycle
-        // flips to 'running' separately:
-        //   - in-process path: at the top of the burn thread below
-        //   - elevated path:   after osascript spawn, with helper_pid
-        //                      and progress_file populated
-        let db = app.state::<Db>();
-        db::record_burn_queued(
-            &db,
-            &job_id,
-            &image_path,
-            &image_name,
-            info.uncompressed_bytes,
-            &target_device,
-        );
-    }
+    let _info =
+        source::probe(p).ok_or_else(|| format!("unsupported image format: {image_path}"))?;
+    // Frontend's enqueue_burn must have run first to mint the integer
+    // job_id we're handed here; the row already exists. No defensive
+    // upsert: the absence of the row means a caller error, not a
+    // race we should paper over.
 
     let needs_elevation = target_device.starts_with("/dev/") && !is_privileged();
     if needs_elevation {
@@ -689,11 +671,11 @@ pub fn start_write(
         // osascript+password round-trip.
         if !fda_granted() {
             let msg = "Full Disk Access not granted to Disk Cutter".to_string();
-            db::record_burn_failed(&app.state::<Db>(), &job_id, "ENEEDS_FDA", &msg);
+            db::record_burn_failed(&app.state::<Db>(), job_id, "ENEEDS_FDA", &msg);
             let _ = app.emit(
                 "disk-cutter://job-error",
                 JobFailure {
-                    job_id: job_id.clone(),
+                    job_id,
                     error_code: "ENEEDS_FDA".into(),
                     error_message: msg,
                 },
@@ -701,7 +683,7 @@ pub fn start_write(
             return Ok(());
         }
         active.insert(ActiveBurn {
-            job_id: job_id.clone(),
+            job_id,
             target: target_device.clone(),
             kind: BurnKind::Elevated,
         });
@@ -709,13 +691,9 @@ pub fn start_write(
     }
 
     let flag = Arc::new(AtomicBool::new(false));
-    cancel
-        .0
-        .lock()
-        .unwrap()
-        .insert(job_id.clone(), flag.clone());
+    cancel.0.lock().unwrap().insert(job_id, flag.clone());
     active.insert(ActiveBurn {
-        job_id: job_id.clone(),
+        job_id,
         target: target_device.clone(),
         kind: BurnKind::InProcess,
     });
@@ -728,15 +706,15 @@ pub fn start_write(
     std::thread::spawn(move || {
         // Flip queued → running at the moment the burn thread starts.
         // No helper_pid/progress_file because this is in-process.
-        db::record_burn_started(&app.state::<Db>(), &id, None, None);
-        let outcome = run_job(&app, &id, &image, &target, &flag);
-        let _ = std::fs::remove_file(cancel_sentinel_path(&id));
+        db::record_burn_started(&app.state::<Db>(), id, None, None);
+        let outcome = run_job(&app, id, &image, &target, &flag);
+        let _ = std::fs::remove_file(cancel_sentinel_path(&id.to_string()));
         let db = app.state::<Db>();
         match outcome {
             Ok(complete) => {
                 db::record_burn_completed(
                     &db,
-                    &complete.job_id,
+                    complete.job_id,
                     &complete.source_sha256,
                     &complete.readback_sha256,
                     complete.verify_match,
@@ -745,17 +723,17 @@ pub fn start_write(
                     complete.avg_write_bps,
                     complete.avg_verify_bps,
                 );
-                app.state::<ActiveBurns>().remove(&complete.job_id);
+                app.state::<ActiveBurns>().remove(complete.job_id);
                 let _ = app.emit("disk-cutter://job-complete", complete);
             }
             Err(failure) => {
                 db::record_burn_failed(
                     &db,
-                    &failure.job_id,
+                    failure.job_id,
                     &failure.error_code,
                     &failure.error_message,
                 );
-                app.state::<ActiveBurns>().remove(&failure.job_id);
+                app.state::<ActiveBurns>().remove(failure.job_id);
                 let _ = app.emit("disk-cutter://job-error", failure);
             }
         }
@@ -767,7 +745,7 @@ pub fn start_write(
 fn spawn_elevated_burn(
     app: AppHandle,
     elevated: &State<'_, ElevatedJobs>,
-    job_id: String,
+    job_id: i64,
     image_path: String,
     target: String,
 ) -> Result<(), String> {
@@ -782,9 +760,9 @@ fn spawn_elevated_burn(
             return Err("burn already in flight for this job".to_string());
         }
         // Reserve with sentinel pid 0; real pid is filled in after spawn.
-        guard.insert(job_id.clone(), 0);
+        guard.insert(job_id, 0);
     }
-    let result = spawn_elevated_burn_inner(app.clone(), &job_id, image_path, target);
+    let result = spawn_elevated_burn_inner(app.clone(), job_id, image_path, target);
     if result.is_err() {
         // Spawn never made it to tail_helper, which is what would normally
         // remove the registry entry. Clean up here so a future retry can
@@ -798,15 +776,15 @@ fn spawn_elevated_burn(
 
 fn spawn_elevated_burn_inner(
     app: AppHandle,
-    job_id: &str,
+    job_id: i64,
     image_path: String,
     target: String,
 ) -> Result<(), String> {
-    let job_id = job_id.to_string();
+    let job_id_str = job_id.to_string();
     let exe = std::env::current_exe().map_err(|e| {
         let msg = e.to_string();
-        db::record_burn_failed(&app.state::<Db>(), &job_id, "EHELPER", &msg);
-        app.state::<ActiveBurns>().remove(&job_id);
+        db::record_burn_failed(&app.state::<Db>(), job_id, "EHELPER", &msg);
+        app.state::<ActiveBurns>().remove(job_id);
         msg
     })?;
     let progress_path = format!("/tmp/disk-cutter-progress-{job_id}.jsonl");
@@ -816,7 +794,7 @@ fn spawn_elevated_burn_inner(
     // the new tail_helper reads a fresh empty file — UI freezes. Lifecycle
     // ownership now sits in tail_helper, which deletes on its own exit.
     // Clear any stale cancel sentinel from a previous job with the same id.
-    let _ = std::fs::remove_file(cancel_sentinel_path(&job_id));
+    let _ = std::fs::remove_file(cancel_sentinel_path(&job_id_str));
 
     // Look up the configured writer impl + perf tunables, if any. The DB may
     // not have been initialised (see lib.rs "continuing without persistence");
@@ -850,7 +828,7 @@ fn spawn_elevated_burn_inner(
         &exe.to_string_lossy(),
         &image_path,
         &target,
-        &job_id,
+        &job_id_str,
         &progress_path,
         writer_impl.as_deref(),
         chunk_bytes,
@@ -869,8 +847,8 @@ fn spawn_elevated_burn_inner(
         .spawn()
         .map_err(|e| {
             let msg = format!("osascript spawn failed: {e}");
-            db::record_burn_failed(&app.state::<Db>(), &job_id, "EHELPER", &msg);
-            app.state::<ActiveBurns>().remove(&job_id);
+            db::record_burn_failed(&app.state::<Db>(), job_id, "EHELPER", &msg);
+            app.state::<ActiveBurns>().remove(job_id);
             msg
         })?;
 
@@ -878,7 +856,7 @@ fn spawn_elevated_burn_inner(
     // checks have a real pid to work with. tail_helper removes the entry on
     // exit.
     if let Some(reg) = app.try_state::<ElevatedJobs>() {
-        reg.0.lock().unwrap().insert(job_id.clone(), child.id());
+        reg.0.lock().unwrap().insert(job_id, child.id());
     }
     // Flip queued → running in the DB and stamp the reattach
     // breadcrumbs (helper_pid + progress_file). If the parent app
@@ -887,16 +865,15 @@ fn spawn_elevated_burn_inner(
     // a tail_helper against the same progress file.
     db::record_burn_started(
         &app.state::<Db>(),
-        &job_id,
+        job_id,
         Some(&progress_path),
         Some(child.id()),
     );
 
     let app_for_tail = app.clone();
-    let job_for_tail = job_id.clone();
     let progress_for_tail = progress_path.clone();
     std::thread::spawn(move || {
-        tail_helper(app_for_tail, job_for_tail, progress_for_tail, child);
+        tail_helper(app_for_tail, job_id, progress_for_tail, child);
     });
 
     Ok(())
@@ -958,7 +935,7 @@ fn build_osascript_script(helper_cmd: &str, prompt: &str) -> String {
     )
 }
 
-fn tail_helper(app: AppHandle, job_id: String, path: String, mut child: std::process::Child) {
+fn tail_helper(app: AppHandle, job_id: i64, path: String, mut child: std::process::Child) {
     use std::io::{BufRead, BufReader, Seek, SeekFrom};
     use std::time::{Duration, Instant};
 
@@ -977,7 +954,7 @@ fn tail_helper(app: AppHandle, job_id: String, path: String, mut child: std::pro
                         Ok(0) => break,
                         Ok(n) => {
                             last_pos += n as u64;
-                            if let Some(kind) = emit_helper_line(&app, &job_id, &line) {
+                            if let Some(kind) = emit_helper_line(&app, job_id, &line) {
                                 if kind == "complete" || kind == "error" {
                                     terminal_seen = true;
                                 }
@@ -1001,12 +978,12 @@ fn tail_helper(app: AppHandle, job_id: String, path: String, mut child: std::pro
                     } else {
                         "authorization cancelled or helper failed".to_string()
                     };
-                    db::record_burn_failed(&app.state::<Db>(), &job_id, code, &msg);
-                    app.state::<ActiveBurns>().remove(&job_id);
+                    db::record_burn_failed(&app.state::<Db>(), job_id, code, &msg);
+                    app.state::<ActiveBurns>().remove(job_id);
                     let _ = app.emit(
                         "disk-cutter://job-error",
                         JobFailure {
-                            job_id: job_id.clone(),
+                            job_id,
                             error_code: code.into(),
                             error_message: msg,
                         },
@@ -1023,7 +1000,7 @@ fn tail_helper(app: AppHandle, job_id: String, path: String, mut child: std::pro
         std::thread::sleep(Duration::from_millis(250));
     }
     let _ = std::fs::remove_file(&path);
-    let _ = std::fs::remove_file(cancel_sentinel_path(&job_id));
+    let _ = std::fs::remove_file(cancel_sentinel_path(&job_id.to_string()));
     // Release the in-flight slot. After this point a Retry for the same
     // job_id is allowed to spawn a fresh osascript+helper again.
     if let Some(reg) = app.try_state::<ElevatedJobs>() {
@@ -1038,7 +1015,7 @@ enum HelperEvent {
     Log { level: String, message: String },
 }
 
-fn parse_helper_line(job_id: &str, line: &str) -> Option<HelperEvent> {
+fn parse_helper_line(job_id: i64, line: &str) -> Option<HelperEvent> {
     let trimmed = line.trim();
     if trimmed.is_empty() {
         return None;
@@ -1073,7 +1050,7 @@ fn parse_helper_line(job_id: &str, line: &str) -> Option<HelperEvent> {
             )
             .unwrap_or_default();
             Some(HelperEvent::Complete(JobComplete {
-                job_id: job_id.to_string(),
+                job_id,
                 bytes_written: val
                     .get("bytes_written")
                     .and_then(|v| v.as_u64())
@@ -1105,7 +1082,7 @@ fn parse_helper_line(job_id: &str, line: &str) -> Option<HelperEvent> {
             }))
         }
         "error" => Some(HelperEvent::Failure(JobFailure {
-            job_id: job_id.to_string(),
+            job_id,
             error_code: val
                 .get("error_code")
                 .and_then(|v| v.as_str())
@@ -1134,7 +1111,7 @@ fn parse_helper_line(job_id: &str, line: &str) -> Option<HelperEvent> {
     }
 }
 
-fn emit_helper_line(app: &AppHandle, job_id: &str, line: &str) -> Option<&'static str> {
+fn emit_helper_line(app: &AppHandle, job_id: i64, line: &str) -> Option<&'static str> {
     match parse_helper_line(job_id, line)? {
         HelperEvent::Progress(update) => {
             let _ = app.emit("disk-cutter://job-update", update);
@@ -1143,7 +1120,7 @@ fn emit_helper_line(app: &AppHandle, job_id: &str, line: &str) -> Option<&'stati
         HelperEvent::Complete(complete) => {
             db::record_burn_completed(
                 &app.state::<Db>(),
-                &complete.job_id,
+                complete.job_id,
                 &complete.source_sha256,
                 &complete.readback_sha256,
                 complete.verify_match,
@@ -1152,18 +1129,18 @@ fn emit_helper_line(app: &AppHandle, job_id: &str, line: &str) -> Option<&'stati
                 complete.avg_write_bps,
                 complete.avg_verify_bps,
             );
-            app.state::<ActiveBurns>().remove(&complete.job_id);
+            app.state::<ActiveBurns>().remove(complete.job_id);
             let _ = app.emit("disk-cutter://job-complete", complete);
             Some("complete")
         }
         HelperEvent::Failure(failure) => {
             db::record_burn_failed(
                 &app.state::<Db>(),
-                &failure.job_id,
+                failure.job_id,
                 &failure.error_code,
                 &failure.error_message,
             );
-            app.state::<ActiveBurns>().remove(&failure.job_id);
+            app.state::<ActiveBurns>().remove(failure.job_id);
             let _ = app.emit("disk-cutter://job-error", failure);
             Some("error")
         }
@@ -1186,14 +1163,14 @@ pub fn cancel_sentinel_path(job_id: &str) -> std::path::PathBuf {
 }
 
 #[tauri::command]
-pub fn cancel_write(cancel: State<'_, CancelRegistry>, job_id: String) -> Result<(), String> {
+pub fn cancel_write(cancel: State<'_, CancelRegistry>, job_id: i64) -> Result<(), String> {
     if let Some(flag) = cancel.0.lock().unwrap().get(&job_id) {
         flag.store(true, Ordering::Relaxed);
     }
     // Elevated jobs don't appear in the registry — write a sentinel the helper
     // polls. Harmless for in-process jobs (no helper looks for it; tail_helper
     // or run_job cleanup removes any stragglers).
-    let _ = std::fs::write(cancel_sentinel_path(&job_id), b"1");
+    let _ = std::fs::write(cancel_sentinel_path(&job_id.to_string()), b"1");
     Ok(())
 }
 
@@ -1212,7 +1189,7 @@ pub fn cancel_all_burns(active: &ActiveBurns, cancel: &CancelRegistry) -> usize 
         }
     }
     for burn in &snap {
-        let _ = std::fs::write(cancel_sentinel_path(&burn.job_id), b"1");
+        let _ = std::fs::write(cancel_sentinel_path(&burn.job_id.to_string()), b"1");
     }
     count
 }
@@ -1262,21 +1239,21 @@ pub fn abort_and_quit(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn verify_image(_job_id: String) -> Result<(), String> {
+pub fn verify_image(_job_id: i64) -> Result<(), String> {
     // Verify runs automatically after a successful write inside `start_write`.
     // Kept as a no-op for compatibility while the frontend transitions.
     Ok(())
 }
 
 fn make_job_update(
-    job_id: &str,
+    job_id: i64,
     state: &str,
     bytes_done: u64,
     bytes_total: u64,
     bytes_per_sec: u64,
 ) -> JobUpdate {
     JobUpdate {
-        job_id: job_id.to_string(),
+        job_id,
         state: state.to_string(),
         progress: pct(bytes_done, bytes_total),
         bytes_done,
@@ -1289,7 +1266,7 @@ fn make_job_update(
 
 fn run_job(
     app: &AppHandle,
-    job_id: &str,
+    job_id: i64,
     image_path: &str,
     target_device: &str,
     cancel: &AtomicBool,
@@ -1310,7 +1287,6 @@ fn run_job(
         .open_write(target)
         .map_err(|e| fail(job_id, "ETARGET", &format!("open target: {e}")))?;
 
-    let burn_id = job_id.to_string();
     let burn_app = app.clone();
     let burn = pipeline::burn(
         &mut *reader,
@@ -1322,7 +1298,7 @@ fn run_job(
             let _ = burn_app.emit(
                 "disk-cutter://job-update",
                 make_job_update(
-                    &burn_id,
+                    job_id,
                     "writing",
                     p.bytes_done,
                     p.bytes_total,
@@ -1339,7 +1315,6 @@ fn run_job(
         .open_read(target)
         .map_err(|e| fail(job_id, "ETARGET", &format!("reopen target: {e}")))?;
 
-    let verify_id = job_id.to_string();
     let verify_app = app.clone();
     let verify = pipeline::verify(
         &mut *reader2,
@@ -1351,7 +1326,7 @@ fn run_job(
             let _ = verify_app.emit(
                 "disk-cutter://job-update",
                 make_job_update(
-                    &verify_id,
+                    job_id,
                     "verifying",
                     p.bytes_done,
                     p.bytes_total,
@@ -1365,9 +1340,9 @@ fn run_job(
     Ok(summarize_burn_complete(job_id, burn, verify))
 }
 
-fn fail(job_id: &str, code: &str, msg: &str) -> JobFailure {
+fn fail(job_id: i64, code: &str, msg: &str) -> JobFailure {
     JobFailure {
-        job_id: job_id.to_string(),
+        job_id,
         error_code: code.to_string(),
         error_message: msg.to_string(),
     }
@@ -1395,18 +1370,18 @@ fn code_for(e: &BurnError) -> &'static str {
     }
 }
 
-fn fail_for_burn_error(job_id: &str, e: &BurnError) -> JobFailure {
+fn fail_for_burn_error(job_id: i64, e: &BurnError) -> JobFailure {
     fail(job_id, code_for(e), &format!("{e:?}"))
 }
 
 fn summarize_burn_complete(
-    job_id: &str,
+    job_id: i64,
     burn: pipeline::BurnResult,
     verify: pipeline::VerifyResult,
 ) -> JobComplete {
     let elapsed_ms = (burn.elapsed.as_millis() + verify.elapsed.as_millis()) as u64;
     JobComplete {
-        job_id: job_id.to_string(),
+        job_id,
         bytes_written: burn.bytes_written,
         source_sha256: burn.source_sha256,
         readback_sha256: verify.readback_sha256,
@@ -1488,11 +1463,11 @@ pub fn reattach_running_helpers(app: &AppHandle) {
             // wait for the operator to press Start.
             continue;
         }
-        let job_id = row.job_id.clone();
+        let job_id = row.job_id;
         let Some(pid_i) = row.helper_pid else {
             db::record_burn_failed(
                 &db,
-                &job_id,
+                job_id,
                 "EORPHAN",
                 "running row missing helper_pid; cannot reattach",
             );
@@ -1502,7 +1477,7 @@ pub fn reattach_running_helpers(app: &AppHandle) {
         let Some(progress_path) = row.progress_file.clone() else {
             db::record_burn_failed(
                 &db,
-                &job_id,
+                job_id,
                 "EORPHAN",
                 "running row missing progress_file; cannot reattach",
             );
@@ -1511,7 +1486,7 @@ pub fn reattach_running_helpers(app: &AppHandle) {
         if !pid_alive(pid) {
             db::record_burn_failed(
                 &db,
-                &job_id,
+                job_id,
                 "EORPHAN",
                 "recorded helper pid is no longer alive",
             );
@@ -1520,7 +1495,7 @@ pub fn reattach_running_helpers(app: &AppHandle) {
         if !Path::new(&progress_path).exists() {
             db::record_burn_failed(
                 &db,
-                &job_id,
+                job_id,
                 "EORPHAN",
                 "progress file no longer exists; helper may have crashed",
             );
@@ -1531,20 +1506,19 @@ pub fn reattach_running_helpers(app: &AppHandle) {
         // tail thread that polls pid liveness instead of waiting on
         // an owned Child handle.
         if let Some(reg) = app.try_state::<ElevatedJobs>() {
-            reg.0.lock().unwrap().insert(job_id.clone(), pid);
+            reg.0.lock().unwrap().insert(job_id, pid);
         }
         if let Some(active) = app.try_state::<ActiveBurns>() {
             active.insert(ActiveBurn {
-                job_id: job_id.clone(),
+                job_id,
                 target: row.target_device.clone(),
                 kind: BurnKind::Elevated,
             });
         }
         let app_for_tail = app.clone();
-        let job_for_tail = job_id.clone();
         let path_for_tail = progress_path;
         std::thread::spawn(move || {
-            tail_helper_reattach(app_for_tail, job_for_tail, path_for_tail, pid);
+            tail_helper_reattach(app_for_tail, job_id, path_for_tail, pid);
         });
     }
 }
@@ -1554,7 +1528,7 @@ pub fn reattach_running_helpers(app: &AppHandle) {
 // after a parent restart we have no Child handle, so we fall back to
 // kill(0) probes against the recorded pid. JSONL parsing/emission is
 // otherwise identical — emit_helper_line handles both ends.
-fn tail_helper_reattach(app: AppHandle, job_id: String, path: String, pid: u32) {
+fn tail_helper_reattach(app: AppHandle, job_id: i64, path: String, pid: u32) {
     use std::io::{BufRead, BufReader, Seek, SeekFrom};
     use std::time::{Duration, Instant};
 
@@ -1573,7 +1547,7 @@ fn tail_helper_reattach(app: AppHandle, job_id: String, path: String, pid: u32) 
                         Ok(0) => break,
                         Ok(n) => {
                             last_pos += n as u64;
-                            if let Some(kind) = emit_helper_line(&app, &job_id, &line) {
+                            if let Some(kind) = emit_helper_line(&app, job_id, &line) {
                                 if kind == "complete" || kind == "error" {
                                     terminal_seen = true;
                                 }
@@ -1591,15 +1565,15 @@ fn tail_helper_reattach(app: AppHandle, job_id: String, path: String, pid: u32) 
             // Helper exited without writing a terminal record.
             db::record_burn_failed(
                 &app.state::<Db>(),
-                &job_id,
+                job_id,
                 "EORPHAN",
                 "helper exited without finishing",
             );
-            app.state::<ActiveBurns>().remove(&job_id);
+            app.state::<ActiveBurns>().remove(job_id);
             let _ = app.emit(
                 "disk-cutter://job-error",
                 JobFailure {
-                    job_id: job_id.clone(),
+                    job_id,
                     error_code: "EORPHAN".into(),
                     error_message: "helper exited without finishing".into(),
                 },
@@ -1612,7 +1586,7 @@ fn tail_helper_reattach(app: AppHandle, job_id: String, path: String, pid: u32) 
         std::thread::sleep(Duration::from_millis(250));
     }
     let _ = std::fs::remove_file(&path);
-    let _ = std::fs::remove_file(cancel_sentinel_path(&job_id));
+    let _ = std::fs::remove_file(cancel_sentinel_path(&job_id.to_string()));
     if let Some(reg) = app.try_state::<ElevatedJobs>() {
         reg.0.lock().unwrap().remove(&job_id);
     }
@@ -1622,9 +1596,9 @@ fn tail_helper_reattach(app: AppHandle, job_id: String, path: String, pid: u32) 
 mod tests {
     use super::*;
 
-    fn mk_burn(id: &str, kind: BurnKind) -> ActiveBurn {
+    fn mk_burn(id: i64, kind: BurnKind) -> ActiveBurn {
         ActiveBurn {
-            job_id: id.into(),
+            job_id: id,
             target: "/dev/disk5".into(),
             kind,
         }
@@ -1634,16 +1608,16 @@ mod tests {
     fn active_burns_insert_remove_snapshot_roundtrip() {
         let reg = ActiveBurns::default();
         assert!(reg.is_empty());
-        reg.insert(mk_burn("j1", BurnKind::Elevated));
-        reg.insert(mk_burn("j2", BurnKind::InProcess));
+        reg.insert(mk_burn(1, BurnKind::Elevated));
+        reg.insert(mk_burn(2, BurnKind::InProcess));
         assert!(!reg.is_empty());
         let snap = reg.snapshot();
         assert_eq!(snap.len(), 2);
-        reg.remove("j1");
+        reg.remove(1);
         let snap = reg.snapshot();
         assert_eq!(snap.len(), 1);
-        assert_eq!(snap[0].job_id, "j2");
-        reg.remove("j2");
+        assert_eq!(snap[0].job_id, 2);
+        reg.remove(2);
         assert!(reg.is_empty());
     }
 
@@ -1651,20 +1625,23 @@ mod tests {
     fn cancel_all_burns_writes_markers_for_every_active_job() {
         let reg = ActiveBurns::default();
         let cancel = CancelRegistry::default();
-        let id1 = format!("test-cancel-all-{}-a", std::process::id());
-        let id2 = format!("test-cancel-all-{}-b", std::process::id());
+        // Per-process distinct ids; the integer space is shared across
+        // parallel tests so we offset off the pid to avoid collisions.
+        let base = std::process::id() as i64;
+        let id1 = base * 10;
+        let id2 = base * 10 + 1;
         // Flag exists only for the in-process job — cancel_all_burns must still
         // write a marker for the elevated one even when no flag is registered.
         let flag1 = Arc::new(AtomicBool::new(false));
-        cancel.0.lock().unwrap().insert(id1.clone(), flag1.clone());
-        reg.insert(mk_burn(&id1, BurnKind::InProcess));
-        reg.insert(mk_burn(&id2, BurnKind::Elevated));
+        cancel.0.lock().unwrap().insert(id1, flag1.clone());
+        reg.insert(mk_burn(id1, BurnKind::InProcess));
+        reg.insert(mk_burn(id2, BurnKind::Elevated));
 
         let count = cancel_all_burns(&reg, &cancel);
         assert_eq!(count, 2);
         assert!(flag1.load(Ordering::Relaxed), "in-process flag flipped");
-        let m1 = cancel_sentinel_path(&id1);
-        let m2 = cancel_sentinel_path(&id2);
+        let m1 = cancel_sentinel_path(&id1.to_string());
+        let m2 = cancel_sentinel_path(&id2.to_string());
         assert!(m1.exists(), "sentinel for in-process burn");
         assert!(m2.exists(), "sentinel for elevated burn");
         let _ = std::fs::remove_file(&m1);
@@ -1674,7 +1651,7 @@ mod tests {
     #[test]
     fn wait_for_burns_to_clear_returns_false_on_timeout() {
         let reg = ActiveBurns::default();
-        reg.insert(mk_burn("stuck", BurnKind::Elevated));
+        reg.insert(mk_burn(101, BurnKind::Elevated));
         let cleared = wait_for_burns_to_clear(&reg, std::time::Duration::from_millis(150));
         assert!(!cleared);
     }
@@ -1682,11 +1659,11 @@ mod tests {
     #[test]
     fn wait_for_burns_to_clear_returns_true_when_drained() {
         let reg = std::sync::Arc::new(ActiveBurns::default());
-        reg.insert(mk_burn("j1", BurnKind::Elevated));
+        reg.insert(mk_burn(1, BurnKind::Elevated));
         let reg2 = reg.clone();
         std::thread::spawn(move || {
             std::thread::sleep(std::time::Duration::from_millis(50));
-            reg2.remove("j1");
+            reg2.remove(1);
         });
         let cleared = wait_for_burns_to_clear(&reg, std::time::Duration::from_secs(2));
         assert!(cleared);
@@ -1758,8 +1735,8 @@ mod tests {
 
     #[test]
     fn fail_assembles_job_failure() {
-        let f = fail("job-7", "EIO", "I/O blew up");
-        assert_eq!(f.job_id, "job-7");
+        let f = fail(7, "EIO", "I/O blew up");
+        assert_eq!(f.job_id, 7);
         assert_eq!(f.error_code, "EIO");
         assert_eq!(f.error_message, "I/O blew up");
     }
@@ -1780,8 +1757,8 @@ mod tests {
 
     #[test]
     fn fail_for_burn_error_assembles_code_and_debug_message() {
-        let f = fail_for_burn_error("job-1", &BurnError::Cancelled);
-        assert_eq!(f.job_id, "job-1");
+        let f = fail_for_burn_error(1, &BurnError::Cancelled);
+        assert_eq!(f.job_id, 1);
         assert_eq!(f.error_code, "ECANCELLED");
         assert!(
             f.error_message.contains("Cancelled"),
@@ -1794,14 +1771,14 @@ mod tests {
     fn fail_for_burn_error_maps_io_variant() {
         use std::io;
         let e = BurnError::Io(io::Error::other("x"));
-        let f = fail_for_burn_error("j", &e);
+        let f = fail_for_burn_error(1, &e);
         assert_eq!(f.error_code, "EIO");
     }
 
     #[test]
     fn fail_for_burn_error_maps_size_mismatch_variant() {
         let f = fail_for_burn_error(
-            "j",
+            1,
             &BurnError::SizeMismatch {
                 expected: 1,
                 actual: 2,
@@ -1829,8 +1806,8 @@ mod tests {
             elapsed: Duration::from_millis(300),
             avg_bytes_per_sec: 200,
         };
-        let c = summarize_burn_complete("job-9", burn, verify);
-        assert_eq!(c.job_id, "job-9");
+        let c = summarize_burn_complete(9, burn, verify);
+        assert_eq!(c.job_id, 9);
         assert_eq!(c.bytes_written, 1024);
         assert_eq!(c.source_sha256, "abc");
         assert_eq!(c.readback_sha256, "abc");
@@ -1865,15 +1842,15 @@ mod tests {
             elapsed: Duration::from_millis(0),
             avg_bytes_per_sec: 0,
         };
-        let c = summarize_burn_complete("j", burn, verify);
+        let c = summarize_burn_complete(1, burn, verify);
         assert!(!c.verify_match);
         assert_eq!(c.mismatches.len(), 1);
     }
 
     #[test]
     fn make_job_update_carries_id_and_state_and_formats_speed() {
-        let u = make_job_update("job-9", "writing", 500, 1000, 2_500_000);
-        assert_eq!(u.job_id, "job-9");
+        let u = make_job_update(9, "writing", 500, 1000, 2_500_000);
+        assert_eq!(u.job_id, 9);
         assert_eq!(u.state, "writing");
         assert_eq!(u.bytes_done, 500);
         assert_eq!(u.bytes_total, 1000);
@@ -1884,7 +1861,7 @@ mod tests {
 
     #[test]
     fn make_job_update_pct_handles_zero_total() {
-        let u = make_job_update("j", "writing", 0, 0, 0);
+        let u = make_job_update(1, "writing", 0, 0, 0);
         assert_eq!(u.progress, 0.0);
         assert_eq!(u.eta, "00:00");
         assert_eq!(u.speed, "0 B/s");
@@ -1893,39 +1870,39 @@ mod tests {
     #[test]
     fn make_job_update_eta_uses_remaining_bytes_over_bps() {
         // 100 remaining at 10 B/s = 10s → "00:10"
-        let u = make_job_update("j", "verifying", 0, 100, 10);
+        let u = make_job_update(1, "verifying", 0, 100, 10);
         assert_eq!(u.eta, "00:10");
     }
 
     #[test]
     fn parse_helper_line_returns_none_for_empty_or_blank() {
-        assert!(parse_helper_line("job-1", "").is_none());
-        assert!(parse_helper_line("job-1", "   ").is_none());
-        assert!(parse_helper_line("job-1", "\n").is_none());
+        assert!(parse_helper_line(1, "").is_none());
+        assert!(parse_helper_line(1, "   ").is_none());
+        assert!(parse_helper_line(1, "\n").is_none());
     }
 
     #[test]
     fn parse_helper_line_returns_none_for_non_json() {
-        assert!(parse_helper_line("job-1", "not json").is_none());
+        assert!(parse_helper_line(1, "not json").is_none());
     }
 
     #[test]
     fn parse_helper_line_returns_none_for_missing_kind() {
-        assert!(parse_helper_line("job-1", r#"{"other":1}"#).is_none());
+        assert!(parse_helper_line(1, r#"{"other":1}"#).is_none());
     }
 
     #[test]
     fn parse_helper_line_returns_none_for_unknown_kind() {
-        assert!(parse_helper_line("job-1", r#"{"kind":"weird"}"#).is_none());
+        assert!(parse_helper_line(1, r#"{"kind":"weird"}"#).is_none());
     }
 
     #[test]
     fn parse_helper_line_progress_carries_through_fields_and_formats() {
         let line = r#"{"kind":"progress","state":"writing","bytes_done":500,"bytes_total":1000,"bytes_per_sec":2500000}"#;
-        let ev = parse_helper_line("job-7", line).unwrap();
+        let ev = parse_helper_line(7, line).unwrap();
         match ev {
             HelperEvent::Progress(u) => {
-                assert_eq!(u.job_id, "job-7");
+                assert_eq!(u.job_id, 7);
                 assert_eq!(u.state, "writing");
                 assert_eq!(u.bytes_done, 500);
                 assert_eq!(u.bytes_total, 1000);
@@ -1940,7 +1917,7 @@ mod tests {
     #[test]
     fn parse_helper_line_progress_defaults_state_to_writing() {
         let line = r#"{"kind":"progress","bytes_done":1,"bytes_total":10}"#;
-        let ev = parse_helper_line("j", line).unwrap();
+        let ev = parse_helper_line(1, line).unwrap();
         match ev {
             HelperEvent::Progress(u) => assert_eq!(u.state, "writing"),
             _ => panic!("expected Progress"),
@@ -1960,10 +1937,10 @@ mod tests {
             "avg_write_bps":100,
             "avg_verify_bps":200
         }"#;
-        let ev = parse_helper_line("job-c", line).unwrap();
+        let ev = parse_helper_line(3, line).unwrap();
         match ev {
             HelperEvent::Complete(c) => {
-                assert_eq!(c.job_id, "job-c");
+                assert_eq!(c.job_id, 3);
                 assert_eq!(c.bytes_written, 2048);
                 assert_eq!(c.source_sha256, "src");
                 assert_eq!(c.readback_sha256, "dev");
@@ -1983,7 +1960,7 @@ mod tests {
             "kind":"complete",
             "mismatches":[{"lba":"0x1","byte_offset":"+0x0","expected":"AA","actual":"BB"}]
         }"#;
-        let ev = parse_helper_line("j", line).unwrap();
+        let ev = parse_helper_line(1, line).unwrap();
         match ev {
             HelperEvent::Complete(c) => {
                 assert_eq!(c.mismatches.len(), 1);
@@ -1995,7 +1972,7 @@ mod tests {
 
     #[test]
     fn parse_helper_line_complete_defaults_missing_fields() {
-        let ev = parse_helper_line("j", r#"{"kind":"complete"}"#).unwrap();
+        let ev = parse_helper_line(1, r#"{"kind":"complete"}"#).unwrap();
         match ev {
             HelperEvent::Complete(c) => {
                 assert_eq!(c.bytes_written, 0);
@@ -2010,7 +1987,7 @@ mod tests {
 
     #[test]
     fn parse_helper_line_error_uses_eunknown_when_code_missing() {
-        let ev = parse_helper_line("j", r#"{"kind":"error"}"#).unwrap();
+        let ev = parse_helper_line(1, r#"{"kind":"error"}"#).unwrap();
         match ev {
             HelperEvent::Failure(f) => {
                 assert_eq!(f.error_code, "EUNKNOWN");
@@ -2024,7 +2001,7 @@ mod tests {
     fn parse_helper_line_log_yields_log_event() {
         let line =
             r#"{"kind":"log","level":"debug","message":"decoder_chain: matched layer 0 = xz"}"#;
-        let ev = parse_helper_line("j", line).expect("parsed");
+        let ev = parse_helper_line(1, line).expect("parsed");
         match ev {
             HelperEvent::Log { level, message } => {
                 assert_eq!(level, "debug");
@@ -2039,7 +2016,7 @@ mod tests {
         // Robustness: a malformed helper line shouldn't kill the tail
         // thread. Missing level defaults to info, missing message to "".
         let line = r#"{"kind":"log"}"#;
-        let ev = parse_helper_line("j", line).expect("parsed");
+        let ev = parse_helper_line(1, line).expect("parsed");
         match ev {
             HelperEvent::Log { level, message } => {
                 assert_eq!(level, "info");
@@ -2052,7 +2029,7 @@ mod tests {
     #[test]
     fn parse_helper_line_error_passes_code_and_message_through() {
         let line = r#"{"kind":"error","error_code":"EIO","error_message":"disk gone"}"#;
-        let ev = parse_helper_line("j", line).unwrap();
+        let ev = parse_helper_line(1, line).unwrap();
         match ev {
             HelperEvent::Failure(f) => {
                 assert_eq!(f.error_code, "EIO");
@@ -2208,7 +2185,7 @@ mod tests {
 
     #[test]
     fn verify_image_command_is_a_noop_ok() {
-        assert!(verify_image("any".into()).is_ok());
+        assert!(verify_image(1).is_ok());
     }
 
     #[test]

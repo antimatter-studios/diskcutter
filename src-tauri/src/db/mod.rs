@@ -29,10 +29,12 @@ pub fn open(app: &AppHandle) -> rusqlite::Result<Connection> {
 // `helper_pid` are only populated once a helper is actually spawned —
 // they're the breadcrumbs the parent app uses to reattach to a still-
 // running helper after a dev-server / app restart.
+//
+// `job_id` is the row's INTEGER PRIMARY KEY AUTOINCREMENT; SQLite mints
+// it on INSERT. There is no separate surrogate `id` column.
 #[derive(Serialize, Clone)]
 pub struct BurnJob {
-    pub id: i64,
-    pub job_id: String,
+    pub job_id: i64,
     pub image_path: String,
     pub image_name: String,
     pub image_bytes: u64,
@@ -57,7 +59,7 @@ pub struct BurnJob {
 #[derive(Serialize, Clone)]
 pub struct BurnLogRow {
     pub id: i64,
-    pub burn_id: i64,
+    pub job_id: i64,
     pub ts: i64,
     pub level: String,
     pub message: String,
@@ -93,13 +95,13 @@ fn now_ms() -> i64 {
 }
 
 // Look up the burn_jobs row id for `job_id`, regardless of its state.
-// Pure SELECT — no side effects, no fallback INSERT. Callers that need
-// "find or create" semantics have to wire that explicitly (see
-// `enqueue_burn` below) so the decision is visible at the call site
-// instead of hiding inside this helper.
-fn find_burn_id(conn: &Connection, job_id: &str) -> Option<i64> {
+// With the integer PK this is just an existence check — the query
+// returns the same value it was given, so the helper is really an
+// "is this row known?" probe. Kept around so callers can express that
+// intent at the call site without inlining the SELECT.
+fn find_burn_id(conn: &Connection, job_id: i64) -> Option<i64> {
     conn.query_row(
-        "SELECT id FROM burn_jobs WHERE job_id = ?1",
+        "SELECT job_id FROM burn_jobs WHERE job_id = ?1",
         params![job_id],
         |r| r.get::<_, i64>(0),
     )
@@ -109,9 +111,9 @@ fn find_burn_id(conn: &Connection, job_id: &str) -> Option<i64> {
 // Same lookup gated on state = 'running'. Used by completion recorders
 // so they can't accidentally close out a still-queued row that never
 // got a started_at.
-fn find_running_id(conn: &Connection, job_id: &str) -> Option<i64> {
+fn find_running_id(conn: &Connection, job_id: i64) -> Option<i64> {
     conn.query_row(
-        "SELECT id FROM burn_jobs
+        "SELECT job_id FROM burn_jobs
          WHERE job_id = ?1 AND state = 'running'
          ORDER BY queued_at DESC LIMIT 1",
         params![job_id],
@@ -120,26 +122,22 @@ fn find_running_id(conn: &Connection, job_id: &str) -> Option<i64> {
     .ok()
 }
 
-// Pure INSERT of a 'queued' row. No SELECT, no upsert. Returns `None`
-// on any failure — including the UNIQUE-constraint violation that
-// fires when a row with this `job_id` already exists. Callers are
-// expected to have checked for an existing row via `find_burn_id`
-// first and decided what to do (reuse, reset to queued, or treat as
-// caller error).
+// Pure INSERT of a fresh 'queued' row. SQLite mints `job_id` via the
+// INTEGER PRIMARY KEY AUTOINCREMENT; we return the freshly-assigned id
+// (or None on failure). Callers don't have to invent an id — they call
+// this and get back the canonical one to use everywhere else.
 fn insert_queued_row(
     conn: &Connection,
-    job_id: &str,
     image_path: &str,
     image_name: &str,
     image_bytes: u64,
     target_device: &str,
 ) -> Option<i64> {
     conn.execute(
-        "INSERT INTO burn_jobs (job_id, image_path, image_name, image_bytes,
+        "INSERT INTO burn_jobs (image_path, image_name, image_bytes,
             target_device, state, queued_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, 'queued', ?6)",
+         VALUES (?1, ?2, ?3, ?4, 'queued', ?5)",
         params![
-            job_id,
             image_path,
             image_name,
             image_bytes as i64,
@@ -150,7 +148,7 @@ fn insert_queued_row(
     .ok()?;
     let id = conn.last_insert_rowid();
     let _ = conn.execute(
-        "INSERT INTO burn_logs (burn_id, ts, level, message) VALUES (?1, ?2, 'info', ?3)",
+        "INSERT INTO burn_logs (job_id, ts, level, message) VALUES (?1, ?2, 'info', ?3)",
         params![
             id,
             now_ms(),
@@ -168,8 +166,7 @@ fn insert_queued_row(
 // exist or is in a non-terminal state (queued / running — re-arming
 // those is a no-op and the caller is expected to treat it as
 // "already in flight").
-fn reset_row_to_queued(conn: &Connection, job_id: &str) -> Option<i64> {
-    let id = find_burn_id(conn, job_id)?;
+fn reset_row_to_queued(conn: &Connection, job_id: i64) -> Option<i64> {
     let updated = conn
         .execute(
             "UPDATE burn_jobs
@@ -180,60 +177,28 @@ fn reset_row_to_queued(conn: &Connection, job_id: &str) -> Option<i64> {
                  finished_at=NULL,
                  helper_pid=NULL,
                  progress_file=NULL
-             WHERE id=?1 AND state IN ('error','cancelled')",
-            params![id],
+             WHERE job_id=?1 AND state IN ('error','cancelled')",
+            params![job_id],
         )
         .ok()?;
     if updated == 0 {
         return None;
     }
     let _ = conn.execute(
-        "INSERT INTO burn_logs (burn_id, ts, level, message) VALUES (?1, ?2, 'info', 'requeued: retry')",
-        params![id, now_ms()],
+        "INSERT INTO burn_logs (job_id, ts, level, message) VALUES (?1, ?2, 'info', 'requeued: retry')",
+        params![job_id, now_ms()],
     );
-    Some(id)
+    Some(job_id)
 }
 
-// Idempotent enqueue used by the elevated-burn path in disks.rs as a
-// defensive net (in case the frontend's enqueue_burn round-trip
-// hasn't completed before start_write fires). The body is the
-// explicit two-step the caller would write inline: find_burn_id
-// first; if a row exists, return its id; otherwise INSERT. No upsert
-// magic — the read and the write are two visibly separate operations.
-//
-// Does NOT reset terminal rows — that's the Tauri `enqueue_burn`'s
-// job because it's the retry entry point and the semantic of
-// "requeue an existing terminal row" is caller-specific.
-pub fn record_burn_queued(
-    db: &Db,
-    job_id: &str,
-    image_path: &str,
-    image_name: &str,
-    image_bytes: u64,
-    target_device: &str,
-) -> Option<i64> {
-    let conn = db.0.lock().ok()?;
-    if let Some(existing) = find_burn_id(&conn, job_id) {
-        return Some(existing);
-    }
-    insert_queued_row(
-        &conn,
-        job_id,
-        image_path,
-        image_name,
-        image_bytes,
-        target_device,
-    )
-}
-
-// Transition the most recent open row for this job_id from queued →
-// running, stamping `started_at` and (for the elevated path)
-// `progress_file` / `helper_pid` so a future reattach can find the
-// IPC sink. If no open row exists (e.g. legacy callers that never
-// enqueued), this is a no-op — callers should enqueue first.
+// Transition the row from queued → running, stamping `started_at` and
+// (for the elevated path) `progress_file` / `helper_pid` so a future
+// reattach can find the IPC sink. If the row is missing or already
+// terminal, this is a no-op — callers enqueue first and never invoke
+// us with a stale id.
 pub fn record_burn_started(
     db: &Db,
-    job_id: &str,
+    job_id: i64,
     progress_file: Option<&str>,
     helper_pid: Option<u32>,
 ) {
@@ -241,9 +206,9 @@ pub fn record_burn_started(
         Ok(c) => c,
         Err(_) => return,
     };
-    let Some(id) = find_burn_id(&conn, job_id) else {
+    if find_burn_id(&conn, job_id).is_none() {
         return;
-    };
+    }
     let pid_i: Option<i64> = helper_pid.map(|p| p as i64);
     // State guard lives in the UPDATE: only queued/running rows can be
     // (re-)stamped as started. Prevents accidentally reviving an
@@ -254,19 +219,19 @@ pub fn record_burn_started(
              started_at=COALESCE(started_at, ?1),
              progress_file=COALESCE(?2, progress_file),
              helper_pid=COALESCE(?3, helper_pid)
-         WHERE id=?4 AND state IN ('queued','running')",
-        params![now_ms(), progress_file, pid_i, id],
+         WHERE job_id=?4 AND state IN ('queued','running')",
+        params![now_ms(), progress_file, pid_i, job_id],
     );
     let _ = conn.execute(
-        "INSERT INTO burn_logs (burn_id, ts, level, message) VALUES (?1, ?2, 'info', 'burn started')",
-        params![id, now_ms()],
+        "INSERT INTO burn_logs (job_id, ts, level, message) VALUES (?1, ?2, 'info', 'burn started')",
+        params![job_id, now_ms()],
     );
 }
 
 #[allow(clippy::too_many_arguments)]
 pub fn record_burn_completed(
     db: &Db,
-    job_id: &str,
+    job_id: i64,
     source_sha256: &str,
     readback_sha256: &str,
     verify_match: bool,
@@ -279,9 +244,9 @@ pub fn record_burn_completed(
         Ok(c) => c,
         Err(_) => return,
     };
-    let Some(id) = find_running_id(&conn, job_id) else {
+    if find_running_id(&conn, job_id).is_none() {
         return;
-    };
+    }
     let state = if verify_match { "success" } else { "error" };
     let err_code: Option<&str> = if verify_match {
         None
@@ -293,7 +258,7 @@ pub fn record_burn_completed(
          SET source_sha256=?1, readback_sha256=?2, verify_match=?3,
              bytes_written=?4, elapsed_ms=?5, avg_write_bps=?6, avg_verify_bps=?7,
              state=?8, error_code=?9, finished_at=?10
-         WHERE id=?11",
+         WHERE job_id=?11",
         params![
             source_sha256,
             readback_sha256,
@@ -305,13 +270,13 @@ pub fn record_burn_completed(
             state,
             err_code,
             now_ms(),
-            id
+            job_id
         ],
     );
     let _ = conn.execute(
-        "INSERT INTO burn_logs (burn_id, ts, level, message) VALUES (?1, ?2, ?3, ?4)",
+        "INSERT INTO burn_logs (job_id, ts, level, message) VALUES (?1, ?2, ?3, ?4)",
         params![
-            id,
+            job_id,
             now_ms(),
             if verify_match { "info" } else { "error" },
             format!(
@@ -322,7 +287,7 @@ pub fn record_burn_completed(
     );
 }
 
-pub fn record_burn_failed(db: &Db, job_id: &str, code: &str, message: &str) {
+pub fn record_burn_failed(db: &Db, job_id: i64, code: &str, message: &str) {
     let conn = match db.0.lock() {
         Ok(c) => c,
         Err(_) => return,
@@ -332,9 +297,9 @@ pub fn record_burn_failed(db: &Db, job_id: &str, code: &str, message: &str) {
     // error) and we still want them recorded against the queued row.
     // Terminal rows are explicitly rejected by the UPDATE's state
     // guard so a stale event can't overwrite a settled outcome.
-    let Some(id) = find_burn_id(&conn, job_id) else {
+    if find_burn_id(&conn, job_id).is_none() {
         return;
-    };
+    }
     let state = if code == "ECANCELLED" {
         "cancelled"
     } else {
@@ -343,12 +308,12 @@ pub fn record_burn_failed(db: &Db, job_id: &str, code: &str, message: &str) {
     let _ = conn.execute(
         "UPDATE burn_jobs
          SET state=?1, error_code=?2, error_message=?3, finished_at=?4
-         WHERE id=?5 AND state IN ('queued','running')",
-        params![state, code, message, now_ms(), id],
+         WHERE job_id=?5 AND state IN ('queued','running')",
+        params![state, code, message, now_ms(), job_id],
     );
     let _ = conn.execute(
-        "INSERT INTO burn_logs (burn_id, ts, level, message) VALUES (?1, ?2, 'error', ?3)",
-        params![id, now_ms(), format!("{code}: {message}")],
+        "INSERT INTO burn_logs (job_id, ts, level, message) VALUES (?1, ?2, 'error', ?3)",
+        params![job_id, now_ms(), format!("{code}: {message}")],
     );
 }
 
@@ -541,15 +506,15 @@ pub fn image_scan_clear(db: State<'_, Db>, image_path: String) -> Result<(), Str
 }
 
 #[allow(dead_code)]
-pub fn append_log(db: &Db, job_id: &str, level: &str, message: &str) {
+pub fn append_log(db: &Db, job_id: i64, level: &str, message: &str) {
     let conn = match db.0.lock() {
         Ok(c) => c,
         Err(_) => return,
     };
-    if let Some(id) = find_burn_id(&conn, job_id) {
+    if find_burn_id(&conn, job_id).is_some() {
         let _ = conn.execute(
-            "INSERT INTO burn_logs (burn_id, ts, level, message) VALUES (?1, ?2, ?3, ?4)",
-            params![id, now_ms(), level, message],
+            "INSERT INTO burn_logs (job_id, ts, level, message) VALUES (?1, ?2, ?3, ?4)",
+            params![job_id, now_ms(), level, message],
         );
     }
 }
@@ -590,7 +555,7 @@ pub fn config_all(db: State<'_, Db>) -> HashMap<String, String> {
     out
 }
 
-const BURN_JOB_COLS: &str = "id, job_id, image_path, image_name, image_bytes, target_device,
+const BURN_JOB_COLS: &str = "job_id, image_path, image_name, image_bytes, target_device,
     source_sha256, readback_sha256, verify_match,
     bytes_written, elapsed_ms, avg_write_bps, avg_verify_bps,
     state, error_code, error_message,
@@ -599,27 +564,26 @@ const BURN_JOB_COLS: &str = "id, job_id, image_path, image_name, image_bytes, ta
 
 fn map_burn_job_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<BurnJob> {
     Ok(BurnJob {
-        id: r.get(0)?,
-        job_id: r.get(1)?,
-        image_path: r.get(2)?,
-        image_name: r.get(3)?,
-        image_bytes: r.get::<_, i64>(4)? as u64,
-        target_device: r.get(5)?,
-        source_sha256: r.get(6)?,
-        readback_sha256: r.get(7)?,
-        verify_match: r.get::<_, Option<i32>>(8)?.map(|v| v != 0),
-        bytes_written: r.get::<_, Option<i64>>(9)?.map(|v| v as u64),
-        elapsed_ms: r.get::<_, Option<i64>>(10)?.map(|v| v as u64),
-        avg_write_bps: r.get::<_, Option<i64>>(11)?.map(|v| v as u64),
-        avg_verify_bps: r.get::<_, Option<i64>>(12)?.map(|v| v as u64),
-        state: r.get(13)?,
-        error_code: r.get(14)?,
-        error_message: r.get(15)?,
-        queued_at: r.get(16)?,
-        started_at: r.get(17)?,
-        finished_at: r.get(18)?,
-        progress_file: r.get(19)?,
-        helper_pid: r.get(20)?,
+        job_id: r.get(0)?,
+        image_path: r.get(1)?,
+        image_name: r.get(2)?,
+        image_bytes: r.get::<_, i64>(3)? as u64,
+        target_device: r.get(4)?,
+        source_sha256: r.get(5)?,
+        readback_sha256: r.get(6)?,
+        verify_match: r.get::<_, Option<i32>>(7)?.map(|v| v != 0),
+        bytes_written: r.get::<_, Option<i64>>(8)?.map(|v| v as u64),
+        elapsed_ms: r.get::<_, Option<i64>>(9)?.map(|v| v as u64),
+        avg_write_bps: r.get::<_, Option<i64>>(10)?.map(|v| v as u64),
+        avg_verify_bps: r.get::<_, Option<i64>>(11)?.map(|v| v as u64),
+        state: r.get(12)?,
+        error_code: r.get(13)?,
+        error_message: r.get(14)?,
+        queued_at: r.get(15)?,
+        started_at: r.get(16)?,
+        finished_at: r.get(17)?,
+        progress_file: r.get(18)?,
+        helper_pid: r.get(19)?,
     })
 }
 
@@ -683,59 +647,32 @@ pub fn burn_jobs_clear(db: State<'_, Db>) -> Result<(), String> {
     Ok(())
 }
 
-// Frontend enqueue. The job_id is unique per logical burn (one row per
-// queued/running/finished attempt of the same image+target). The
-// decision tree is explicit at this call site — no hidden upsert:
-//
-//   - find_burn_id finds the row regardless of state
-//   - if the row is queued or running, this is a duplicate add; return
-//     the existing id as a no-op so the caller's idempotent re-enqueue
-//     flow doesn't break
-//   - if the row is in a terminal state (error / cancelled / success),
-//     this is a retry; reset the row back to 'queued' and return its id
-//   - if no row exists, INSERT a fresh queued row
-//
-// The UNIQUE INDEX on burn_jobs(job_id) is what guarantees we'll
-// either find an existing row OR be free to insert; we'll never get
-// the "found nothing, but INSERT fails because a different code path
-// snuck a row in" race the old upsert was prone to.
+// Frontend enqueue. The DB mints the integer PK and we return it so the
+// UI can use the same id for every subsequent invoke (start_write,
+// cancel_write, remove_burn_job, etc.). The frontend no longer invents
+// a job_id — there's only one canonical id and it lives in SQLite.
 #[tauri::command]
 pub fn enqueue_burn(
     db: State<'_, Db>,
-    job_id: String,
     image_path: String,
     image_name: String,
     image_bytes: u64,
     target_device: String,
 ) -> Result<i64, String> {
     let conn = db.0.lock().map_err(|e| e.to_string())?;
-    if let Some(existing_id) = find_burn_id(&conn, &job_id) {
-        let state: Option<String> = conn
-            .query_row(
-                "SELECT state FROM burn_jobs WHERE id = ?1",
-                params![existing_id],
-                |r| r.get(0),
-            )
-            .ok();
-        match state.as_deref() {
-            Some("queued") | Some("running") => Ok(existing_id),
-            Some("error") | Some("cancelled") | Some("success") => {
-                reset_row_to_queued(&conn, &job_id)
-                    .ok_or_else(|| format!("failed to requeue burn for {job_id}"))
-            }
-            _ => Err(format!("burn_jobs row {existing_id} has unknown state")),
-        }
-    } else {
-        insert_queued_row(
-            &conn,
-            &job_id,
-            &image_path,
-            &image_name,
-            image_bytes,
-            &target_device,
-        )
-        .ok_or_else(|| format!("failed to enqueue burn for {job_id}"))
-    }
+    insert_queued_row(&conn, &image_path, &image_name, image_bytes, &target_device)
+        .ok_or_else(|| format!("failed to enqueue burn for {image_name}"))
+}
+
+// Retry flow: take a row that landed in a terminal state (error /
+// cancelled) and reset it back to 'queued' so a fresh start_write can
+// run against it. Returns the same job_id on success; `Err` if the row
+// is missing or in a non-resettable state (queued / running / success).
+#[tauri::command]
+pub fn requeue_burn(db: State<'_, Db>, job_id: i64) -> Result<i64, String> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    reset_row_to_queued(&conn, job_id)
+        .ok_or_else(|| format!("failed to requeue burn for job_id {job_id}"))
 }
 
 // Hard-delete a job row. burn_logs cascades. Allowed in any state —
@@ -744,7 +681,7 @@ pub fn enqueue_burn(
 // orphans the DB from the helper, the OS-level cancellation is
 // separate.
 #[tauri::command]
-pub fn remove_burn_job(db: State<'_, Db>, job_id: String) -> Result<(), String> {
+pub fn remove_burn_job(db: State<'_, Db>, job_id: i64) -> Result<(), String> {
     let conn = db.0.lock().map_err(|e| e.to_string())?;
     conn.execute("DELETE FROM burn_jobs WHERE job_id=?1", params![job_id])
         .map_err(|e| e.to_string())?;
@@ -757,7 +694,7 @@ pub fn remove_burn_job(db: State<'_, Db>, job_id: String) -> Result<(), String> 
 #[tauri::command]
 pub fn set_burn_target(
     db: State<'_, Db>,
-    job_id: String,
+    job_id: i64,
     target_device: String,
 ) -> Result<(), String> {
     let conn = db.0.lock().map_err(|e| e.to_string())?;
@@ -771,19 +708,19 @@ pub fn set_burn_target(
 }
 
 #[tauri::command]
-pub fn burn_logs_list(db: State<'_, Db>, burn_id: i64) -> Result<Vec<BurnLogRow>, String> {
+pub fn burn_logs_list(db: State<'_, Db>, job_id: i64) -> Result<Vec<BurnLogRow>, String> {
     let conn = db.0.lock().map_err(|e| e.to_string())?;
     let mut stmt = conn
         .prepare(
-            "SELECT id, burn_id, ts, level, message FROM burn_logs
-             WHERE burn_id=?1 ORDER BY ts ASC, id ASC",
+            "SELECT id, job_id, ts, level, message FROM burn_logs
+             WHERE job_id=?1 ORDER BY ts ASC, id ASC",
         )
         .map_err(|e| e.to_string())?;
     let rows = stmt
-        .query_map(params![burn_id], |r| {
+        .query_map(params![job_id], |r| {
             Ok(BurnLogRow {
                 id: r.get(0)?,
-                burn_id: r.get(1)?,
+                job_id: r.get(1)?,
                 ts: r.get(2)?,
                 level: r.get(3)?,
                 message: r.get(4)?,
@@ -793,29 +730,26 @@ pub fn burn_logs_list(db: State<'_, Db>, burn_id: i64) -> Result<Vec<BurnLogRow>
     Ok(rows.filter_map(|r| r.ok()).collect())
 }
 
-// Frontend convenience: take the user-facing string job_id and resolve to
-// the integer burn_id via a join. Saves the UI from having to remember
-// the int PK that lives only in the DB. Returns an empty list (not Err)
-// when no burn_jobs row matches yet — fresh queued jobs hit this between
-// enqueue and the first log line, and an empty panel is friendlier than
-// an error toast.
+// Frontend convenience: pull every log row for a given job_id. With the
+// integer PK there's no more string-vs-integer translation step — it's
+// the same column on both sides — but the command stays separate from
+// burn_logs_list so consumers don't have to know about the underlying
+// schema shape.
 #[tauri::command]
-pub fn burn_logs_for_job(db: State<'_, Db>, job_id: String) -> Result<Vec<BurnLogRow>, String> {
+pub fn burn_logs_for_job(db: State<'_, Db>, job_id: i64) -> Result<Vec<BurnLogRow>, String> {
     let conn = db.0.lock().map_err(|e| e.to_string())?;
     let mut stmt = conn
         .prepare(
-            "SELECT l.id, l.burn_id, l.ts, l.level, l.message
-             FROM burn_logs l
-             JOIN burn_jobs j ON j.id = l.burn_id
-             WHERE j.job_id = ?1
-             ORDER BY l.ts ASC, l.id ASC",
+            "SELECT id, job_id, ts, level, message FROM burn_logs
+             WHERE job_id = ?1
+             ORDER BY ts ASC, id ASC",
         )
         .map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map(params![job_id], |r| {
             Ok(BurnLogRow {
                 id: r.get(0)?,
-                burn_id: r.get(1)?,
+                job_id: r.get(1)?,
                 ts: r.get(2)?,
                 level: r.get(3)?,
                 message: r.get(4)?,
@@ -903,7 +837,7 @@ fn burn_jobs_clear_impl(db: &Db) -> Result<(), String> {
 }
 
 #[cfg(test)]
-fn remove_burn_job_impl(db: &Db, job_id: &str) -> Result<(), String> {
+fn remove_burn_job_impl(db: &Db, job_id: i64) -> Result<(), String> {
     let conn = db.0.lock().map_err(|e| e.to_string())?;
     conn.execute("DELETE FROM burn_jobs WHERE job_id=?1", params![job_id])
         .map_err(|e| e.to_string())?;
@@ -911,19 +845,19 @@ fn remove_burn_job_impl(db: &Db, job_id: &str) -> Result<(), String> {
 }
 
 #[cfg(test)]
-fn burn_logs_list_impl(db: &Db, burn_id: i64) -> Result<Vec<BurnLogRow>, String> {
+fn burn_logs_list_impl(db: &Db, job_id: i64) -> Result<Vec<BurnLogRow>, String> {
     let conn = db.0.lock().map_err(|e| e.to_string())?;
     let mut stmt = conn
         .prepare(
-            "SELECT id, burn_id, ts, level, message FROM burn_logs
-             WHERE burn_id=?1 ORDER BY ts ASC, id ASC",
+            "SELECT id, job_id, ts, level, message FROM burn_logs
+             WHERE job_id=?1 ORDER BY ts ASC, id ASC",
         )
         .map_err(|e| e.to_string())?;
     let rows = stmt
-        .query_map(params![burn_id], |r| {
+        .query_map(params![job_id], |r| {
             Ok(BurnLogRow {
                 id: r.get(0)?,
-                burn_id: r.get(1)?,
+                job_id: r.get(1)?,
                 ts: r.get(2)?,
                 level: r.get(3)?,
                 message: r.get(4)?,
@@ -931,6 +865,22 @@ fn burn_logs_list_impl(db: &Db, burn_id: i64) -> Result<Vec<BurnLogRow>, String>
         })
         .map_err(|e| e.to_string())?;
     Ok(rows.filter_map(|r| r.ok()).collect())
+}
+
+// Thin test-only wrapper that does what `enqueue_burn` does for the
+// production `State<'_, Db>` flavour, but against a plain `&Db`. Returns
+// the freshly-assigned job_id so tests can chain it into subsequent
+// `record_burn_*` calls.
+#[cfg(test)]
+fn enqueue_burn_impl(
+    db: &Db,
+    image_path: &str,
+    image_name: &str,
+    image_bytes: u64,
+    target_device: &str,
+) -> Option<i64> {
+    let conn = db.0.lock().ok()?;
+    insert_queued_row(&conn, image_path, image_name, image_bytes, target_device)
 }
 
 #[cfg(test)]
@@ -996,15 +946,14 @@ mod tests {
     // ---------- burn lifecycle ----------
 
     #[test]
-    fn record_burn_queued_inserts_queued_row_and_log() {
+    fn enqueue_inserts_queued_row_and_log() {
         let db = fresh_db();
-        let id = record_burn_queued(&db, "job-1", "/tmp/x.iso", "x.iso", 12345, "/dev/disk5")
+        let id = enqueue_burn_impl(&db, "/tmp/x.iso", "x.iso", 12345, "/dev/disk5")
             .expect("insert returns id");
         let rows = burn_jobs_list_impl(&db, None).unwrap();
         assert_eq!(rows.len(), 1);
         let r = &rows[0];
-        assert_eq!(r.id, id);
-        assert_eq!(r.job_id, "job-1");
+        assert_eq!(r.job_id, id);
         assert_eq!(r.state, "queued");
         assert!(r.started_at.is_none());
         assert!(r.finished_at.is_none());
@@ -1017,44 +966,20 @@ mod tests {
     }
 
     #[test]
-    fn record_burn_queued_is_idempotent_for_open_rows() {
+    fn enqueue_mints_distinct_ids_for_each_row() {
         let db = fresh_db();
-        let id1 = record_burn_queued(&db, "job-q", "/p", "n", 1, "/dev/disk5").unwrap();
-        let id2 = record_burn_queued(&db, "job-q", "/p", "n", 1, "/dev/disk5").unwrap();
-        assert_eq!(id1, id2, "re-enqueue should return same row id");
-        assert_eq!(burn_jobs_list_impl(&db, None).unwrap().len(), 1);
-    }
-
-    #[test]
-    fn record_burn_queued_returns_existing_id_for_terminal_rows() {
-        // Old behaviour: when the existing row was 'error' or
-        // 'cancelled', record_burn_queued INSERTed a fresh row,
-        // producing duplicate burn_jobs entries for the same job_id.
-        // New behaviour: find_burn_id finds the row regardless of
-        // state and we return its id without INSERTing — the UNIQUE
-        // INDEX on job_id would refuse the duplicate anyway.
-        let db = fresh_db();
-        let id1 = record_burn_queued(&db, "job-err", "/p", "n", 1, "/dev/disk5").unwrap();
-        record_burn_failed(&db, "job-err", "ENEEDS_FDA", "denied");
-        let id2 = record_burn_queued(&db, "job-err", "/p", "n", 1, "/dev/disk5").unwrap();
-        assert_eq!(
-            id1, id2,
-            "must reuse the existing error row, not INSERT a duplicate"
-        );
-        assert_eq!(burn_jobs_list_impl(&db, None).unwrap().len(), 1);
-        // Note: record_burn_queued does NOT reset the row's state —
-        // that's reset_row_to_queued's job, invoked from the retry
-        // path. The row stays at 'error' here.
-        let r = &burn_jobs_list_impl(&db, None).unwrap()[0];
-        assert_eq!(r.state, "error");
+        let id1 = enqueue_burn_impl(&db, "/p", "n", 1, "/dev/disk5").unwrap();
+        let id2 = enqueue_burn_impl(&db, "/p", "n", 1, "/dev/disk5").unwrap();
+        assert_ne!(id1, id2, "each enqueue mints a fresh id");
+        assert_eq!(burn_jobs_list_impl(&db, None).unwrap().len(), 2);
     }
 
     #[test]
     fn reset_row_to_queued_revives_an_errored_burn() {
         let db = fresh_db();
-        let id = record_burn_queued(&db, "job-r", "/p", "n", 1, "/dev/disk5").unwrap();
-        record_burn_started(&db, "job-r", Some("/tmp/p"), Some(42));
-        record_burn_failed(&db, "job-r", "EIO", "boom");
+        let id = enqueue_burn_impl(&db, "/p", "n", 1, "/dev/disk5").unwrap();
+        record_burn_started(&db, id, Some("/tmp/p"), Some(42));
+        record_burn_failed(&db, id, "EIO", "boom");
         {
             let r = &burn_jobs_list_impl(&db, None).unwrap()[0];
             assert_eq!(r.state, "error");
@@ -1063,7 +988,7 @@ mod tests {
             assert_eq!(r.helper_pid, Some(42));
         }
         let conn = db.0.lock().unwrap();
-        let reset_id = reset_row_to_queued(&conn, "job-r").expect("must reset terminal row");
+        let reset_id = reset_row_to_queued(&conn, id).expect("must reset terminal row");
         drop(conn);
         assert_eq!(reset_id, id);
         let r = &burn_jobs_list_impl(&db, None).unwrap()[0];
@@ -1082,10 +1007,10 @@ mod tests {
     #[test]
     fn reset_row_to_queued_refuses_to_revive_a_running_burn() {
         let db = fresh_db();
-        record_burn_queued(&db, "job-running", "/p", "n", 1, "/dev/disk5").unwrap();
-        record_burn_started(&db, "job-running", None, None);
+        let id = enqueue_burn_impl(&db, "/p", "n", 1, "/dev/disk5").unwrap();
+        record_burn_started(&db, id, None, None);
         let conn = db.0.lock().unwrap();
-        let result = reset_row_to_queued(&conn, "job-running");
+        let result = reset_row_to_queued(&conn, id);
         assert!(result.is_none(), "running row should not be resettable");
     }
 
@@ -1093,16 +1018,16 @@ mod tests {
     fn reset_row_to_queued_is_none_for_unknown_job_id() {
         let db = fresh_db();
         let conn = db.0.lock().unwrap();
-        assert!(reset_row_to_queued(&conn, "ghost").is_none());
+        assert!(reset_row_to_queued(&conn, 9_999_999).is_none());
     }
 
     #[test]
     fn record_burn_started_flips_queued_to_running_and_stamps_helper_fields() {
         let db = fresh_db();
-        let id = record_burn_queued(&db, "job-s", "/p", "n", 1, "/dev/disk5").unwrap();
-        record_burn_started(&db, "job-s", Some("/tmp/p.jsonl"), Some(12345));
+        let id = enqueue_burn_impl(&db, "/p", "n", 1, "/dev/disk5").unwrap();
+        record_burn_started(&db, id, Some("/tmp/p.jsonl"), Some(12345));
         let r = &burn_jobs_list_impl(&db, None).unwrap()[0];
-        assert_eq!(r.id, id);
+        assert_eq!(r.job_id, id);
         assert_eq!(r.state, "running");
         assert!(r.started_at.is_some());
         assert_eq!(r.progress_file.as_deref(), Some("/tmp/p.jsonl"));
@@ -1112,16 +1037,16 @@ mod tests {
     #[test]
     fn record_burn_started_is_noop_without_queued_row() {
         let db = fresh_db();
-        record_burn_started(&db, "ghost", None, None);
+        record_burn_started(&db, 9_999_999, None, None);
         assert!(burn_jobs_list_impl(&db, None).unwrap().is_empty());
     }
 
     #[test]
     fn record_burn_completed_marks_success() {
         let db = fresh_db();
-        record_burn_queued(&db, "job-ok", "/p", "n", 100, "/dev/disk5").unwrap();
-        record_burn_started(&db, "job-ok", None, None);
-        record_burn_completed(&db, "job-ok", "src", "rb", true, 100, 1500, 1000, 2000);
+        let id = enqueue_burn_impl(&db, "/p", "n", 100, "/dev/disk5").unwrap();
+        record_burn_started(&db, id, None, None);
+        record_burn_completed(&db, id, "src", "rb", true, 100, 1500, 1000, 2000);
         let r = &burn_jobs_list_impl(&db, None).unwrap()[0];
         assert_eq!(r.state, "success");
         assert_eq!(r.verify_match, Some(true));
@@ -1131,9 +1056,9 @@ mod tests {
     #[test]
     fn record_burn_completed_marks_error_on_hash_mismatch() {
         let db = fresh_db();
-        record_burn_queued(&db, "job-mm", "/p", "n", 100, "/dev/disk5").unwrap();
-        record_burn_started(&db, "job-mm", None, None);
-        record_burn_completed(&db, "job-mm", "a", "b", false, 100, 100, 100, 100);
+        let id = enqueue_burn_impl(&db, "/p", "n", 100, "/dev/disk5").unwrap();
+        record_burn_started(&db, id, None, None);
+        record_burn_completed(&db, id, "a", "b", false, 100, 100, 100, 100);
         let r = &burn_jobs_list_impl(&db, None).unwrap()[0];
         assert_eq!(r.state, "error");
         assert_eq!(r.error_code.as_deref(), Some("EHASHMISMATCH"));
@@ -1142,26 +1067,26 @@ mod tests {
     #[test]
     fn record_burn_failed_marks_error_against_queued_or_running_row() {
         let db = fresh_db();
-        record_burn_queued(&db, "job-pre", "/p", "n", 0, "/dev/disk5").unwrap();
-        record_burn_failed(&db, "job-pre", "ENEEDS_FDA", "denied");
+        let id_pre = enqueue_burn_impl(&db, "/p", "n", 0, "/dev/disk5").unwrap();
+        record_burn_failed(&db, id_pre, "ENEEDS_FDA", "denied");
         let r = &burn_jobs_list_impl(&db, None).unwrap()[0];
         assert_eq!(r.state, "error");
         assert_eq!(r.error_code.as_deref(), Some("ENEEDS_FDA"));
 
-        record_burn_queued(&db, "job-mid", "/p", "n", 0, "/dev/disk5").unwrap();
-        record_burn_started(&db, "job-mid", None, None);
-        record_burn_failed(&db, "job-mid", "EIO", "boom");
+        let id_mid = enqueue_burn_impl(&db, "/p", "n", 0, "/dev/disk5").unwrap();
+        record_burn_started(&db, id_mid, None, None);
+        record_burn_failed(&db, id_mid, "EIO", "boom");
         let rows = burn_jobs_list_impl(&db, None).unwrap();
-        let r = rows.iter().find(|r| r.job_id == "job-mid").unwrap();
+        let r = rows.iter().find(|r| r.job_id == id_mid).unwrap();
         assert_eq!(r.state, "error");
     }
 
     #[test]
     fn record_burn_failed_with_cancel_code_marks_cancelled() {
         let db = fresh_db();
-        record_burn_queued(&db, "job-c", "/p", "n", 0, "/dev/disk5").unwrap();
-        record_burn_started(&db, "job-c", None, None);
-        record_burn_failed(&db, "job-c", "ECANCELLED", "user");
+        let id = enqueue_burn_impl(&db, "/p", "n", 0, "/dev/disk5").unwrap();
+        record_burn_started(&db, id, None, None);
+        record_burn_failed(&db, id, "ECANCELLED", "user");
         let r = &burn_jobs_list_impl(&db, None).unwrap()[0];
         assert_eq!(r.state, "cancelled");
     }
@@ -1169,16 +1094,16 @@ mod tests {
     #[test]
     fn record_burn_completed_is_noop_when_no_running_row() {
         let db = fresh_db();
-        record_burn_completed(&db, "ghost", "s", "r", true, 0, 0, 0, 0);
+        record_burn_completed(&db, 9_999_999, "s", "r", true, 0, 0, 0, 0);
         assert!(burn_jobs_list_impl(&db, None).unwrap().is_empty());
     }
 
     #[test]
     fn append_log_appends_for_open_job_only() {
         let db = fresh_db();
-        let id = record_burn_queued(&db, "job-l", "/p", "n", 0, "/dev/disk5").unwrap();
-        append_log(&db, "job-l", "warn", "yellow");
-        append_log(&db, "no-such", "warn", "ignored");
+        let id = enqueue_burn_impl(&db, "/p", "n", 0, "/dev/disk5").unwrap();
+        append_log(&db, id, "warn", "yellow");
+        append_log(&db, 9_999_999, "warn", "ignored");
         let logs = burn_logs_list_impl(&db, id).unwrap();
         // 1 queued log + 1 append.
         assert_eq!(logs.len(), 2);
@@ -1190,52 +1115,56 @@ mod tests {
     #[test]
     fn burn_jobs_list_orders_by_queued_at_desc() {
         let db = fresh_db();
+        // Insert in a specific queued_at order so we can verify the
+        // DESC sort independently of the auto-increment id sequence.
         let conn = db.0.lock().unwrap();
-        for (job, ts) in [("a", 1000_i64), ("b", 3000), ("c", 2000)] {
+        for (label, ts) in [("a", 1000_i64), ("b", 3000), ("c", 2000)] {
             conn.execute(
-                "INSERT INTO burn_jobs (job_id, image_path, image_name, image_bytes,
+                "INSERT INTO burn_jobs (image_path, image_name, image_bytes,
                     target_device, state, queued_at)
-                 VALUES (?1, '/p', 'n', 0, '/dev/disk5', 'queued', ?2)",
-                params![job, ts],
+                 VALUES (?1, 'n', 0, '/dev/disk5', 'queued', ?2)",
+                params![label, ts],
             )
             .unwrap();
         }
         drop(conn);
         let rows = burn_jobs_list_impl(&db, None).unwrap();
-        let job_ids: Vec<&str> = rows.iter().map(|r| r.job_id.as_str()).collect();
-        assert_eq!(job_ids, vec!["b", "c", "a"]);
+        // queued_at DESC ⇒ b (3000), c (2000), a (1000); image_path is
+        // our label proxy.
+        let paths: Vec<&str> = rows.iter().map(|r| r.image_path.as_str()).collect();
+        assert_eq!(paths, vec!["b", "c", "a"]);
     }
 
     #[test]
     fn burn_jobs_active_excludes_success_and_orders_oldest_first() {
         let db = fresh_db();
         let conn = db.0.lock().unwrap();
-        for (job, state, ts) in [
+        for (label, state, ts) in [
             ("q1", "queued", 1_i64),
             ("r1", "running", 2),
             ("ok", "success", 3),
             ("e1", "error", 4),
         ] {
             conn.execute(
-                "INSERT INTO burn_jobs (job_id, image_path, image_name, image_bytes,
+                "INSERT INTO burn_jobs (image_path, image_name, image_bytes,
                     target_device, state, queued_at)
-                 VALUES (?1, '/p', 'n', 0, '/dev/disk5', ?2, ?3)",
-                params![job, state, ts],
+                 VALUES (?1, 'n', 0, '/dev/disk5', ?2, ?3)",
+                params![label, state, ts],
             )
             .unwrap();
         }
         drop(conn);
         let rows = burn_jobs_active_impl(&db).unwrap();
-        let ids: Vec<&str> = rows.iter().map(|r| r.job_id.as_str()).collect();
-        assert_eq!(ids, vec!["q1", "r1", "e1"]);
+        let paths: Vec<&str> = rows.iter().map(|r| r.image_path.as_str()).collect();
+        assert_eq!(paths, vec!["q1", "r1", "e1"]);
     }
 
     #[test]
     fn burn_jobs_clear_empties_table_and_cascades_to_logs() {
         let db = fresh_db();
-        let id = record_burn_queued(&db, "job-x", "/p", "n", 0, "/dev/disk5").unwrap();
-        record_burn_started(&db, "job-x", None, None);
-        record_burn_completed(&db, "job-x", "s", "r", true, 1, 1, 1, 1);
+        let id = enqueue_burn_impl(&db, "/p", "n", 0, "/dev/disk5").unwrap();
+        record_burn_started(&db, id, None, None);
+        record_burn_completed(&db, id, "s", "r", true, 1, 1, 1, 1);
         assert_eq!(burn_jobs_list_impl(&db, None).unwrap().len(), 1);
         assert!(!burn_logs_list_impl(&db, id).unwrap().is_empty());
         burn_jobs_clear_impl(&db).unwrap();
@@ -1246,25 +1175,25 @@ mod tests {
     #[test]
     fn remove_burn_job_deletes_row_and_cascades_logs() {
         let db = fresh_db();
-        let id = record_burn_queued(&db, "job-rm", "/p", "n", 0, "/dev/disk5").unwrap();
+        let id = enqueue_burn_impl(&db, "/p", "n", 0, "/dev/disk5").unwrap();
         assert!(!burn_logs_list_impl(&db, id).unwrap().is_empty());
-        remove_burn_job_impl(&db, "job-rm").unwrap();
+        remove_burn_job_impl(&db, id).unwrap();
         assert!(burn_jobs_list_impl(&db, None).unwrap().is_empty());
         assert!(burn_logs_list_impl(&db, id).unwrap().is_empty());
     }
 
     #[test]
-    fn burn_logs_list_filters_by_burn_id_and_orders_ascending() {
+    fn burn_logs_list_filters_by_job_id_and_orders_ascending() {
         let db = fresh_db();
-        let id1 = record_burn_queued(&db, "j1", "/p", "n", 0, "/dev/disk5").unwrap();
-        let id2 = record_burn_queued(&db, "j2", "/p", "n", 0, "/dev/disk6").unwrap();
-        append_log(&db, "j1", "info", "one");
-        append_log(&db, "j1", "info", "two");
-        append_log(&db, "j2", "warn", "other");
+        let id1 = enqueue_burn_impl(&db, "/p", "n", 0, "/dev/disk5").unwrap();
+        let id2 = enqueue_burn_impl(&db, "/p", "n", 0, "/dev/disk6").unwrap();
+        append_log(&db, id1, "info", "one");
+        append_log(&db, id1, "info", "two");
+        append_log(&db, id2, "warn", "other");
         let l1 = burn_logs_list_impl(&db, id1).unwrap();
         let l2 = burn_logs_list_impl(&db, id2).unwrap();
-        assert!(l1.iter().all(|r| r.burn_id == id1));
-        assert!(l2.iter().all(|r| r.burn_id == id2));
+        assert!(l1.iter().all(|r| r.job_id == id1));
+        assert!(l2.iter().all(|r| r.job_id == id2));
         let ids: Vec<i64> = l1.iter().map(|r| r.id).collect();
         let mut sorted = ids.clone();
         sorted.sort();
@@ -1272,7 +1201,7 @@ mod tests {
     }
 
     #[test]
-    fn burn_logs_list_for_unknown_burn_id_is_empty() {
+    fn burn_logs_list_for_unknown_job_id_is_empty() {
         let db = fresh_db();
         assert!(burn_logs_list_impl(&db, 9_999_999).unwrap().is_empty());
     }

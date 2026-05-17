@@ -76,7 +76,7 @@ pub struct ForensicReport {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BurnSection {
-    pub job_id: String,
+    pub job_id: i64,
     pub image_name: String,
     pub image_path: String,
     pub image_size_bytes: u64,
@@ -105,7 +105,7 @@ pub struct LogEntry {
 /// Build a forensic report from already-fetched data. Pure — no I/O.
 pub fn build_report(burn: &BurnJob, logs: &[BurnLogRow], host: HostInfo) -> ForensicReport {
     let burn_section = BurnSection {
-        job_id: burn.job_id.clone(),
+        job_id: burn.job_id,
         image_name: burn.image_name.clone(),
         image_path: burn.image_path.clone(),
         image_size_bytes: burn.image_bytes,
@@ -294,8 +294,7 @@ mod tests {
 
     fn sample_burn() -> BurnJob {
         BurnJob {
-            id: 1,
-            job_id: "job-7".into(),
+            job_id: 7,
             image_path: "/tmp/ubuntu.iso".into(),
             image_name: "ubuntu.iso".into(),
             image_bytes: 4_700_000_000,
@@ -331,7 +330,7 @@ mod tests {
     fn build_report_copies_fields_from_burn_record() {
         let r = build_report(&sample_burn(), &[], sample_host());
         assert_eq!(r.schema_version, 1);
-        assert_eq!(r.burn.job_id, "job-7");
+        assert_eq!(r.burn.job_id, 7);
         assert_eq!(r.burn.image_name, "ubuntu.iso");
         assert_eq!(r.burn.image_size_bytes, 4_700_000_000);
         assert_eq!(r.burn.target_device, "/dev/disk5");
@@ -344,14 +343,14 @@ mod tests {
         let logs = vec![
             BurnLogRow {
                 id: 1,
-                burn_id: 1,
+                job_id: 1,
                 ts: 1000,
                 level: "info".into(),
                 message: "start".into(),
             },
             BurnLogRow {
                 id: 2,
-                burn_id: 1,
+                job_id: 1,
                 ts: 2000,
                 level: "info".into(),
                 message: "done".into(),
@@ -383,7 +382,7 @@ mod tests {
     fn digest_is_tamper_evident_for_logs() {
         let logs = vec![BurnLogRow {
             id: 1,
-            burn_id: 1,
+            job_id: 1,
             ts: 1000,
             level: "info".into(),
             message: "ok".into(),
@@ -392,7 +391,7 @@ mod tests {
 
         let altered = vec![BurnLogRow {
             id: 1,
-            burn_id: 1,
+            job_id: 1,
             ts: 1000,
             level: "info".into(),
             message: "tampered".into(),
@@ -439,7 +438,7 @@ mod tests {
         let r = build_report(&sample_burn(), &[], sample_host());
         let md = to_markdown(&r);
         assert!(md.starts_with("# Disk Cutter — Burn Report"));
-        assert!(md.contains("Job ID:** job-7"));
+        assert!(md.contains("Job ID:** 7"));
         assert!(md.contains("ubuntu.iso"));
         assert!(md.contains("/dev/disk5"));
         assert!(md.contains("Verify match: ✓"));

@@ -48,7 +48,7 @@ const PROGRESS_THROTTLE_MS: u64 = 150;
 
 #[derive(Serialize, Clone)]
 struct ProgressPayload {
-    job_id: String,
+    job_id: i64,
     image_path: String,
     bytes_done: u64,
     bytes_total: u64,
@@ -56,7 +56,7 @@ struct ProgressPayload {
 
 #[derive(Serialize, Clone)]
 struct PartitionFsPayload {
-    job_id: String,
+    job_id: i64,
     image_path: String,
     partition_index: u32,
     filesystem: Option<String>,
@@ -65,7 +65,7 @@ struct PartitionFsPayload {
 
 #[derive(Serialize, Clone)]
 struct CompletePayload {
-    job_id: String,
+    job_id: i64,
     image_path: String,
 }
 
@@ -143,32 +143,32 @@ impl fs_core::BlockRead for SparseSampleView {
 /// `image-scan-complete` and returns. Otherwise upserts an in-progress
 /// row, runs the scan, and updates the row in-place as it discovers each
 /// piece.
-pub fn spawn_scan(app: AppHandle, job_id: String, image_path: String) {
+pub fn spawn_scan(app: AppHandle, job_id: i64, image_path: String) {
     std::thread::spawn(move || {
         if let Some(row) = db::image_scan_get(&app.state::<Db>(), &image_path) {
             if row.scan_complete && db::image_scan_is_fresh(&row) {
-                emit_complete(&app, &job_id, &image_path);
+                emit_complete(&app, job_id, &image_path);
                 return;
             }
         }
-        if let Err(e) = run_scan(&app, &job_id, &image_path) {
+        if let Err(e) = run_scan(&app, job_id, &image_path) {
             eprintln!("image_scan: failed for {image_path}: {e}");
         }
-        emit_complete(&app, &job_id, &image_path);
+        emit_complete(&app, job_id, &image_path);
     });
 }
 
-fn emit_complete(app: &AppHandle, job_id: &str, image_path: &str) {
+fn emit_complete(app: &AppHandle, job_id: i64, image_path: &str) {
     let _ = app.emit(
         "disk-cutter://image-scan-complete",
         CompletePayload {
-            job_id: job_id.to_string(),
+            job_id,
             image_path: image_path.to_string(),
         },
     );
 }
 
-fn run_scan(app: &AppHandle, job_id: &str, image_path: &str) -> Result<(), String> {
+fn run_scan(app: &AppHandle, job_id: i64, image_path: &str) -> Result<(), String> {
     let path = Path::new(image_path);
     let meta = std::fs::metadata(path).map_err(|e| format!("stat {image_path}: {e}"))?;
     let file_size = meta.len() as i64;
@@ -318,7 +318,7 @@ fn run_scan(app: &AppHandle, job_id: &str, image_path: &str) -> Result<(), Strin
             let _ = app.emit(
                 "disk-cutter://image-scan-progress",
                 ProgressPayload {
-                    job_id: job_id.to_string(),
+                    job_id,
                     image_path: image_path.to_string(),
                     bytes_done: pos,
                     bytes_total,
@@ -331,7 +331,7 @@ fn run_scan(app: &AppHandle, job_id: &str, image_path: &str) -> Result<(), Strin
     let _ = app.emit(
         "disk-cutter://image-scan-progress",
         ProgressPayload {
-            job_id: job_id.to_string(),
+            job_id,
             image_path: image_path.to_string(),
             bytes_done: pos,
             bytes_total,
@@ -382,7 +382,7 @@ fn run_scan(app: &AppHandle, job_id: &str, image_path: &str) -> Result<(), Strin
         let _ = app.emit(
             "disk-cutter://image-scan-partition-fs",
             PartitionFsPayload {
-                job_id: job_id.to_string(),
+                job_id,
                 image_path: image_path.to_string(),
                 partition_index,
                 filesystem,

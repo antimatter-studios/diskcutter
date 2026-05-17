@@ -209,14 +209,14 @@ fn open_block_read(path: &Path, ext: Option<&str>) -> std::io::Result<Box<dyn Bl
 #[tauri::command]
 pub fn validate_image_contents(
     app: tauri::AppHandle,
-    job_id: String,
+    job_id: i64,
     path: String,
 ) -> Result<(), String> {
     use crate::image::DiskImage;
     use crate::joblog::JobLogger;
     use tauri::Emitter;
     std::thread::spawn(move || {
-        let log = crate::joblog::db_logger_for(&app, &job_id);
+        let log = crate::joblog::db_logger_for(&app, job_id);
         log.info(&format!("scan: validating contents of {path}"));
         let report = match DiskImage::open_with_log(Path::new(&path), &log) {
             Ok(img) => img.validate(),
@@ -237,7 +237,7 @@ pub fn validate_image_contents(
         }
         #[derive(serde::Serialize, Clone)]
         struct Payload {
-            job_id: String,
+            job_id: i64,
             #[serde(flatten)]
             report: ValidationReport,
         }

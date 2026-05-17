@@ -47,8 +47,8 @@ pub fn debug_logging_enabled(app: &AppHandle) -> bool {
 /// snapshot. Use this at the entry point of any scan/burn worker so the
 /// pref value is captured once for the duration of the work (no mid-scan
 /// toggling).
-pub fn db_logger_for(app: &AppHandle, job_id: &str) -> DbJobLogger {
-    DbJobLogger::new(app.clone(), job_id.to_string(), debug_logging_enabled(app))
+pub fn db_logger_for(app: &AppHandle, job_id: i64) -> DbJobLogger {
+    DbJobLogger::new(app.clone(), job_id, debug_logging_enabled(app))
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -127,12 +127,12 @@ impl JobLogger for NullLogger {
 /// snapshot pattern).
 pub struct DbJobLogger {
     app: AppHandle,
-    job_id: String,
+    job_id: i64,
     debug_enabled: bool,
 }
 
 impl DbJobLogger {
-    pub fn new(app: AppHandle, job_id: String, debug_enabled: bool) -> Self {
+    pub fn new(app: AppHandle, job_id: i64, debug_enabled: bool) -> Self {
         Self {
             app,
             job_id,
@@ -147,7 +147,7 @@ impl JobLogger for DbJobLogger {
             return;
         }
         if let Some(db) = self.app.try_state::<Db>() {
-            db::append_log(&db, &self.job_id, level.as_str(), message);
+            db::append_log(&db, self.job_id, level.as_str(), message);
         }
     }
 

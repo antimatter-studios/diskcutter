@@ -47,13 +47,9 @@ pub fn inspect_partitions(path: String) -> Result<PartitionSummary, String> {
 /// comes back as `valid` — gating it on validation keeps the partition
 /// probe from running on files we've already rejected as not-a-disk.
 #[tauri::command]
-pub fn inspect_image_partitions(
-    app: AppHandle,
-    job_id: String,
-    path: String,
-) -> Result<(), String> {
+pub fn inspect_image_partitions(app: AppHandle, job_id: i64, path: String) -> Result<(), String> {
     std::thread::spawn(move || {
-        let log = crate::joblog::db_logger_for(&app, &job_id);
+        let log = crate::joblog::db_logger_for(&app, job_id);
         log.debug("scan: partition probe starting");
         // Prefer the deep-scan cache when it's fresh — its
         // partition_table covers filesystem labels for every
@@ -71,7 +67,7 @@ pub fn inspect_image_partitions(
             log.info("scan: partition probe served from deep-scan cache");
             #[derive(serde::Serialize, Clone)]
             struct CachedPayload {
-                job_id: String,
+                job_id: i64,
                 summary: serde_json::Value,
             }
             let _ = app.emit(
@@ -93,7 +89,7 @@ pub fn inspect_image_partitions(
         }
         #[derive(serde::Serialize, Clone)]
         struct Payload {
-            job_id: String,
+            job_id: i64,
             summary: Option<PartitionSummary>,
         }
         let _ = app.emit(
@@ -111,9 +107,9 @@ pub fn inspect_image_partitions(
 /// MBR bootloader code, ISO 9660 El Torito) so the UI can show "via
 /// El Torito + ESP" detail when more than one fires.
 #[tauri::command]
-pub fn inspect_image_bootable(app: AppHandle, job_id: String, path: String) -> Result<(), String> {
+pub fn inspect_image_bootable(app: AppHandle, job_id: i64, path: String) -> Result<(), String> {
     std::thread::spawn(move || {
-        let log = crate::joblog::db_logger_for(&app, &job_id);
+        let log = crate::joblog::db_logger_for(&app, job_id);
         log.debug("scan: bootability probe starting");
         let (bootable, sources) = match DiskImage::open_with_log(Path::new(&path), &log) {
             Ok(img) => (img.is_bootable(), img.boot_sources().to_vec()),
@@ -130,7 +126,7 @@ pub fn inspect_image_bootable(app: AppHandle, job_id: String, path: String) -> R
         ));
         #[derive(serde::Serialize, Clone)]
         struct Payload {
-            job_id: String,
+            job_id: i64,
             bootable: bool,
             sources: Vec<BootSource>,
         }
@@ -154,11 +150,7 @@ pub fn inspect_image_bootable(app: AppHandle, job_id: String, path: String) -> R
 /// path short-circuit to `image-scan-complete` if the cached row is
 /// still fresh (file size + mtime unchanged).
 #[tauri::command]
-pub fn scan_image_for_row(
-    app: AppHandle,
-    job_id: String,
-    image_path: String,
-) -> Result<(), String> {
+pub fn scan_image_for_row(app: AppHandle, job_id: i64, image_path: String) -> Result<(), String> {
     crate::image_scan::spawn_scan(app, job_id, image_path);
     Ok(())
 }
@@ -198,10 +190,10 @@ pub fn restore_snapshot(recovery: String, device: String) -> Result<RestoreResul
 #[tauri::command]
 pub fn export_burn_report(
     db: State<'_, Db>,
-    job_id: String,
+    job_id: i64,
     format: Option<String>,
 ) -> Result<String, String> {
-    let (burn, logs) = load_burn_and_logs(&db, &job_id)?;
+    let (burn, logs) = load_burn_and_logs(&db, job_id)?;
     let host = HostInfo::current();
     let report = forensic::build_report(&burn, &logs, host);
     let fmt = format.as_deref().unwrap_or("json");
@@ -280,21 +272,20 @@ pub struct BackupResultJson {
 /// Pull the burn_jobs row + burn_logs rows for a given `job_id`.
 /// Pure-ish — does the DB lookup but doesn't compute anything. The
 /// forensic-export command uses this to build its inputs.
-fn load_burn_and_logs(db: &Db, job_id: &str) -> Result<(db::BurnJob, Vec<db::BurnLogRow>), String> {
+fn load_burn_and_logs(db: &Db, job_id: i64) -> Result<(db::BurnJob, Vec<db::BurnLogRow>), String> {
     let conn = db.0.lock().map_err(|e| format!("db lock: {e}"))?;
     let burn = lookup_burn_by_job_id(&conn, job_id)
         .ok_or_else(|| format!("no burn_jobs row for job_id {job_id}"))?;
-    let logs = lookup_logs_for_burn(&conn, burn.id)?;
+    let logs = lookup_logs_for_burn(&conn, job_id)?;
     Ok((burn, logs))
 }
 
-/// SELECT one row out of burn_jobs by job_id, falling back to the
-/// most recent matching row if there are multiple (e.g. a re-run with
-/// the same id, which the schema allows). Pure SQL over the open
-/// connection — no app-level dependencies.
-fn lookup_burn_by_job_id(conn: &rusqlite::Connection, job_id: &str) -> Option<db::BurnJob> {
+/// SELECT one row out of burn_jobs by job_id. With the integer PK
+/// there is at most one matching row — the UNIQUE constraint is the
+/// PRIMARY KEY itself.
+fn lookup_burn_by_job_id(conn: &rusqlite::Connection, job_id: i64) -> Option<db::BurnJob> {
     let sql = r#"
-        SELECT id, job_id, image_path, image_name, image_bytes, target_device,
+        SELECT job_id, image_path, image_name, image_bytes, target_device,
                source_sha256, readback_sha256, verify_match, bytes_written,
                elapsed_ms, avg_write_bps, avg_verify_bps,
                state, error_code, error_message,
@@ -302,32 +293,30 @@ fn lookup_burn_by_job_id(conn: &rusqlite::Connection, job_id: &str) -> Option<db
                progress_file, helper_pid
         FROM burn_jobs
         WHERE job_id = ?1
-        ORDER BY queued_at DESC
         LIMIT 1
     "#;
     conn.query_row(sql, [job_id], |r| {
         Ok(db::BurnJob {
-            id: r.get(0)?,
-            job_id: r.get(1)?,
-            image_path: r.get(2)?,
-            image_name: r.get(3)?,
-            image_bytes: r.get::<_, i64>(4)? as u64,
-            target_device: r.get(5)?,
-            source_sha256: r.get(6)?,
-            readback_sha256: r.get(7)?,
-            verify_match: r.get::<_, Option<i32>>(8)?.map(|v| v != 0),
-            bytes_written: r.get::<_, Option<i64>>(9)?.map(|v| v as u64),
-            elapsed_ms: r.get::<_, Option<i64>>(10)?.map(|v| v as u64),
-            avg_write_bps: r.get::<_, Option<i64>>(11)?.map(|v| v as u64),
-            avg_verify_bps: r.get::<_, Option<i64>>(12)?.map(|v| v as u64),
-            state: r.get(13)?,
-            error_code: r.get(14)?,
-            error_message: r.get(15)?,
-            queued_at: r.get(16)?,
-            started_at: r.get(17)?,
-            finished_at: r.get(18)?,
-            progress_file: r.get(19)?,
-            helper_pid: r.get(20)?,
+            job_id: r.get(0)?,
+            image_path: r.get(1)?,
+            image_name: r.get(2)?,
+            image_bytes: r.get::<_, i64>(3)? as u64,
+            target_device: r.get(4)?,
+            source_sha256: r.get(5)?,
+            readback_sha256: r.get(6)?,
+            verify_match: r.get::<_, Option<i32>>(7)?.map(|v| v != 0),
+            bytes_written: r.get::<_, Option<i64>>(8)?.map(|v| v as u64),
+            elapsed_ms: r.get::<_, Option<i64>>(9)?.map(|v| v as u64),
+            avg_write_bps: r.get::<_, Option<i64>>(10)?.map(|v| v as u64),
+            avg_verify_bps: r.get::<_, Option<i64>>(11)?.map(|v| v as u64),
+            state: r.get(12)?,
+            error_code: r.get(13)?,
+            error_message: r.get(14)?,
+            queued_at: r.get(15)?,
+            started_at: r.get(16)?,
+            finished_at: r.get(17)?,
+            progress_file: r.get(18)?,
+            helper_pid: r.get(19)?,
         })
     })
     .ok()
@@ -335,21 +324,21 @@ fn lookup_burn_by_job_id(conn: &rusqlite::Connection, job_id: &str) -> Option<db
 
 fn lookup_logs_for_burn(
     conn: &rusqlite::Connection,
-    burn_id: i64,
+    job_id: i64,
 ) -> Result<Vec<db::BurnLogRow>, String> {
     let mut stmt = conn
         .prepare(
-            "SELECT id, burn_id, ts, level, message
+            "SELECT id, job_id, ts, level, message
              FROM burn_logs
-             WHERE burn_id = ?1
+             WHERE job_id = ?1
              ORDER BY ts ASC",
         )
         .map_err(|e| format!("prepare burn_logs: {e}"))?;
     let rows = stmt
-        .query_map([burn_id], |r| {
+        .query_map([job_id], |r| {
             Ok(db::BurnLogRow {
                 id: r.get(0)?,
-                burn_id: r.get(1)?,
+                job_id: r.get(1)?,
                 ts: r.get(2)?,
                 level: r.get(3)?,
                 message: r.get(4)?,
@@ -371,11 +360,11 @@ mod tests {
         conn
     }
 
-    fn insert_burn_row(conn: &Connection, job_id: &str) -> i64 {
+    fn insert_burn_row(conn: &Connection) -> i64 {
         conn.execute(
-            "INSERT INTO burn_jobs(job_id, image_path, image_name, image_bytes, target_device, state, queued_at)
-             VALUES (?1, '/tmp/x.iso', 'x.iso', 4096, '/dev/disk5', 'success', 1715600000000)",
-            [job_id],
+            "INSERT INTO burn_jobs(image_path, image_name, image_bytes, target_device, state, queued_at)
+             VALUES ('/tmp/x.iso', 'x.iso', 4096, '/dev/disk5', 'success', 1715600000000)",
+            [],
         ).unwrap();
         conn.last_insert_rowid()
     }
@@ -383,9 +372,9 @@ mod tests {
     #[test]
     fn lookup_burn_by_job_id_returns_some_for_existing_row() {
         let conn = fresh_conn();
-        insert_burn_row(&conn, "job-7");
-        let r = lookup_burn_by_job_id(&conn, "job-7").unwrap();
-        assert_eq!(r.job_id, "job-7");
+        let id = insert_burn_row(&conn);
+        let r = lookup_burn_by_job_id(&conn, id).unwrap();
+        assert_eq!(r.job_id, id);
         assert_eq!(r.image_bytes, 4096);
         assert_eq!(r.target_device, "/dev/disk5");
     }
@@ -393,48 +382,34 @@ mod tests {
     #[test]
     fn lookup_burn_by_job_id_returns_none_for_missing() {
         let conn = fresh_conn();
-        assert!(lookup_burn_by_job_id(&conn, "ghost").is_none());
+        assert!(lookup_burn_by_job_id(&conn, 9_999_999).is_none());
     }
 
     #[test]
-    fn duplicate_job_id_insert_fails_with_unique_violation() {
+    fn each_insert_mints_a_distinct_job_id() {
         let conn = fresh_conn();
-        // The UNIQUE INDEX on burn_jobs.job_id (migration 0004) makes
-        // a second INSERT with the same job_id a hard error. The old
-        // upsert path used to silently produce two rows; this is the
-        // regression guard.
-        conn.execute(
-            "INSERT INTO burn_jobs(job_id, image_path, image_name, image_bytes, target_device, state, queued_at)
-             VALUES ('dup', '/tmp/x', 'x', 100, '/dev/old', 'error', 1000)",
-            [],
-        ).unwrap();
-        let second = conn.execute(
-            "INSERT INTO burn_jobs(job_id, image_path, image_name, image_bytes, target_device, state, queued_at)
-             VALUES ('dup', '/tmp/x', 'x', 200, '/dev/new', 'success', 2000)",
-            [],
-        );
-        let err = second.expect_err("second INSERT must fail").to_string();
-        assert!(
-            err.contains("UNIQUE constraint failed: burn_jobs.job_id"),
-            "expected UNIQUE violation, got: {err}"
-        );
-        // Original row survives untouched.
-        let r = lookup_burn_by_job_id(&conn, "dup").unwrap();
-        assert_eq!(r.target_device, "/dev/old");
-        assert_eq!(r.image_bytes, 100);
+        // With job_id as INTEGER PRIMARY KEY AUTOINCREMENT, every
+        // INSERT (without specifying job_id) yields a fresh id; the
+        // schema makes UNIQUE-violation duplicates impossible by
+        // construction.
+        let id1 = insert_burn_row(&conn);
+        let id2 = insert_burn_row(&conn);
+        assert_ne!(id1, id2);
+        assert!(lookup_burn_by_job_id(&conn, id1).is_some());
+        assert!(lookup_burn_by_job_id(&conn, id2).is_some());
     }
 
     #[test]
     fn lookup_logs_for_burn_returns_ascending_by_ts() {
         let conn = fresh_conn();
-        let id = insert_burn_row(&conn, "job-9");
+        let id = insert_burn_row(&conn);
         conn.execute(
-            "INSERT INTO burn_logs(burn_id, ts, level, message) VALUES (?1, 200, 'info', 'b')",
+            "INSERT INTO burn_logs(job_id, ts, level, message) VALUES (?1, 200, 'info', 'b')",
             [id],
         )
         .unwrap();
         conn.execute(
-            "INSERT INTO burn_logs(burn_id, ts, level, message) VALUES (?1, 100, 'info', 'a')",
+            "INSERT INTO burn_logs(job_id, ts, level, message) VALUES (?1, 100, 'info', 'a')",
             [id],
         )
         .unwrap();
@@ -445,7 +420,7 @@ mod tests {
     }
 
     #[test]
-    fn lookup_logs_for_burn_empty_for_missing_burn_id() {
+    fn lookup_logs_for_burn_empty_for_missing_job_id() {
         let conn = fresh_conn();
         let rows = lookup_logs_for_burn(&conn, 999).unwrap();
         assert!(rows.is_empty());
