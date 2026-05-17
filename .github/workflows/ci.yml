@@ -63,6 +63,22 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
+      # `tauri::generate_context!()` checks `frontendDist` exists at
+      # compile time. Without devUrl set in tauri.conf.json (which is the
+      # standing project decision — single supported run-mode), every
+      # cargo invocation that compiles the lib needs `dist/` on disk.
+      # Build the frontend bundle once before clippy + test.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: npm install
+        run: npm install
+
+      - name: Frontend build (produces dist/ for tauri::generate_context!)
+        run: npm run build
+
       - name: cargo fmt --check
         run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
 
