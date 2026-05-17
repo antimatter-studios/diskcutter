@@ -15,6 +15,16 @@ set -euo pipefail
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 
+echo "[pre-commit] linear history"
+if git rev-parse -q --verify MERGE_HEAD >/dev/null; then
+    echo "Merge commits exist. Please fix them."
+    exit 1
+fi
+if [ -n "$(git log --merges HEAD --format=%H 2>/dev/null)" ]; then
+    echo "Merge commits exist. Please fix them."
+    exit 1
+fi
+
 echo "[pre-commit] i18n key parity"
 node "$REPO_ROOT/scripts/check-i18n.mjs" || exit 1
 
