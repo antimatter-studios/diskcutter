@@ -14,7 +14,7 @@
 
 use std::path::Path;
 
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::db::{self, Db};
 use crate::forensic::{self, HostInfo};
@@ -55,6 +55,31 @@ pub fn inspect_image_partitions(
     std::thread::spawn(move || {
         let log = crate::joblog::db_logger_for(&app, &job_id);
         log.debug("scan: partition probe starting");
+        // Prefer the deep-scan cache when it's fresh — its
+        // partition_table covers filesystem labels for every
+        // partition, including those past the prefix probe's
+        // ~33 KB window. Without this, an app restart re-runs the
+        // prefix-only probe and overwrites the cached full data
+        // with partitions whose filesystem is null for everything
+        // past the prefix, so the UI shows the partition-type
+        // label ("Linux filesystem") instead of "ext4" / "FAT32".
+        let cached = db::image_scan_get(&app.state::<Db>(), &path)
+            .filter(|r| r.scan_complete && db::image_scan_is_fresh(r))
+            .and_then(|r| r.partition_table)
+            .and_then(|json| serde_json::from_str::<serde_json::Value>(&json).ok());
+        if let Some(summary) = cached {
+            log.info("scan: partition probe served from deep-scan cache");
+            #[derive(serde::Serialize, Clone)]
+            struct CachedPayload {
+                job_id: String,
+                summary: serde_json::Value,
+            }
+            let _ = app.emit(
+                "disk-cutter://image-partitioned",
+                CachedPayload { job_id, summary },
+            );
+            return;
+        }
         let summary = DiskImage::open_with_log(Path::new(&path), &log)
             .ok()
             .and_then(|img| img.partitions().cloned());
