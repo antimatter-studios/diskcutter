@@ -210,9 +210,12 @@ mod tests {
         assert_eq!(n, 0, "burn_history should have been renamed");
     }
 
-    // burn_history → burn_jobs migration: pre-load 0001 rows, run 0002,
-    // confirm rows survive with their old started_at remapped to
-    // queued_at and the new columns present and NULL.
+    // burn_history → burn_jobs migration: pre-load 0001 rows, run every
+    // later migration, confirm rows survive the chain. Migration 0005
+    // drops the legacy string `job_id` column entirely (replaced by an
+    // INTEGER PRIMARY KEY) so the assertions stop short of checking the
+    // old text identifier — what we care about is that the row's other
+    // fields propagate cleanly through every recreate-and-copy step.
     #[test]
     fn burn_history_rows_migrate_into_burn_jobs() {
         let mut conn = Connection::open_in_memory().unwrap();
@@ -236,22 +239,20 @@ mod tests {
             params![m0001.name],
         )
         .unwrap();
-        run(&mut conn).expect("0002 applies on populated 0001 schema");
-        let (job_id, queued_at, started_at, progress_file, helper_pid): (
-            String,
+        run(&mut conn).expect("full migration chain applies on populated 0001 schema");
+        let (queued_at, started_at, progress_file, helper_pid): (
             i64,
             Option<i64>,
             Option<String>,
             Option<i64>,
         ) = conn
             .query_row(
-                "SELECT job_id, queued_at, started_at, progress_file, helper_pid
-                 FROM burn_jobs WHERE job_id='legacy'",
+                "SELECT queued_at, started_at, progress_file, helper_pid
+                 FROM burn_jobs WHERE image_path='/tmp/x.iso'",
                 [],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
             )
             .unwrap();
-        assert_eq!(job_id, "legacy");
         assert_eq!(queued_at, 1715, "old started_at should become queued_at");
         assert!(started_at.is_none());
         assert!(progress_file.is_none());
@@ -288,7 +289,7 @@ mod tests {
         conn.execute_batch("PRAGMA foreign_keys=OFF;").unwrap();
         run(&mut conn).unwrap();
         conn.execute(
-            "INSERT INTO burn_logs (burn_id, ts, level, message)
+            "INSERT INTO burn_logs (job_id, ts, level, message)
              VALUES (9999, 0, 'info', 'orphan')",
             [],
         )
