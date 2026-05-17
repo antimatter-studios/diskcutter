@@ -4,7 +4,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import i18n, { availableLanguages } from './i18n/index.js';
-import { formatBytes, formatBps, formatDuration } from './format.js';
+import { formatBytes, formatBytesCompact, formatBytesExtended, formatBps, formatDuration } from './format.js';
 import logoUrl from './assets/logo.svg';
 
 const winCtl = {
@@ -465,7 +465,7 @@ function JobRow({ job, accent, expanded, onToggle, onSelectTarget, onBurn, onCan
         <div className="job-image">
           <div className="job-image-name">{job.image.name}</div>
           <div className="job-image-meta">
-            <span>{job.image.size}</span>
+            <span>{formatBytesCompact(job.image.bytes)}</span>
             <ValidationBadge validation={job.validation} detail={job.validationDetail} />
           </div>
         </div>
@@ -669,13 +669,7 @@ function JobDetail({ job, accent, onCancel, onRetry, onRefresh, fdaBlocked, conf
       <div className="detail-grid">
         <DetailBlock label={t('detail.block.image')}>
           <KV k={t('detail.kv.path')} v={job.image.path} mono />
-          <KV
-            k={t('detail.kv.size')}
-            v={job.image.size
-              ? t('detail.kv.size_value', { size: job.image.size, bytes: (job.image.bytes ?? 0).toLocaleString() })
-              : (job.image.bytes != null ? `${job.image.bytes.toLocaleString()} bytes` : '—')}
-            mono
-          />
+          <KV k={t('detail.kv.size')} v={formatBytesExtended(job.image.bytes)} mono />
           <KV k={t('detail.kv.sectors')} v={job.image.sectors != null ? job.image.sectors.toLocaleString() : '—'} mono />
           <KV k={t('detail.kv.format')} v={job.image.format || '—'} />
           <KV k={t('detail.kv.sha256_source')} v={job.image.sha256 || '—'} mono wrap />
