@@ -11,9 +11,7 @@
   },
   "scripts": {
     "prepare": "./scripts/install-hooks.sh || true",
-    "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview",
     "tauri": "tauri",
     "test": "vitest run",
     "test:watch": "vitest",
