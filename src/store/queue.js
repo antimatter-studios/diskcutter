@@ -141,14 +141,22 @@ export const useQueueStore = create((set, get) => ({
         order.push(j.id);
       });
       set({ jobs, order });
-      // Re-kick image validation for any rehydrated idle row whose
-      // image_path looks usable. Without this, every queued row from
-      // a previous session sits at validation='pending' forever — the
-      // Burn button stays grey because the arm gate also checks valid.
+      // Re-kick image validation AND the deep scan for any rehydrated
+      // idle row whose image_path looks usable. Without validation,
+      // every queued row from a previous session sits at
+      // validation='pending' forever — the Burn button stays grey
+      // because the arm gate also checks valid. Without the deep scan,
+      // partitions whose start offset is past the validation prefix
+      // never get their filesystem sniffed, so the UI shows the
+      // partition-table kind label ("Linux filesystem") instead of
+      // the actual filesystem (ext4, FAT32 …). The deep-scan worker
+      // short-circuits on a fresh image_scans cache hit, so this is
+      // cheap when the image hasn't changed.
       for (const id of order) {
         const j = jobs[id];
         if (j.state === 'idle' && j.image && j.image.path) {
           startValidation(j.id, j.image.path);
+          startScan(j.id, j.image.path);
         }
       }
     } catch (e) {
