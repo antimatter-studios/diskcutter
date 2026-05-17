@@ -46,9 +46,19 @@ pub struct PartInfo {
     pub size_human: String,
     pub kind_label: String,
     pub type_id: String,
+    /// Partition-table label — the GPT partition entry name. Always
+    /// `None` for MBR (no name field). Distinct from `fs_label` because
+    /// the two can differ (e.g. GPT entry named "rootfs" containing an
+    /// ext4 filesystem with `s_volume_name = "RPI-ROOT"`).
     pub label: Option<String>,
     pub uuid: Option<String>,
     pub filesystem: Option<String>,
+    /// Volume label parsed out of the filesystem superblock — ext
+    /// `s_volume_name`, FAT `BS_VolLab`, ISO 9660 PVD identifier. None
+    /// for filesystems whose label lives in MFT/catalog records
+    /// (NTFS, exFAT, APFS, HFS+) since we only sample 64 KB at the
+    /// partition start.
+    pub fs_label: Option<String>,
     /// True when the on-disk table marks this partition bootable:
     /// MBR active flag set, GPT legacy-BIOS-bootable attribute set, or
     /// GPT type is the EFI System Partition GUID. Comes from
@@ -119,7 +129,10 @@ fn summarise(dev: &dyn BlockRead) -> partitions::Result<PartitionSummary> {
     let mut out = Vec::with_capacity(parts.len());
     for (i, p) in parts.iter().enumerate() {
         let fs = sniff(dev, p).ok();
-        out.push(make_part_info((i + 1) as u32, p, fs));
+        let fs_label = fs.and_then(|k| read_fs_label_from_block(dev, p, k));
+        let mut info = make_part_info((i + 1) as u32, p, fs);
+        info.fs_label = fs_label;
+        out.push(info);
     }
     let any_bootable = out.iter().any(|p| p.bootable);
     Ok(PartitionSummary {
@@ -127,6 +140,86 @@ fn summarise(dev: &dyn BlockRead) -> partitions::Result<PartitionSummary> {
         partitions: out,
         any_bootable,
     })
+}
+
+/// Pull just enough bytes from the partition start to cover every
+/// signature `fs_label_from_sample` parses (ISO 9660's PVD lives at
+/// +32768) and run the parser. Failures (read errors, partition too
+/// short) silently return `None` — fs labels are nice-to-have, not
+/// load-bearing.
+fn read_fs_label_from_block(dev: &dyn BlockRead, p: &Partition, kind: FsKind) -> Option<String> {
+    let want = 64 * 1024u64;
+    let take = want.min(p.length) as usize;
+    if take == 0 {
+        return None;
+    }
+    let mut buf = vec![0u8; take];
+    dev.read_at(p.start, &mut buf).ok()?;
+    fs_label_from_sample(kind, &buf)
+}
+
+/// Parse the volume label out of a buffer that starts at the
+/// partition's first byte. Returns `None` for filesystems whose label
+/// can't be reached from a 64 KB superblock sample (NTFS, exFAT, APFS,
+/// HFS+), for empty/default labels (FAT "NO NAME"), and when the
+/// buffer is too short to reach the label offset.
+pub fn fs_label_from_sample(kind: FsKind, buf: &[u8]) -> Option<String> {
+    match kind {
+        FsKind::Ext { .. } => ext_volume_label(buf),
+        FsKind::Fat32 => fat_volume_label(buf, 71),
+        FsKind::Fat16 => fat_volume_label(buf, 43),
+        FsKind::Iso9660 => iso9660_volume_label(buf),
+        _ => None,
+    }
+}
+
+fn ext_volume_label(buf: &[u8]) -> Option<String> {
+    const SB_OFFSET: usize = 1024;
+    const VOLUME_NAME_OFFSET: usize = 0x78;
+    const VOLUME_NAME_LEN: usize = 16;
+    let start = SB_OFFSET + VOLUME_NAME_OFFSET;
+    let raw = buf.get(start..start + VOLUME_NAME_LEN)?;
+    let end = raw.iter().position(|&b| b == 0).unwrap_or(raw.len());
+    let s = String::from_utf8_lossy(&raw[..end]).trim().to_string();
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
+}
+
+fn fat_volume_label(buf: &[u8], offset: usize) -> Option<String> {
+    let raw = buf.get(offset..offset + 11)?;
+    // FAT labels are stored as CP437 space-padded. Pi-ecosystem labels
+    // are pure ASCII so a lossy UTF-8 decode is fine in practice; if a
+    // weird codepoint sneaks in it renders as U+FFFD rather than
+    // breaking the row.
+    let s = String::from_utf8_lossy(raw)
+        .trim_end_matches(' ')
+        .to_string();
+    if s.is_empty() || s == "NO NAME" {
+        None
+    } else {
+        Some(s)
+    }
+}
+
+fn iso9660_volume_label(buf: &[u8]) -> Option<String> {
+    // Primary Volume Descriptor at LBA 16 (32 KiB); volume_identifier
+    // is 32 bytes of ASCII (space-padded) at +40.
+    const PVD_OFFSET: usize = 32768;
+    const VOL_ID_OFFSET: usize = 40;
+    const VOL_ID_LEN: usize = 32;
+    let start = PVD_OFFSET + VOL_ID_OFFSET;
+    let raw = buf.get(start..start + VOL_ID_LEN)?;
+    let s = String::from_utf8_lossy(raw)
+        .trim_end_matches(' ')
+        .to_string();
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
 }
 
 pub fn table_kind_label(t: TableKind) -> &'static str {
@@ -160,6 +253,7 @@ pub fn make_part_info(index: u32, p: &Partition, fs: Option<FsKind>) -> PartInfo
         label: p.label.clone(),
         uuid: p.uuid.map(|b| format_guid(&b)),
         filesystem: fs.map(format_fs_kind),
+        fs_label: None,
         bootable: p.is_bootable(),
     }
 }
@@ -359,6 +453,98 @@ mod tests {
         // SquashFS magic at offset 0
         let sqsh = b"hsqs\x00\x00\x00\x00";
         assert_eq!(classify_buffer(sqsh).as_deref(), Some("SquashFS"));
+    }
+
+    #[test]
+    fn fs_label_reads_ext_volume_name() {
+        let mut buf = vec![0u8; 2048];
+        // s_volume_name at offset 1024 + 0x78, null-padded 16 bytes.
+        let off = 1024 + 0x78;
+        buf[off..off + 8].copy_from_slice(b"RPI-ROOT");
+        assert_eq!(
+            fs_label_from_sample(
+                FsKind::Ext {
+                    version: ExtVersion::Ext4
+                },
+                &buf
+            )
+            .as_deref(),
+            Some("RPI-ROOT")
+        );
+    }
+
+    #[test]
+    fn fs_label_handles_empty_ext_volume_name() {
+        let buf = vec![0u8; 2048];
+        assert!(fs_label_from_sample(
+            FsKind::Ext {
+                version: ExtVersion::Ext4
+            },
+            &buf
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn fs_label_reads_fat32_volume_label() {
+        let mut buf = vec![0u8; 512];
+        // BS_VolLab at offset 71, 11 bytes, space-padded.
+        buf[71..71 + 11].copy_from_slice(b"BOOT       ");
+        assert_eq!(
+            fs_label_from_sample(FsKind::Fat32, &buf).as_deref(),
+            Some("BOOT")
+        );
+    }
+
+    #[test]
+    fn fs_label_ignores_fat_no_name_default() {
+        let mut buf = vec![0u8; 512];
+        buf[71..71 + 11].copy_from_slice(b"NO NAME    ");
+        assert!(fs_label_from_sample(FsKind::Fat32, &buf).is_none());
+    }
+
+    #[test]
+    fn fs_label_reads_fat16_volume_label() {
+        let mut buf = vec![0u8; 512];
+        buf[43..43 + 11].copy_from_slice(b"USBDATA    ");
+        assert_eq!(
+            fs_label_from_sample(FsKind::Fat16, &buf).as_deref(),
+            Some("USBDATA")
+        );
+    }
+
+    #[test]
+    fn fs_label_reads_iso9660_volume_identifier() {
+        let mut buf = vec![0u8; 64 * 1024];
+        let off = 32768 + 40;
+        let label = b"DEBIAN-12.2.0";
+        buf[off..off + label.len()].copy_from_slice(label);
+        for b in &mut buf[off + label.len()..off + 32] {
+            *b = b' ';
+        }
+        assert_eq!(
+            fs_label_from_sample(FsKind::Iso9660, &buf).as_deref(),
+            Some("DEBIAN-12.2.0")
+        );
+    }
+
+    #[test]
+    fn fs_label_returns_none_for_unsupported_kinds() {
+        let buf = vec![0u8; 64 * 1024];
+        assert!(fs_label_from_sample(FsKind::Ntfs, &buf).is_none());
+        assert!(fs_label_from_sample(FsKind::ExFat, &buf).is_none());
+        assert!(fs_label_from_sample(FsKind::Apfs, &buf).is_none());
+        assert!(fs_label_from_sample(FsKind::HfsPlus, &buf).is_none());
+        assert!(fs_label_from_sample(FsKind::Squashfs, &buf).is_none());
+        assert!(fs_label_from_sample(FsKind::LinuxSwap, &buf).is_none());
+        assert!(fs_label_from_sample(FsKind::Unknown, &buf).is_none());
+    }
+
+    #[test]
+    fn fs_label_returns_none_when_buffer_too_short() {
+        // Short buffer can't reach the ISO9660 PVD at 32 KiB.
+        let buf = vec![0u8; 1024];
+        assert!(fs_label_from_sample(FsKind::Iso9660, &buf).is_none());
     }
 
     #[test]

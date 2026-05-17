@@ -364,12 +364,17 @@ function buildPartitionSegments(parts, totalBytes) {
         title: 'unallocated',
       });
     }
+    // Prefer the filesystem volume label (ext s_volume_name, FAT
+    // BS_VolLab, ISO9660 PVD identifier) over the GPT partition entry
+    // name — for Pi images they're "bootfs"/"rootfs" in the FS only,
+    // and MBR partitions never carry a name field at all.
+    const displayLabel = p.fs_label || p.label || '';
     out.push({
       fsClass: fsClassFor(p.filesystem),
       length: p.length_bytes,
       sizeHuman: p.size_human,
-      label: p.label || p.filesystem || p.kind_label || '',
-      title: [p.label, p.filesystem || p.kind_label].filter(Boolean).join(' · ') || p.kind_label,
+      label: displayLabel || p.filesystem || p.kind_label || '',
+      title: [displayLabel, p.filesystem || p.kind_label].filter(Boolean).join(' · ') || p.kind_label,
       bootable: !!p.bootable,
     });
     cursor = p.start_bytes + p.length_bytes;
@@ -901,7 +906,7 @@ function PartitionTable({ partitions, validation, validationDetail, boot }) {
               <td className="mono">{p.size_human}</td>
               <td>{p.kind_label}</td>
               <td>{p.filesystem || '—'}</td>
-              <td>{p.label || '—'}</td>
+              <td>{p.fs_label || p.label || '—'}</td>
             </tr>
           ))}
         </tbody>

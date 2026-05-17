@@ -60,6 +60,7 @@ struct PartitionFsPayload {
     image_path: String,
     partition_index: u32,
     filesystem: Option<String>,
+    fs_label: Option<String>,
 }
 
 #[derive(Serialize, Clone)]
@@ -86,6 +87,33 @@ impl SparseSampleView {
             .unwrap_or(0);
         Self { ranges, end }
     }
+
+    /// Return the slice of the captured sample whose range contains
+    /// `offset`, together with the position of `offset` inside that
+    /// slice. `None` if no captured range covers it.
+    fn sample_at(&self, offset: u64) -> Option<&[u8]> {
+        for (sample_start, sample_bytes) in &self.ranges {
+            let sample_end = sample_start + sample_bytes.len() as u64;
+            if offset >= *sample_start && offset < sample_end {
+                let rel = (offset - sample_start) as usize;
+                return Some(&sample_bytes[rel..]);
+            }
+        }
+        None
+    }
+}
+
+/// Find the captured bytes for a partition and run the FS-label
+/// parser against them. Returns `None` when we never sampled the
+/// partition's start (e.g. partition begins past `stop_at`) or when
+/// the parser doesn't support `kind`.
+fn fs_label_for_partition(
+    view: &SparseSampleView,
+    partition_start: u64,
+    kind: partitions::sniff::FsKind,
+) -> Option<String> {
+    let sample = view.sample_at(partition_start)?;
+    crate::inspect::fs_label_from_sample(kind, sample)
 }
 
 impl fs_core::BlockRead for SparseSampleView {
@@ -333,14 +361,23 @@ fn run_scan(app: &AppHandle, job_id: &str, image_path: &str) -> Result<(), Strin
     };
     for (idx, p) in parts_raw.iter().enumerate() {
         let fs = partitions::sniff::sniff(&view, p).ok();
-        let fs_label: Option<String> = fs.map(crate::inspect::format_fs_kind);
+        let filesystem: Option<String> = fs.map(crate::inspect::format_fs_kind);
+        // Pull the volume label out of the same bytes we collected for
+        // this partition: either the prefix slurp (if the partition
+        // starts inside the first PREFIX_BYTES) or its own per-partition
+        // sample. Looking up the range directly avoids the
+        // `view.read_at` OutOfBounds case for partitions whose length
+        // is smaller than the requested read.
+        let fs_label: Option<String> =
+            fs.and_then(|kind| fs_label_for_partition(&view, p.start, kind));
         let partition_index = (idx + 1) as u32;
         if let Some(part_info) = summary
             .partitions
             .iter_mut()
             .find(|p| p.index == partition_index)
         {
-            part_info.filesystem = fs_label.clone();
+            part_info.filesystem = filesystem.clone();
+            part_info.fs_label = fs_label.clone();
         }
         let _ = app.emit(
             "disk-cutter://image-scan-partition-fs",
@@ -348,7 +385,8 @@ fn run_scan(app: &AppHandle, job_id: &str, image_path: &str) -> Result<(), Strin
                 job_id: job_id.to_string(),
                 image_path: image_path.to_string(),
                 partition_index,
-                filesystem: fs_label,
+                filesystem,
+                fs_label,
             },
         );
     }
