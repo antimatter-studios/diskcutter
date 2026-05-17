@@ -4,8 +4,6 @@
   "version": "0.5.0-alpha",
   "identifier": "com.diskcutter.app",
   "build": {
-    "beforeDevCommand": "npm run dev",
-    "devUrl": "http://127.0.0.1:1420",
     "beforeBuildCommand": "npm run build",
     "frontendDist": "../dist"
   },

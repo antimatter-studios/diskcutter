@@ -127,7 +127,6 @@ macOS-only for now.
 
 ```sh
 npm install
-npx tauri dev          # hot-reloads UI + Rust
 npx tauri build        # bundled .app / .dmg in src-tauri/target/release/bundle
 ```
 

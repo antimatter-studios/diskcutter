@@ -44,7 +44,6 @@ bash scripts/install-hooks.sh       # registers .githooks/pre-commit
 Day-to-day:
 
 ```sh
-npx tauri dev                                          # hot-reload dev build
 npx tauri build                                        # release .app/.dmg
 cargo check --manifest-path src-tauri/Cargo.toml       # fast Rust iteration
 cargo test  --manifest-path src-tauri/Cargo.toml       # backend tests
@@ -52,9 +51,9 @@ npm test                                               # frontend Vitest
 npm run build                                          # frontend production bundle
 ```
 
-`npx tauri dev` is the right command 90% of the time. Reach for `cargo
-check`/`cargo test` directly when you're iterating on Rust internals and
-don't need to launch the UI.
+The release `.app` bundle is the only supported run-mode. There is no
+dev server — `tauri dev` / `vite` have been removed from the project
+configuration on purpose; iterate by rebuilding.
 
 ## Coding standards
 
