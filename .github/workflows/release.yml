@@ -30,7 +30,10 @@ jobs:
           - label: Windows (x86_64)
             platform: windows-latest
             rust-targets: ''
-            args: ''
+            # NSIS only — MSI's ProductVersion caps the major component
+            # at 255, which makes our YYYY.M.D CalVer (2026.…)
+            # unrepresentable. NSIS accepts arbitrary version strings.
+            args: --bundles nsis
 
     runs-on: ${{ matrix.platform }}
     steps:
@@ -65,16 +68,41 @@ jobs:
 
       - run: npm ci
 
+      - name: Strip macOS signing config when no cert secret
+        # tauri.conf.json hardcodes the Developer ID identity for
+        # convenient local builds, but CI has no matching cert in its
+        # keychain unless APPLE_CERTIFICATE is provided. When the
+        # secret is absent, drop the signing section so the build
+        # produces an unsigned .app instead of failing with
+        # "The specified item could not be found in the keychain."
+        if: matrix.platform == 'macos-latest' && env.APPLE_CERTIFICATE == ''
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+        run: |
+          python3 - <<'EOF'
+          import json, pathlib
+          p = pathlib.Path("src-tauri/tauri.conf.json")
+          c = json.loads(p.read_text())
+          c.get("bundle", {}).pop("macOS", None)
+          p.write_text(json.dumps(c, indent=2) + "\n")
+          print("Stripped bundle.macOS — CI build will be unsigned")
+          EOF
+
       - name: Build & upload (tauri-action)
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # macOS notarization. tauri-action stapling kicks in
-          # automatically when all three are present. Until the
-          # secrets are populated the build still signs (Developer ID
-          # is checked into tauri.conf.json) but skips notarization
-          # with a warning, so the bundle requires a right-click →
-          # Open on first launch on other Macs.
+          # macOS signing + notarization. tauri-action imports the
+          # cert into a temp keychain when APPLE_CERTIFICATE is set,
+          # then stapling kicks in automatically when the notarization
+          # triple is also present. Until the secrets are populated
+          # the previous step strips signing from the config so the
+          # CI build produces an unsigned .app (requires right-click
+          # → Open on first launch on other Macs).
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
