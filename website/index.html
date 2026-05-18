@@ -82,38 +82,50 @@
     <div class="feature-grid">
       <div class="feature">
         <div class="feature-num">01</div>
-        <h3>Queue many writes</h3>
-        <p>Drop a list of ISOs and disks. Disk Cutter writes them in parallel or sequence — your call. Survive interruptions, resume on relaunch.</p>
+        <h3>Parallel queue</h3>
+        <p>Drop multiple images, pick a different USB or SD card for each, run them in parallel. The sidebar shows live queue / done / failed counts. The danger-arm gate is one-shot per click — no accidental retries.</p>
       </div>
 
       <div class="feature">
         <div class="feature-num">02</div>
-        <h3>Sector-level verify</h3>
-        <p>SHA-256 the source. Re-read the target. Hash again. If they don't match, you get the offending LBA, the offset, expected bytes, and what was actually there.</p>
+        <h3>Read-back verification</h3>
+        <p>Every burn is followed by a second pass that re-reads the device and re-hashes it against the source. On mismatch you get the offending LBA, byte offset, expected bytes, and what was actually written — up to the first 256 sectors. Selectable hash algorithm (SHA-256 or vendored xxh64).</p>
       </div>
 
       <div class="feature">
         <div class="feature-num">03</div>
-        <h3>System disks are locked</h3>
-        <p>The internal SSD never appears in the picker unmarked. You'd have to explicitly override — and we make you confirm twice.</p>
+        <h3>Inspect before commit</h3>
+        <p>Partition table, filesystem labels, boot signature, and the full decoder chain shown for every queued image. Pre-burn content validation rejects archives masquerading as bootable images (e.g. a <code>.tar.gz</code> of photos with a valid gzip header).</p>
       </div>
 
       <div class="feature">
         <div class="feature-num">04</div>
-        <h3>Every format</h3>
-        <p>ISO, IMG, DMG, raw. Hybrid boot images, EFI, MBR, GPT. If <code>dd</code> can read it, Disk Cutter can write it.</p>
+        <h3>Compression + containers</h3>
+        <p><code>.gz</code> / <code>.xz</code> / <code>.bz2</code> / <code>.zst</code> stream straight through a chained decoder. <code>.qcow2</code> / <code>.vhd</code> / <code>.vhdx</code> / <code>.vmdk</code> read sparse virtual disks via <code>am-img-*</code>, emitting zeros for unallocated clusters. Magic-byte detection catches renamed files (<code>ubuntu.iso.gz</code> → <code>ubuntu.iso</code>).</p>
       </div>
 
       <div class="feature">
         <div class="feature-num">05</div>
-        <h3>Cross-platform, one binary</h3>
-        <p>Same Rust core on every OS. Same UI. No "Linux is a second-class citizen." 12 MB download.</p>
+        <h3>Cross-platform, one Rust core</h3>
+        <p>macOS (universal arm64 + x86_64, signed + notarized), Linux (<code>.deb</code> / <code>.rpm</code> / <code>.AppImage</code>), Windows (NSIS). Same UI, same Tauri-2 + React shell, same pipeline. Linux disk enumeration walks <code>/sys/block</code>; Windows uses <code>Win32_DiskDrive</code>.</p>
       </div>
 
       <div class="feature">
         <div class="feature-num">06</div>
-        <h3>Reads like a forensic tool</h3>
-        <p>Detailed logs for every job. Copy the SHA, copy the mismatch report, attach it to a bug. Built to be referenced.</p>
+        <h3>Per-row forensic log</h3>
+        <p>Every job streams a structured log into SQLite (<code>burn_logs</code>) that you can tail live in the expanded row. Mismatches are recorded byte-for-byte. One-click tamper-evident JSON + Markdown export for audit trails. Doctor view for environment self-diagnostic.</p>
+      </div>
+
+      <div class="feature">
+        <div class="feature-num">07</div>
+        <h3>Tweakable pipeline</h3>
+        <p>Writer impl (raw / block / pipelined), chunk size, worker count, queue depth, hash algorithm, skip-verify, debug logging — every runtime knob lives in the Prefs view. Pipelined raw writer keeps the USB driver queue full for ~5× the throughput of a single-threaded loop on the same hardware.</p>
+      </div>
+
+      <div class="feature">
+        <div class="feature-num">08</div>
+        <h3>Catalog + URL fetch</h3>
+        <p>Built-in distro picker (Ubuntu, Debian, Fedora, Raspberry Pi OS, …) with remote refresh and an offline fallback. Paste any image URL and the app downloads, hashes, and queues it. Pre-burn target snapshot of the first 4 MiB so a mis-targeted disk is recoverable; auto-eject on success.</p>
       </div>
     </div>
   </div>

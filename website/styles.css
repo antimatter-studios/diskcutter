@@ -227,7 +227,10 @@ p.lede {
 @media (min-width: 720px) {
   .feature:nth-child(2n) { border-right: 2px solid var(--ink); }
   .feature:nth-child(3n) { border-right: none; }
-  .feature:nth-last-child(-n+3) { border-bottom: none; }
+  /* 8 cards in a 3-col grid → last row holds 2 items (indices 7+8).
+     Only those need to drop their bottom border to avoid doubling
+     with the outer frame. */
+  .feature:nth-last-child(-n+2) { border-bottom: none; }
 }
 @media (max-width: 720px) {
   .feature { border-right: none; }
