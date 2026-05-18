@@ -655,6 +655,15 @@ pub fn start_write(
     image_path: String,
     target_device: String,
 ) -> Result<(), String> {
+    // Trace breadcrumb so we can prove from the DB whether start_write was
+    // ever invoked for a given click. Helps disambiguate "user clicked Burn
+    // and nothing happened" from "fresh burn fired and errored silently."
+    db::append_log(
+        &app.state::<Db>(),
+        job_id,
+        "debug",
+        &format!("start_write: entered job_id={job_id} image={image_path} target={target_device}"),
+    );
     let p = Path::new(&image_path);
     let _info =
         source::probe(p).ok_or_else(|| format!("unsupported image format: {image_path}"))?;
@@ -664,6 +673,15 @@ pub fn start_write(
     // race we should paper over.
 
     let needs_elevation = target_device.starts_with("/dev/") && !is_privileged();
+    db::append_log(
+        &app.state::<Db>(),
+        job_id,
+        "debug",
+        &format!(
+            "start_write: needs_elevation={needs_elevation} (target={target_device}, privileged={})",
+            is_privileged()
+        ),
+    );
     if needs_elevation {
         // Parent-side FDA preflight: stat'ing TCC.db requires Full Disk
         // Access, so a stat failure is a strong signal the helper would
@@ -791,8 +809,10 @@ fn spawn_elevated_burn_inner(
     // Do NOT unlink the progress file here. If a prior helper for this id is
     // still alive (e.g. retry-storm survivor) its open fd points at the old
     // inode; removing the path orphans its writes to a deleted inode while
-    // the new tail_helper reads a fresh empty file — UI freezes. Lifecycle
-    // ownership now sits in tail_helper, which deletes on its own exit.
+    // the new tail_helper reads a fresh empty file — UI freezes. The new
+    // tail_helper seeks to the file's current end before reading so it only
+    // ingests lines appended by THIS burn's helper; the helper opens the
+    // file in append mode so prior content is preserved as history.
     // Clear any stale cancel sentinel from a previous job with the same id.
     let _ = std::fs::remove_file(cancel_sentinel_path(&job_id_str));
 
@@ -940,7 +960,18 @@ fn tail_helper(app: AppHandle, job_id: i64, path: String, mut child: std::proces
     use std::time::{Duration, Instant};
 
     let start = Instant::now();
-    let mut last_pos: u64 = 0;
+    // Start ingesting from the END of any pre-existing progress file
+    // for this job. Without this, content from a previous helper run
+    // (e.g. an earlier burn for the same job_id that left a populated
+    // JSONL behind) gets replayed as if it were from the current burn —
+    // including any terminal "error" line which would surface to the
+    // UI before the new helper has even started. Seeking past existing
+    // bytes preserves the file as history (the helper appends rather
+    // than truncates) while only emitting what the CURRENT helper
+    // writes.
+    let mut last_pos: u64 = std::fs::File::open(&path)
+        .and_then(|mut f| f.seek(SeekFrom::End(0)))
+        .unwrap_or(0);
     let mut terminal_seen = false;
 
     loop {
@@ -999,7 +1030,11 @@ fn tail_helper(app: AppHandle, job_id: i64, path: String, mut child: std::proces
         }
         std::thread::sleep(Duration::from_millis(250));
     }
-    let _ = std::fs::remove_file(&path);
+    // Preserve the progress file as a historical log across burns.
+    // The next burn's tail_helper seeks to end before ingesting, so
+    // old content doesn't replay. (Previous behaviour removed the file
+    // here, but cleanup is unreliable anyway — the helper runs as root,
+    // and this user process can't unlink a root-owned file in /tmp.)
     let _ = std::fs::remove_file(cancel_sentinel_path(&job_id.to_string()));
     // Release the in-flight slot. After this point a Retry for the same
     // job_id is allowed to spawn a fresh osascript+helper again.
@@ -1533,7 +1568,18 @@ fn tail_helper_reattach(app: AppHandle, job_id: i64, path: String, pid: u32) {
     use std::time::{Duration, Instant};
 
     let start = Instant::now();
-    let mut last_pos: u64 = 0;
+    // Start ingesting from the END of any pre-existing progress file
+    // for this job. Without this, content from a previous helper run
+    // (e.g. an earlier burn for the same job_id that left a populated
+    // JSONL behind) gets replayed as if it were from the current burn —
+    // including any terminal "error" line which would surface to the
+    // UI before the new helper has even started. Seeking past existing
+    // bytes preserves the file as history (the helper appends rather
+    // than truncates) while only emitting what the CURRENT helper
+    // writes.
+    let mut last_pos: u64 = std::fs::File::open(&path)
+        .and_then(|mut f| f.seek(SeekFrom::End(0)))
+        .unwrap_or(0);
     let mut terminal_seen = false;
 
     loop {
@@ -1585,7 +1631,11 @@ fn tail_helper_reattach(app: AppHandle, job_id: i64, path: String, pid: u32) {
         }
         std::thread::sleep(Duration::from_millis(250));
     }
-    let _ = std::fs::remove_file(&path);
+    // Preserve the progress file as a historical log across burns.
+    // The next burn's tail_helper seeks to end before ingesting, so
+    // old content doesn't replay. (Previous behaviour removed the file
+    // here, but cleanup is unreliable anyway — the helper runs as root,
+    // and this user process can't unlink a root-owned file in /tmp.)
     let _ = std::fs::remove_file(cancel_sentinel_path(&job_id.to_string()));
     if let Some(reg) = app.try_state::<ElevatedJobs>() {
         reg.0.lock().unwrap().remove(&job_id);

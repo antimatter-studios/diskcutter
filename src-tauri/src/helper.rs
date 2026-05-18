@@ -134,7 +134,16 @@ pub fn run_helper(args: &[String]) -> i32 {
         .map(HashAlgo::parse)
         .unwrap_or(HashAlgo::Sha256);
 
-    let file = match File::create(&progress_path) {
+    // Open in append mode so the file accumulates a historical log of
+    // every helper run for this job_id. The parent's tail_helper seeks
+    // to the file's current end before reading, so old content doesn't
+    // replay on the next burn — but it's still on disk if anyone wants
+    // to inspect previous attempts via cat / less.
+    let file = match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&progress_path)
+    {
         Ok(f) => f,
         Err(_) => return 2,
     };

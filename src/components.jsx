@@ -128,11 +128,16 @@ function SideItem({ k, label, count, active, onClick, accent, hazard }) {
 
 function DangerBanner({ confirmed, onConfirm, jobs, accent }) {
   const { t } = useTranslation();
-  // Banner is purely a pre-flight warning + confirmation gate. Once the user
-  // has clicked START there are no `idle` jobs left to confirm — hide it.
-  const idleWithTarget = jobs.filter(j => j.state === 'idle' && j.target).length;
-  if (idleWithTarget === 0) return null;
-  const targets = idleWithTarget;
+  // Banner is the one-shot arm gate for every destructive action: fresh
+  // burn AND retry of an errored row. Without 'error' here the banner
+  // hides itself the moment a burn fails, stranding the user with no
+  // way to re-arm and click RE-TRY. Both states are gated by the same
+  // `confirmed` flag, so the same banner serves both.
+  const armableWithTarget = jobs.filter(
+    (j) => (j.state === 'idle' || j.state === 'error') && j.target,
+  ).length;
+  if (armableWithTarget === 0) return null;
+  const targets = armableWithTarget;
   return (
     <div className="banner" style={{ '--hazard': accent }}>
       <div className="banner-stripes" />
@@ -434,7 +439,7 @@ function describeBootSources(boot, t) {
 
 /* ─────────── Job Row ─────────── */
 
-function JobRow({ job, accent, expanded, onToggle, onSelectTarget, onBurn, onCancel, onRetry, onRefresh, onCopyHash, onCopyError, onFlashAnother, onRemove, density, fdaBlocked, confirmed }) {
+function JobRow({ job, accent, expanded, onToggle, onSelectTarget, onBurn, onCancel, onRetry, onReset, onRefresh, onCopyHash, onCopyError, onFlashAnother, onRemove, density, fdaBlocked, confirmed }) {
   const { t } = useTranslation();
   const state = job.state;
   const danger = state === 'error';
@@ -563,7 +568,7 @@ function JobRow({ job, accent, expanded, onToggle, onSelectTarget, onBurn, onCan
       />
 
       {job.scanProgress && <ScanProgressStrip progress={job.scanProgress} accent={accent} />}
-      {expanded && <JobDetail job={job} accent={accent} fdaBlocked={fdaBlocked} confirmed={confirmed} onCancel={onCancel} onRetry={onRetry} onRefresh={onRefresh} onCopyHash={onCopyHash} onCopyError={onCopyError} onFlashAnother={onFlashAnother} />}
+      {expanded && <JobDetail job={job} accent={accent} fdaBlocked={fdaBlocked} confirmed={confirmed} onCancel={onCancel} onRetry={onRetry} onReset={onReset} onRefresh={onRefresh} onCopyHash={onCopyHash} onCopyError={onCopyError} onFlashAnother={onFlashAnother} />}
     </div>
   );
 }
@@ -652,7 +657,7 @@ function SuccessReadout({ job }) {
 
 /* ─────────── Job Detail (expanded drawer) ─────────── */
 
-function JobDetail({ job, accent, onCancel, onRetry, onRefresh, fdaBlocked, confirmed }) {
+function JobDetail({ job, accent, onCancel, onRetry, onReset, onRefresh, fdaBlocked, confirmed }) {
   const { t } = useTranslation();
   const fdaWaiting = job.errorCode === 'ENEEDS_FDA' && fdaBlocked;
   // Retry is destructive — same one-shot arm gate as Burn. Stays disabled
@@ -729,6 +734,13 @@ function JobDetail({ job, accent, onCancel, onRetry, onRefresh, fdaBlocked, conf
                   : (job.errorCode === 'ENEEDS_FDA' && fdaBlocked)
                     ? t('detail.actions.retry_waiting_fda', { defaultValue: 'WAITING FOR FDA' })
                     : t('detail.actions.retry')} ]
+            </button>
+            <button
+              className="btn btn-ghost"
+              onClick={onReset}
+              title={t('detail.actions.reset_title', { defaultValue: 'Clear the error and return the row to idle so you can try a fresh burn.' })}
+            >
+              [ {t('detail.actions.reset', { defaultValue: 'RESET' })} ]
             </button>
             <button className="btn btn-ghost">[ {t('detail.actions.copy_error')} ]</button>
           </>
@@ -1005,7 +1017,7 @@ function SectorMap({ progress, accent }) {
 
 /* ─────────── Disk picker sheet ─────────── */
 
-function DiskPickerSheet({ open, disks, jobImage, onPick, onClose, onRefresh, accent }) {
+function DiskPickerSheet({ open, disks, loading, jobImage, onPick, onClose, onRefresh, accent }) {
   const { t } = useTranslation();
   const [refreshedAt, setRefreshedAt] = React.useState(Date.now());
   const [, tick] = React.useState(0);
@@ -1042,7 +1054,11 @@ function DiskPickerSheet({ open, disks, jobImage, onPick, onClose, onRefresh, ac
         </div>
 
         <div className="disk-list">
-          {(() => {
+          {loading && disks.length === 0 ? (
+            <div className="disk-loading mono small">
+              {t('picker.loading', { defaultValue: 'Loading disks…' })}
+            </div>
+          ) : (() => {
             const decorated = disks.map((d) => {
               const tooSmall = jobImage && d.bytes < jobImage.bytes;
               const isInternal = d.bus.includes('NVME') || d.flags?.includes('INTERNAL');
@@ -1092,7 +1108,8 @@ function DiskPickerSheet({ open, disks, jobImage, onPick, onClose, onRefresh, ac
                 {notPermitted.map(renderRow)}
               </>
             );
-          })()}
+          })()
+          }
         </div>
 
         <div className="sheet-foot mono small">

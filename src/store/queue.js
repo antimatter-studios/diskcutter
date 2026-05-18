@@ -342,6 +342,65 @@ export const useQueueStore = create((set, get) => ({
     });
   },
 
+  // Bulk version of resetJobError: clear every errored row at once.
+  // Same per-row payload, run across the set. fire('requeue_burn') is
+  // fired per row so the DB resets stay in lockstep with the UI.
+  resetAllJobErrors() {
+    const ids = Object.keys(get().jobs).filter((id) => get().jobs[id].state === 'error');
+    set((s) => {
+      const next = { ...s.jobs };
+      for (const id of ids) {
+        const j = next[id];
+        if (!j) continue;
+        next[id] = {
+          ...j,
+          state: 'idle',
+          progress: 0,
+          verifyProgress: 0,
+          errorCode: undefined,
+          errorMessage: undefined,
+          verification: null,
+          retrying: false,
+          finishedAt: undefined,
+        };
+      }
+      return { jobs: next };
+    });
+    for (const id of ids) {
+      fire('requeue_burn', { jobId: Number(id) });
+    }
+  },
+
+  // Manual error-state reset. Flips an errored row back to idle and
+  // clears the error breadcrumbs so the queue's Burn button re-arms.
+  // Fires requeue_burn server-side so the DB row's state, error_code,
+  // error_message, started_at, finished_at, helper_pid, progress_file
+  // all get cleared in lockstep — without that the next hydrate would
+  // restore the row back into 'error'.
+  resetJobError(jobId) {
+    set((s) => {
+      const j = s.jobs[jobId];
+      if (!j) return s;
+      return {
+        jobs: {
+          ...s.jobs,
+          [jobId]: {
+            ...j,
+            state: 'idle',
+            progress: 0,
+            verifyProgress: 0,
+            errorCode: undefined,
+            errorMessage: undefined,
+            verification: null,
+            retrying: false,
+            finishedAt: undefined,
+          },
+        },
+      };
+    });
+    fire('requeue_burn', { jobId });
+  },
+
   markTooSmall(ids) {
     set((s) => {
       const next = { ...s.jobs };

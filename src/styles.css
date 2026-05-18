@@ -341,6 +341,12 @@ input,select{font:inherit;color:inherit}
 }
 .error-strip-action:hover{background:var(--on-accent);color:var(--ink)}
 .error-strip-action:active{transform:translate(1px,1px)}
+/* Right-side cluster: bulk action(s) + error code badge sit together
+   on the right edge of the strip. Flex so they align vertically with
+   the strip's center; reset the action's flow margin-top from when it
+   used to live below the body text. */
+.error-strip-right{display:flex;align-items:center;gap:10px}
+.error-strip-right .error-strip-action{margin-top:0}
 
 /* ─────────── Danger banner ─────────── */
 

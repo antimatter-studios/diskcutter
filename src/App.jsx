@@ -71,6 +71,11 @@ function App() {
   // without re-setting the stepper each time.
   const [nextCopies, setNextCopies] = useState(1);
   const [disks, setDisks] = useState([]);
+  // True while a fresh list_disks is in flight. The picker shows a
+  // "loading…" placeholder rather than the cached list while this is
+  // true, so the user always sees current ground truth (or knows it's
+  // being fetched), never a stale snapshot from app mount.
+  const [disksLoading, setDisksLoading] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
   const [pickerJob, setPickerJob] = useState(null);
   const [expanded, setExpanded] = useState({});
@@ -424,6 +429,14 @@ function App() {
   // against double-clicks landing two start_write spawns for the same job.
   const burnJob = useCallback(async (jobId) => {
     const job = jobs.find((j) => j.id === jobId);
+    // Diagnostic trace so we can prove from burn_logs whether this
+    // callback fired and which gate (if any) stopped it. Without this
+    // we can't tell "click did nothing" from "click fired but errored
+    // silently."
+    invoke('ui_trace', {
+      jobId,
+      message: `burnJob: entered state=${job?.state} target=${job?.target?.device || 'none'} validation=${job?.validation} confirmed=${confirmed} inFlight=${retryInFlightRef.current.has(jobId)}`,
+    }).catch(() => {});
     if (!job || job.state !== 'idle' || !job.target || job.validation !== 'valid') return;
     if (!confirmed) return;
     if (retryInFlightRef.current.has(jobId)) return;
@@ -516,16 +529,23 @@ function App() {
   }, [jobs, t, pushToast]);
 
   const retryJob = useCallback(async (jobId) => {
+    const job = jobs.find((j) => j.id === jobId);
+    // Diagnostic trace — see burnJob's note.
+    invoke('ui_trace', {
+      jobId,
+      message: `retryJob: entered state=${job?.state} target=${job?.target?.device || 'none'} confirmed=${confirmed} inFlight=${retryInFlightRef.current.has(jobId)}`,
+    }).catch(() => {});
     // Debounce: ignore extra clicks while the previous start_write is still
     // pending. Without this, every click stacks another osascript+helper for
     // the same job — the FDA retry-storm we're fixing.
     if (retryInFlightRef.current.has(jobId)) return;
-    const job = jobs.find((j) => j.id === jobId);
     if (!job || !job.target) return;
-    if (fda.blocked) {
-      invoke('open_fda_settings').catch(() => {});
-      return;
-    }
+    // FDA pre-gate removed: trust the user's intent on RETRY and let the
+    // backend produce the ENEEDS_FDA error naturally if FDA really is
+    // missing. The fda_granted() heuristic (stat'ing TCC.db) is
+    // unreliable; an inaccurate "yes you're blocked" was intercepting
+    // retries even when FDA had been granted by the user. Letting the
+    // call through makes failures honest.
     // Retry is destructive — same one-shot arm gate as Burn. confirmed must
     // be true and clears on click so the next destructive action needs a
     // fresh toggle.
@@ -569,6 +589,21 @@ function App() {
     useQueueStore.getState().flashAnother(jobId);
   }, []);
 
+  // Manual error-state reset: clears the stale error message, flips the
+  // row back to idle, and tells the backend to reset the burn_jobs row
+  // so a fresh Burn click can proceed.
+  const resetJob = useCallback((jobId) => {
+    useQueueStore.getState().resetJobError(jobId);
+  }, []);
+
+  // Bulk version reachable from the global error strip — clears every
+  // errored row at once. Useful when several rows error in a burn
+  // session and the user wants to start clean without expanding each
+  // one to click its individual RESET.
+  const resetAllErrors = useCallback(() => {
+    useQueueStore.getState().resetAllJobErrors();
+  }, []);
+
   const copyText = useCallback(async (text) => {
     if (!text) return;
     try { await navigator.clipboard.writeText(text); }
@@ -579,6 +614,28 @@ function App() {
     if (pickerJob != null) useQueueStore.getState().setTarget(pickerJob, disk);
     setPickerJob(null);
   }, [pickerJob]);
+
+  // Opening the disk picker MUST re-enumerate disks. The list_disks
+  // backend shells out to `diskutil list -plist` fresh on every call,
+  // but the React `disks` state was last set at app mount — so an SD
+  // card that has since been ejected / replugged / renumbered still
+  // appears in the cached list.
+  //
+  // Open the picker immediately so the UI stays responsive (user can
+  // close it before the enumeration completes), wipe the cached list
+  // so stale entries don't flash, then refresh in the background. The
+  // picker renders a "loading…" placeholder until the fresh list
+  // arrives. Closing the picker while loading is fine; the async
+  // result still updates the state for next time.
+  const openPickerForJob = useCallback((jobId) => {
+    setDisks([]);
+    setDisksLoading(true);
+    setPickerJob(jobId);
+    invoke('list_disks')
+      .then((d) => setDisks(d || []))
+      .catch((e) => console.error('list_disks failed when opening picker', e))
+      .finally(() => setDisksLoading(false));
+  }, []);
 
   const refreshDisks = useCallback(async () => {
     try { setDisks(await invoke('list_disks')); }
@@ -623,7 +680,7 @@ function App() {
     expanded, setExpanded,
     fdaBlocked: fda.blocked,
     onFdaRecheck: fda.recheck,
-    setPickerJob,
+    setPickerJob: openPickerForJob,
     entries, nextCopies, onChangeNextCopies: setNextCopies,
     onDispatchFromEntry: dispatchFromEntry,
     onAdd: addImage,
@@ -632,6 +689,8 @@ function App() {
     onBurn: burnJob,
     onCancelJob: cancelJob,
     onRetry: retryJob,
+    onResetJob: resetJob,
+    onResetAllErrors: resetAllErrors,
     onRefreshJob: refreshJob,
     onClearDone: clearDone,
     onFlashAnother: flashAnother,
@@ -654,6 +713,7 @@ function App() {
       <DiskPickerSheet
         open={pickerJob !== null}
         disks={disks}
+        loading={disksLoading}
         jobImage={pickerJob != null ? (jobs.find((j) => j.id === pickerJob)?.image || null) : null}
         onPick={pickTarget}
         onClose={() => setPickerJob(null)}
@@ -714,7 +774,7 @@ function AppBody({
   setPickerJob,
   entries, nextCopies, onChangeNextCopies, onDispatchFromEntry,
   onAdd, onAddFromUrl, onBrowseCatalog, onBurn, onCancelJob,
-  onRetry, onRefreshJob, onClearDone, onFlashAnother, onCopyText, onRemoveJob,
+  onRetry, onResetJob, onResetAllErrors, onRefreshJob, onClearDone, onFlashAnother, onCopyText, onRemoveJob,
 }) {
   const { t } = useTranslation();
   const writingCount = jobs.filter((j) => j.state === 'writing').length;
@@ -792,7 +852,24 @@ function AppBody({
                 </button>
               )}
             </div>
-            <div className="error-strip-code mono">{errorJob.errorCode}</div>
+            <div className="error-strip-right">
+              {/* Global reset lives on the right of the strip, next to
+                  the error-code badge. Per-row RESET in JobDetail does
+                  the same thing for a single row; this is the bulk
+                  escape hatch for sessions where multiple rows have
+                  errored and the user wants to start clean. */}
+              {errorCount > 0 && onResetAllErrors && (
+                <button
+                  type="button"
+                  className="error-strip-action mono"
+                  onClick={() => onResetAllErrors()}
+                  title={t('error.reset_all_title', { defaultValue: 'Clear errors on all errored rows and return them to idle.' })}
+                >
+                  [ {t('error.reset_all', { defaultValue: 'RESET ALL ERRORS', count: errorCount })} ]
+                </button>
+              )}
+              <div className="error-strip-code mono">{errorJob.errorCode}</div>
+            </div>
           </div>
         )}
 
@@ -868,6 +945,7 @@ function AppBody({
                 onCopyError={() => onCopyText(job.errorMessage || job.errorCode)}
                 onFlashAnother={() => onFlashAnother(job.id)}
                 onRetry={() => onRetry(job.id)}
+                onReset={() => onResetJob(job.id)}
                 onRefresh={() => onRefreshJob(job.id)}
                 onRemove={() => onRemoveJob(job.id)}
               />

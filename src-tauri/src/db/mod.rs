@@ -519,6 +519,25 @@ pub fn append_log(db: &Db, job_id: i64, level: &str, message: &str) {
     }
 }
 
+// UI tracing entry point: the frontend invokes this at the start of
+// every burn-trigger callback (burnJob, retryJob, resetJobError) so we
+// have ground truth in burn_logs about which click path fired with what
+// state. Without this we keep guessing from the UI surface; with it
+// the click-to-action path is provable from the DB.
+#[tauri::command]
+pub fn ui_trace(db: State<'_, Db>, job_id: i64, message: String) {
+    let conn = match db.0.lock() {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+    if find_burn_id(&conn, job_id).is_some() {
+        let _ = conn.execute(
+            "INSERT INTO burn_logs (job_id, ts, level, message) VALUES (?1, ?2, 'debug', ?3)",
+            params![job_id, now_ms(), format!("ui: {message}")],
+        );
+    }
+}
+
 #[tauri::command]
 pub fn config_get(db: State<'_, Db>, key: String) -> Option<String> {
     let conn = db.0.lock().ok()?;
