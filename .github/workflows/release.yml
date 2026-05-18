@@ -65,6 +65,17 @@ jobs:
 
       - run: npm ci
 
+      - name: Generate release notes from CHANGELOG
+        id: notes
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          {
+            echo 'body<<EOF_RELEASE_BODY'
+            node scripts/release-notes.mjs "${{ github.ref_name }}"
+            echo 'EOF_RELEASE_BODY'
+          } >> "$GITHUB_OUTPUT"
+
       - name: Strip macOS signing config when no cert secret
         # tauri.conf.json hardcodes the Developer ID identity for
         # convenient local builds, but CI has no matching cert in its
@@ -107,9 +118,11 @@ jobs:
           # Only attach to a release when triggered by a tag push.
           tagName: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
           releaseName: ${{ startsWith(github.ref, 'refs/tags/') && format('Disk Cutter {0}', github.ref_name) || '' }}
-          releaseBody: |
-            Automated build for `${{ github.ref_name }}`.
-            Download the installer for your platform below.
+          # Body is the `## [<tag>]` section pulled out of CHANGELOG.md
+          # by the previous step. Falls back to a placeholder if the
+          # extractor produced nothing (shouldn't happen — that step's
+          # script exits non-zero on a missing section).
+          releaseBody: ${{ steps.notes.outputs.body || format('Automated build for `{0}`.', github.ref_name) }}
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
