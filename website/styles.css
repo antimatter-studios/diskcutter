@@ -329,6 +329,20 @@ p.lede {
   background: var(--bone);
   color: var(--ink);
 }
+.dl-extra {
+  margin-top: 8px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  color: rgba(241, 237, 226, 0.55);
+}
+.dl-extra a.link {
+  color: rgba(241, 237, 226, 0.85);
+}
+.dl-foot {
+  margin-top: 28px;
+  color: rgba(241, 237, 226, 0.55);
+}
 
 /* ─────────── About / FAQ ─────────── */
 
