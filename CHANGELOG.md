@@ -2,9 +2,15 @@
 
 All notable changes to this project are recorded here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versioning
-follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+follows [Calendar Versioning](https://calver.org/) (`YYYY.M.D`).
 
 ## [Unreleased]
+
+## [2026.5.18]
+
+First non-alpha release. Burn pipeline, disk enumeration, verification,
+URL fetch, curated image catalog, snapshot/restore, sparse backup,
+Linux + Windows builds. macOS bundles are now Developer ID-signed.
 
 ### Added
 
@@ -123,6 +129,27 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Integration tests** for the burn + verify pipeline end-to-end.
 - **Landing site + GitHub Pages workflow.**
 - **CONTRIBUTING guide + GitHub Actions CI workflow.**
+- **Developer ID-signed macOS bundles** with hardened-runtime
+  entitlement to allow Homebrew `liblzma.5.dylib` to load.
+- **Per-row log header** in the expanded queue drawer naming the
+  SQLite DB path + helper progress JSONL path so log lines are
+  traceable to their on-disk source.
+- **ui_trace command + burn breadcrumbs.** `burnJob`, `retryJob`,
+  and `start_write` write debug rows into `burn_logs` proving from
+  the DB whether a click path actually fired and which gate (if
+  any) stopped it.
+- **Manual error reset** with `requeue_burn` wiring (`resetJobError`
+  / `resetAllJobErrors`) — clears stale errors and re-arms the row.
+- **`disksLoading` placeholder** in the target picker so a fresh
+  `list_disks` is visible rather than a stale cached list.
+- **Diagnostic context on write failures.** `pwrite` / `write`
+  errors carry the offset and length the kernel rejected:
+  `pwrite at offset=X len=Y failed: …` instead of a bare
+  "Invalid argument".
+- **`DKIOCGETMAXBYTECOUNTWRITE` probe** on macOS. The helper
+  clamps `chunk_size` to the device's reported per-IO cap (many
+  USB / SD readers expose 128–256 KiB) and logs the value at
+  burn start so an EINVAL is interpretable from the row log.
 
 ### Changed
 
@@ -137,6 +164,16 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `DangerBanner` hides once burns are underway.
 - Failure to open the SQLite DB at startup no longer aborts the
   app — it logs and continues without persistence.
+- **Integer primary keys across the DB.** `burn_jobs.job_id`,
+  `config.config_id`, `burn_logs.id` are now `INTEGER PRIMARY KEY
+  AUTOINCREMENT`. Frontend awaits the backend-assigned id rather
+  than minting `job-<ts>-<n>` strings. Migration 0005 does the
+  recreate-and-copy under `defer_foreign_keys=1`.
+- **Helper progress JSONL is preserved across runs** in append
+  mode; `tail_helper` seeks to EOF on start so a previous burn's
+  terminal error line no longer replays into the next burn.
+- `DangerBanner` now also shows for rows in `error` state so
+  retry is re-armable after a failure.
 
 ### Fixed
 
@@ -146,6 +183,36 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   forever and leave the helper as a zombie holding the device FD.
   `std::process::exit` in `main.rs` reaps the thread cleanly.
 - Two stale frontend tests (toolbar density, danger-banner).
+- **EIO: Invalid argument on burn start.** The decoder chain's
+  `RewindReader::read` drained only its cached head buffer per
+  call without topping up from the tail. After format detection
+  wrapped the leaf in nested `RewindReader`s with a few peeked
+  bytes each, the burn pipeline saw short reads of 2–6 bytes on
+  the first few iterations — sub-block-sized writes to
+  `/dev/rdiskN` EINVALed immediately. `RewindReader::read` now
+  coalesces head + tail in one call; `pipeline::burn` also
+  loops `Read::read` until the chunk_size buffer is full (or EOF)
+  before handing it to the writer.
+- **Queue dedupe on hydrate.** Pre-0004 data with duplicate
+  `burn_jobs` rows for the same job_id no longer renders as
+  duplicate visual rows; migration 0004 also enforces this at
+  the DB layer via `UNIQUE INDEX`.
+- **Partition + boot probes for terminal rows.** Success / error
+  rows now re-fetch partition and boot data on hydrate so the
+  expanded drawer renders the same detail it did during the burn.
+- **FDA pre-gate dropped from retry.** The `fda_granted()`
+  heuristic (stat'ing TCC.db) was unreliable and intercepted
+  legitimate retries; the helper produces `ENEEDS_FDA` honestly
+  when FDA really is missing.
+- **Button labels nowrap.** `[ BURN ]` / `[ DELETE ]` no longer
+  break across two lines in a narrow grid column. Queue's last
+  column is now `max-content`-sized.
+- **Row-num chip height** matches the expand-caret chip height.
+- **Progress meta wraps as whole items** instead of breaking
+  mid-string (`ELAPSED 00:03:33`, `14.6 MB/s`).
+- **Target chip stacking.** Reassign / readonly variants render
+  the model name above the meta line instead of baseline-aligned
+  on one row.
 
 ### Performance
 
@@ -164,7 +231,7 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Keystroke matching and editable-target detection extracted to a
   pure `src/keymap.js` module with unit coverage.
 
-## [0.4.0-alpha] — 2026-05-12
+## [2026.5.12] (alpha)
 
 First alpha with a real burn pipeline. Earlier builds were UI-only
 mocks.
@@ -224,5 +291,6 @@ mocks.
 - Vitest 2 + happy-dom + React Testing Library for the frontend
   test suite.
 
-[Unreleased]: https://github.com/antimatter-studios/diskcutter/compare/v0.4.0-alpha...HEAD
-[0.4.0-alpha]: https://github.com/antimatter-studios/diskcutter/releases/tag/v0.4.0-alpha
+[Unreleased]: https://github.com/antimatter-studios/diskcutter/compare/2026.5.18...HEAD
+[2026.5.18]: https://github.com/antimatter-studios/diskcutter/releases/tag/2026.5.18
+[2026.5.12]: https://github.com/antimatter-studios/diskcutter/releases/tag/2026.5.12

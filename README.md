@@ -17,7 +17,7 @@ pipelines, content-validation guards, and a curated distro catalog.
 
 ## Status
 
-Alpha (0.5.0-alpha). macOS is the primary
+First public release (2026.5.18). macOS is the primary
 target — raw-device I/O, DiskArbitration unmount, and `osascript`
 privilege elevation all work end-to-end there. Linux and Windows
 builds compile and run; disk enumeration is implemented (sysfs on

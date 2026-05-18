@@ -675,7 +675,7 @@ dependencies = [
 
 [[package]]
 name = "diskcutter"
-version = "0.5.0-alpha"
+version = "2026.5.18"
 dependencies = [
  "am-fs-core",
  "am-img-qcow2",

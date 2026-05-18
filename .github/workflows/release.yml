@@ -69,6 +69,15 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # macOS notarization. tauri-action stapling kicks in
+          # automatically when all three are present. Until the
+          # secrets are populated the build still signs (Developer ID
+          # is checked into tauri.conf.json) but skips notarization
+          # with a warning, so the bundle requires a right-click →
+          # Open on first launch on other Macs.
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
           # Only attach to a release when triggered by a tag push.
           tagName: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
