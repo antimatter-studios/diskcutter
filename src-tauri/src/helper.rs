@@ -181,6 +181,25 @@ pub fn run_helper(args: &[String]) -> i32 {
         };
     let image_total_bytes = source_info.uncompressed_bytes;
 
+    // Clamp the user-configured chunk_size to the device's reported
+    // max IO size on macOS. Many USB / SD readers expose a per-IO cap
+    // (typically 128 KiB or 256 KiB) on the rdisk char device; a
+    // single pwrite larger than that EINVALs even when alignment is
+    // perfect. Without this clamp, the default 1 MiB chunk fails
+    // immediately on those devices.
+    #[cfg(target_os = "macos")]
+    let max_io_bytes = if target.starts_with("/dev/") {
+        probe_device_max_io_write(&target)
+    } else {
+        None
+    };
+    #[cfg(not(target_os = "macos"))]
+    let max_io_bytes: Option<u64> = None;
+    let chunk_size = match max_io_bytes {
+        Some(max) if (max as usize) < chunk_size => max as usize,
+        _ => chunk_size,
+    };
+
     let device_io: Box<dyn DeviceIo> =
         pick_device_io(&target, writer_choice.as_deref(), workers, queue_depth);
     // Snapshot the burn config into the log unconditionally (info-level)
@@ -203,6 +222,11 @@ pub fn run_helper(args: &[String]) -> i32 {
     if let Some(bs) = probe_device_block_size(&target) {
         job_log.info(&format!(
             "helper: target block size = {bs} (writes must be a multiple of this)"
+        ));
+    }
+    if let Some(max) = max_io_bytes {
+        job_log.info(&format!(
+            "helper: target max IO write = {max} bytes (kernel rejects single writes larger than this)"
         ));
     }
 
@@ -447,44 +471,60 @@ pub fn run_helper(args: &[String]) -> i32 {
 ///   "pipelined"  → /dev/rdiskN (Etcher-style worker pool, default for /dev/)
 ///   "plain"      → PlainFileDeviceIo (only auto-selected when not /dev/)
 #[cfg(target_os = "macos")]
-fn probe_device_block_size(target: &str) -> Option<u32> {
-    // DKIOCGETBLOCKSIZE on the raw char device. Used purely for diagnostics
-    // — surfaces in the per-row log so an EINVAL on pwrite is interpretable
-    // ("write of N bytes vs device block size 4096 → unaligned").
-    use std::ffi::CString;
-    let raw_path = if let Some(name) = std::path::Path::new(target)
+fn translate_to_raw_path(target: &str) -> String {
+    if let Some(name) = std::path::Path::new(target)
         .file_name()
         .and_then(|s| s.to_str())
     {
         if let Some(rest) = name.strip_prefix("disk") {
             if !rest.starts_with('r') {
-                format!("/dev/r{name}")
-            } else {
-                target.to_string()
+                return format!("/dev/r{name}");
             }
-        } else {
-            target.to_string()
         }
-    } else {
-        target.to_string()
-    };
-    let c = CString::new(raw_path).ok()?;
+    }
+    target.to_string()
+}
+
+#[cfg(target_os = "macos")]
+fn ioctl_on_raw<T: Default>(target: &str, request: libc::c_ulong) -> Option<T> {
+    use std::ffi::CString;
+    let c = CString::new(translate_to_raw_path(target)).ok()?;
     unsafe {
         let fd = libc::open(c.as_ptr(), libc::O_RDONLY);
         if fd < 0 {
             return None;
         }
-        // DKIOCGETBLOCKSIZE = _IOR('d', 24, uint32_t) → 0x40046418
-        const DKIOCGETBLOCKSIZE: libc::c_ulong = 0x40046418;
-        let mut bs: u32 = 0;
-        let r = libc::ioctl(fd, DKIOCGETBLOCKSIZE, &mut bs);
+        let mut out = T::default();
+        let r = libc::ioctl(fd, request, &mut out);
         libc::close(fd);
-        if r == 0 && bs > 0 {
-            Some(bs)
+        if r == 0 {
+            Some(out)
         } else {
             None
         }
     }
+}
+
+#[cfg(target_os = "macos")]
+fn probe_device_block_size(target: &str) -> Option<u32> {
+    // DKIOCGETBLOCKSIZE = _IOR('d', 24, uint32_t) → 0x40046418.
+    // Used purely for diagnostics — surfaces in the per-row log so an
+    // EINVAL on pwrite is interpretable ("write of N bytes vs device
+    // block size 4096 → unaligned").
+    const DKIOCGETBLOCKSIZE: libc::c_ulong = 0x40046418;
+    ioctl_on_raw::<u32>(target, DKIOCGETBLOCKSIZE).filter(|v| *v > 0)
+}
+
+#[cfg(target_os = "macos")]
+fn probe_device_max_io_write(target: &str) -> Option<u64> {
+    // DKIOCGETMAXBYTECOUNTWRITE = _IOR('d', 81, uint64_t) → 0x40086451.
+    // Many USB / SD readers cap rdisk per-IO transfer at 128 KiB or
+    // 256 KiB; a single pwrite larger than that EINVALs even when the
+    // size and offset are perfectly aligned to the block size. We
+    // query this up-front and clamp chunk_size to fit so the burn
+    // pipeline can't issue an oversized write.
+    const DKIOCGETMAXBYTECOUNTWRITE: libc::c_ulong = 0x40086451;
+    ioctl_on_raw::<u64>(target, DKIOCGETMAXBYTECOUNTWRITE).filter(|v| *v > 0)
 }
 
 fn pick_device_io(

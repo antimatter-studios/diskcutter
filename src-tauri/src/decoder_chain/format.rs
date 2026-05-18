@@ -82,10 +82,22 @@ struct RewindReader {
 
 impl ReaderInterface for RewindReader {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        let n = self.head.read(buf)?;
-        if n > 0 {
-            return Ok(n);
+        // Drain the cached head and then top up from the tail in the
+        // same call. The previous implementation returned only what
+        // the head held even when the caller wanted megabytes, which
+        // landed as a sub-block-sized pwrite to /dev/rdiskN —
+        // immediate EINVAL on macOS raw devices.
+        let mut filled = self.head.read(buf)?;
+        if filled < buf.len() {
+            match self.tail.read(&mut buf[filled..]) {
+                Ok(n) => filled += n,
+                Err(e) => {
+                    if filled == 0 {
+                        return Err(e);
+                    }
+                }
+            }
         }
-        self.tail.read(buf)
+        Ok(filled)
     }
 }

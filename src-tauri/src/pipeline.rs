@@ -126,7 +126,20 @@ pub fn burn_with_hash(
         if cancel.load(Ordering::Relaxed) {
             return Err(BurnError::Cancelled);
         }
-        let n = reader.read(&mut buf)?;
+        // Fill the chunk before handing it to the writer. Read::read
+        // is allowed to return short — and in our decoder chain it
+        // routinely does on the first few calls because the format-
+        // detection rewind buffer drains in tiny slices. Writing
+        // sub-block-sized buffers to /dev/rdiskN EINVALs immediately,
+        // so coalesce here and only emit full chunk_size writes (and
+        // one possibly-shorter final write at EOF).
+        let mut n = 0;
+        while n < buf.len() {
+            match reader.read(&mut buf[n..])? {
+                0 => break,
+                k => n += k,
+            }
+        }
         if n == 0 {
             break;
         }

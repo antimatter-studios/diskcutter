@@ -43,7 +43,7 @@ impl DeviceIo for RawDeviceIo {
                     // device. Matches what Etcher does explicitly.
                     libc::fcntl(f.as_raw_fd(), libc::F_NOCACHE, 1);
                 }
-                Ok(Box::new(RawWriter { file: f }))
+                Ok(Box::new(RawWriter { file: f, offset: 0 }))
             }
             Err(e) => {
                 let detail = describe_busy(device);
@@ -146,12 +146,19 @@ fn describe_busy(_device: &Path) -> String {
 #[cfg(unix)]
 pub struct RawWriter {
     file: File,
+    offset: u64,
 }
 
 #[cfg(unix)]
 impl Write for RawWriter {
     fn write(&mut self, buf: &[u8]) -> Result<usize> {
-        self.file.write(buf)
+        match self.file.write(buf) {
+            Ok(n) => {
+                self.offset += n as u64;
+                Ok(n)
+            }
+            Err(e) => Err(wrap_write_err(e, self.offset, buf.len())),
+        }
     }
     fn flush(&mut self) -> Result<()> {
         self.file.flush()
@@ -162,8 +169,28 @@ impl Write for RawWriter {
 impl DeviceWriter for RawWriter {
     fn finish(mut self: Box<Self>) -> Result<()> {
         self.file.flush()?;
-        self.file.sync_all()
+        self.file.sync_all().map_err(|e| {
+            std::io::Error::new(
+                e.kind(),
+                format!("sync_all after {} bytes written: {}", self.offset, e),
+            )
+        })
     }
+}
+
+#[cfg(unix)]
+fn wrap_write_err(e: std::io::Error, offset: u64, len: usize) -> std::io::Error {
+    // EINVAL on macOS rdisk usually means the write exceeded the
+    // device's reported max IO size (DKIOCGETMAXBYTECOUNTWRITE) or
+    // wasn't aligned to the block size. Surfacing offset + len makes
+    // either reading instantly diagnoseable from the row log.
+    let kind = e.kind();
+    let raw = e.raw_os_error();
+    let detail = match raw {
+        Some(code) => format!("write at offset={offset} len={len} failed: {e} (errno {code})"),
+        None => format!("write at offset={offset} len={len} failed: {e}"),
+    };
+    std::io::Error::new(kind, detail)
 }
 
 #[cfg(unix)]
