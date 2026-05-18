@@ -781,6 +781,7 @@ function JobLogPanel({ jobId, state, accent }) {
   const { t } = useTranslation();
   const [rows, setRows] = useState([]);
   const [error, setError] = useState(null);
+  const [source, setSource] = useState(null);
 
   const refresh = React.useCallback(async () => {
     try {
@@ -789,6 +790,12 @@ function JobLogPanel({ jobId, state, accent }) {
       setError(null);
     } catch (e) {
       setError(String(e));
+    }
+    try {
+      const s = await invoke('burn_log_source_for_job', { jobId });
+      setSource(s || null);
+    } catch (_) {
+      // Non-fatal: header just won't render. Keep the log itself usable.
     }
   }, [jobId]);
 
@@ -817,14 +824,43 @@ function JobLogPanel({ jobId, state, accent }) {
     return () => { mounted = false; subs.forEach((u) => u()); };
   }, [jobId, refresh]);
 
+  const header = source ? (
+    <div className="job-log-source mono small">
+      <span className="job-log-source-k">DB</span>
+      <span className="job-log-source-v" title={source.db_path}>
+        {source.db_path || '—'}
+        {`  (burn_logs.job_id=${jobId})`}
+      </span>
+      {source.progress_file && (
+        <>
+          <span className="job-log-source-k">helper</span>
+          <span className="job-log-source-v" title={source.progress_file}>
+            {source.progress_file}
+          </span>
+        </>
+      )}
+    </div>
+  ) : null;
+
   if (error) {
-    return <div className="job-log job-log--error mono small" style={{ color: accent }}>{error}</div>;
+    return (
+      <div className="job-log mono small">
+        {header}
+        <div className="job-log job-log--error" style={{ color: accent }}>{error}</div>
+      </div>
+    );
   }
   if (rows.length === 0) {
-    return <div className="job-log job-log--empty mono small">{t('detail.log.empty', { defaultValue: 'No log entries yet.' })}</div>;
+    return (
+      <div className="job-log mono small">
+        {header}
+        <div className="job-log job-log--empty">{t('detail.log.empty', { defaultValue: 'No log entries yet.' })}</div>
+      </div>
+    );
   }
   return (
     <div className="job-log mono small">
+      {header}
       {rows.map((r) => (
         <div key={r.id} className={"job-log-line job-log-line--" + (r.level || 'info')}>
           <span className="job-log-ts">{formatLogTimestampShort(r.ts)}</span>

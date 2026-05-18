@@ -749,6 +749,45 @@ pub fn burn_logs_list(db: State<'_, Db>, job_id: i64) -> Result<Vec<BurnLogRow>,
     Ok(rows.filter_map(|r| r.ok()).collect())
 }
 
+#[derive(Serialize)]
+pub struct LogSource {
+    /// Absolute path to the SQLite DB that holds `burn_logs`.
+    pub db_path: String,
+    /// Absolute path to the helper's progress JSONL file, if a helper run
+    /// has been recorded for this job. Lives in `/tmp` on unix.
+    pub progress_file: Option<String>,
+}
+
+// Where the displayed log entries come from. The JobLogPanel header shows
+// this so users can correlate UI rows with the on-disk source (e.g. tail
+// the progress JSONL while a burn is running, or `sqlite3` the DB after).
+#[tauri::command]
+pub fn burn_log_source_for_job(
+    app: AppHandle,
+    db: State<'_, Db>,
+    job_id: i64,
+) -> Result<LogSource, String> {
+    let db_path = app
+        .path()
+        .app_data_dir()
+        .map(|d| d.join("disk-cutter.sqlite"))
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let progress_file = {
+        let conn = db.0.lock().map_err(|e| e.to_string())?;
+        conn.query_row(
+            "SELECT progress_file FROM burn_jobs WHERE job_id = ?1",
+            params![job_id],
+            |r| r.get::<_, Option<String>>(0),
+        )
+        .unwrap_or(None)
+    };
+    Ok(LogSource {
+        db_path,
+        progress_file,
+    })
+}
+
 // Frontend convenience: pull every log row for a given job_id. With the
 // integer PK there's no more string-vs-integer translation step — it's
 // the same column on both sides — but the command stays separate from

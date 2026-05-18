@@ -62,7 +62,9 @@ impl DeviceIo for PipelinedRawDeviceIo {
         {
             opts.custom_flags(libc::O_SYNC | libc::O_DIRECT);
         }
-        let file = opts.open(&target)?;
+        let file = opts.open(&target).map_err(|e| {
+            std::io::Error::new(e.kind(), format!("open(2) {}: {}", target.display(), e))
+        })?;
 
         // Disable the unified buffer cache so writes go straight to the device
         // (macOS-specific; F_NOCACHE has no Linux equivalent and isn't needed).
@@ -87,7 +89,32 @@ impl DeviceIo for PipelinedRawDeviceIo {
                     Err(_) => break, // channel closed
                 };
                 if let Err(e) = file.write_all_at(&job.data, job.offset) {
-                    errors.lock().unwrap().push(e);
+                    // Wrap with the offset + length that the kernel rejected.
+                    // EINVAL on macOS rdisk almost always means size or offset
+                    // wasn't a multiple of the device block size — surfacing
+                    // those two numbers turns a generic "Invalid argument"
+                    // into a self-diagnosing error.
+                    let kind = e.kind();
+                    let raw = e.raw_os_error();
+                    let detail = match raw {
+                        Some(code) => format!(
+                            "pwrite at offset={} len={} failed: {} (errno {})",
+                            job.offset,
+                            job.data.len(),
+                            e,
+                            code,
+                        ),
+                        None => format!(
+                            "pwrite at offset={} len={} failed: {}",
+                            job.offset,
+                            job.data.len(),
+                            e,
+                        ),
+                    };
+                    errors
+                        .lock()
+                        .unwrap()
+                        .push(std::io::Error::new(kind, detail));
                     break;
                 }
             }));
@@ -181,7 +208,11 @@ impl DeviceWriter for PipelinedWriter {
         let fd = self.file.as_raw_fd();
         let ret = unsafe { libc::fsync(fd) };
         if ret != 0 {
-            return Err(std::io::Error::last_os_error());
+            let e = std::io::Error::last_os_error();
+            return Err(std::io::Error::new(
+                e.kind(),
+                format!("fsync after {} bytes written: {}", self.offset, e),
+            ));
         }
         Ok(())
     }

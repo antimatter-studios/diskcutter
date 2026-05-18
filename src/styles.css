@@ -691,6 +691,17 @@ input,select{font:inherit;color:inherit}
   padding:6px 8px;font-size:11px;line-height:1.45;
 }
 .job-log--empty,.job-log--error{padding:8px;color:var(--mute)}
+.job-log-source{
+  display:grid;grid-template-columns:auto 1fr;column-gap:8px;row-gap:2px;
+  align-items:baseline;
+  padding:4px 6px;margin-bottom:4px;
+  border-bottom:1px dashed var(--ink-2);
+  color:var(--ink-2);
+  font-size:10.5px;letter-spacing:.04em;
+  word-break:break-all;
+}
+.job-log-source-k{font-weight:700;color:var(--mute);text-transform:uppercase}
+.job-log-source-v{color:var(--ink)}
 .job-log-line{display:grid;grid-template-columns:auto 56px 1fr;gap:8px;align-items:baseline;padding:1px 0}
 .job-log-ts{color:var(--mute);font-variant-numeric:tabular-nums}
 .job-log-level{font-weight:700;letter-spacing:.04em;color:var(--ink-2)}

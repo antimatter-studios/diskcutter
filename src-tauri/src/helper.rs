@@ -183,6 +183,28 @@ pub fn run_helper(args: &[String]) -> i32 {
 
     let device_io: Box<dyn DeviceIo> =
         pick_device_io(&target, writer_choice.as_deref(), workers, queue_depth);
+    // Snapshot the burn config into the log unconditionally (info-level)
+    // so a failure report shows which writer + chunk + worker tuning was
+    // active without needing debug.logging=true.
+    job_log.info(&format!(
+        "helper: writer={} target={} chunk={} workers={} qdepth={} image_bytes={} hash={}",
+        device_io.name(),
+        target,
+        chunk_size,
+        workers,
+        queue_depth,
+        image_total_bytes,
+        match hash_algo {
+            HashAlgo::Sha256 => "sha256",
+            HashAlgo::Xxhash => "xxh64",
+        },
+    ));
+    #[cfg(target_os = "macos")]
+    if let Some(bs) = probe_device_block_size(&target) {
+        job_log.info(&format!(
+            "helper: target block size = {bs} (writes must be a multiple of this)"
+        ));
+    }
 
     // Claim the disk through DiskArbitration. This (a) unmounts via DADiskUnmount
     // from our own session, atomic with (b) installing a mount-approval callback
@@ -424,6 +446,47 @@ pub fn run_helper(args: &[String]) -> i32 {
 ///   "block"      → /dev/diskN  (buffered block)
 ///   "pipelined"  → /dev/rdiskN (Etcher-style worker pool, default for /dev/)
 ///   "plain"      → PlainFileDeviceIo (only auto-selected when not /dev/)
+#[cfg(target_os = "macos")]
+fn probe_device_block_size(target: &str) -> Option<u32> {
+    // DKIOCGETBLOCKSIZE on the raw char device. Used purely for diagnostics
+    // — surfaces in the per-row log so an EINVAL on pwrite is interpretable
+    // ("write of N bytes vs device block size 4096 → unaligned").
+    use std::ffi::CString;
+    let raw_path = if let Some(name) = std::path::Path::new(target)
+        .file_name()
+        .and_then(|s| s.to_str())
+    {
+        if let Some(rest) = name.strip_prefix("disk") {
+            if !rest.starts_with('r') {
+                format!("/dev/r{name}")
+            } else {
+                target.to_string()
+            }
+        } else {
+            target.to_string()
+        }
+    } else {
+        target.to_string()
+    };
+    let c = CString::new(raw_path).ok()?;
+    unsafe {
+        let fd = libc::open(c.as_ptr(), libc::O_RDONLY);
+        if fd < 0 {
+            return None;
+        }
+        // DKIOCGETBLOCKSIZE = _IOR('d', 24, uint32_t) → 0x40046418
+        const DKIOCGETBLOCKSIZE: libc::c_ulong = 0x40046418;
+        let mut bs: u32 = 0;
+        let r = libc::ioctl(fd, DKIOCGETBLOCKSIZE, &mut bs);
+        libc::close(fd);
+        if r == 0 && bs > 0 {
+            Some(bs)
+        } else {
+            None
+        }
+    }
+}
+
 fn pick_device_io(
     target: &str,
     writer_choice: Option<&str>,
