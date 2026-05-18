@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Hardened runtime is enforced for Developer-ID signed apps. By
+       default it refuses to load any dylib whose Team ID doesn't match
+       this binary's, which kills us at launch because we depend on
+       Homebrew's liblzma.5.dylib (xz). Disable library validation so
+       third-party libs can be loaded. Required as long as we link
+       Homebrew xz dynamically. -->
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+</dict>
+</plist>

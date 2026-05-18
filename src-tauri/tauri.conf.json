@@ -34,6 +34,10 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "macOS": {
+      "signingIdentity": "Developer ID Application: Chris Thomas (43UMKXZ8P4)",
+      "entitlements": "macos/entitlements.plist"
+    }
   }
 }
