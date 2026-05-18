@@ -30,10 +30,7 @@ jobs:
           - label: Windows (x86_64)
             platform: windows-latest
             rust-targets: ''
-            # NSIS only — MSI's ProductVersion caps the major component
-            # at 255, which makes our YYYY.M.D CalVer (2026.…)
-            # unrepresentable. NSIS accepts arbitrary version strings.
-            args: --bundles nsis
+            args: ''
 
     runs-on: ${{ matrix.platform }}
     steps:
