@@ -531,7 +531,7 @@ input,select{font:inherit;color:inherit}
   letter-spacing:.04em;color:var(--ink);
   border:1.5px solid var(--ink);text-align:center;background:var(--bone);
   display:inline-flex;align-items:center;justify-content:center;
-  padding:1px 8px;box-sizing:border-box;line-height:1.35;
+  padding:0 8px;height:var(--row-btn-h);box-sizing:border-box;line-height:1;
 }
 
 /* The image cell holds the filename + meta. `min-width: 0` lets the
@@ -569,7 +569,16 @@ input,select{font:inherit;color:inherit}
    (writing/verifying/success rows where the target is locked in).
    Inside the chip we use the mono caps style of the SELECT-TARGET label so
    `/dev/disk4` doesn't look like raw debug text next to the unset chip. */
-.pick-target--reassign,.pick-target--readonly{padding:0 12px}
+.pick-target--reassign,.pick-target--readonly{
+  padding:6px 12px;
+  height:auto;min-height:var(--row-btn-h);
+  /* Override the single-line .pick-target inline-flex layout so the
+     name and meta stack vertically. Otherwise both children render
+     baseline-aligned on one row ("STORAGE DEVICE31.90 GB · USB"). */
+  flex-direction:column;align-items:flex-start;justify-content:center;
+}
+.pick-target--reassign .job-target-meta,
+.pick-target--readonly .job-target-meta{margin-top:3px}
 .pick-target--readonly{cursor:default}
 .pick-target--readonly:hover{background:transparent;color:inherit;border-style:dashed}
 .pick-target--readonly:hover .job-target-meta{color:var(--ink-2);opacity:1}
@@ -640,11 +649,19 @@ input,select{font:inherit;color:inherit}
 .btn-ghost:disabled{opacity:.4;cursor:not-allowed}
 
 /* progress */
-.pb{display:flex;flex-direction:column;gap:5px;width:100%}
-.pb-meta{display:flex;gap:10px;align-items:baseline;font-family:var(--mono);font-size:10.5px;letter-spacing:.04em;color:var(--ink-2)}
-.pb-label{font-weight:700;color:var(--ink);letter-spacing:.08em}
-.pb-pct{font-variant-numeric:tabular-nums;color:var(--ink);font-weight:700}
-.pb-stat{opacity:.75}
+.pb{display:flex;flex-direction:column;gap:5px;width:100%;min-width:0}
+/* Meta items wrap as whole units when the column is too narrow for
+   one line — without flex-wrap+nowrap-on-children, the text inside a
+   single chip ("ELAPSED 00:03:33") would break mid-string and stack
+   the value under the label, which reads as a layout bug. */
+.pb-meta{
+  display:flex;flex-wrap:wrap;column-gap:10px;row-gap:2px;
+  align-items:baseline;font-family:var(--mono);font-size:10.5px;
+  letter-spacing:.04em;color:var(--ink-2);min-width:0;
+}
+.pb-label{font-weight:700;color:var(--ink);letter-spacing:.08em;white-space:nowrap}
+.pb-pct{font-variant-numeric:tabular-nums;color:var(--ink);font-weight:700;white-space:nowrap}
+.pb-stat{opacity:.75;white-space:nowrap}
 .pb-track{position:relative;height:14px;border:1.5px solid var(--ink);background:var(--bone);overflow:hidden}
 .pb-fill{position:absolute;top:0;bottom:0;left:0;transition:width .3s linear}
 .pb-hatch{position:absolute;top:0;bottom:0;left:0;
