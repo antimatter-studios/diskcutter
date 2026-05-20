@@ -41,7 +41,7 @@ Rejected alternatives, with reasons:
 The endorsed direction is **queue + counter + per-dispatch operator
 choice**. It accepts the human-in-the-loop constraint and optimizes the
 operator's flow instead of fighting it. Subsumes "Bulk parallel burns"
-from `ROADMAP.md` cleanly — parallel becomes "dispatch K from this entry
+from `roadmap.md` cleanly — parallel becomes "dispatch K from this entry
 in parallel" rather than its own feature.
 
 ## Caveats not to write down

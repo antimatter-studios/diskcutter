@@ -21,6 +21,8 @@ Update this file as work moves; it's the single source of truth.
 | GPG signature verification against distro keys | planned | Bundle a small keyring (Ubuntu, Fedora, Debian, Arch); warn on key change |
 | Image catalog (curated distro list w/ latest-version pull) | landed (e06898b on feat/image-catalog) by 1 | catalog.rs: hardcoded curated list of 9 distros (Ubuntu Desktop+Server, Fedora, Debian, Mint, Raspberry Pi OS, Tails, FreeBSD, SystemRescue) with download_url + sha256sums_url + homepage; catalog_list Tauri command; frontend picker UI deferred; 9 unit tests |
 | Disk → image (back up a USB to `.img.xz`) | claimed by 2 | reverse of burn — reads device, writes compressed image |
+| Restore-to-image GUI flow | planned | backup engine is done; wire it into the GUI as a first-class flow so Disk Cutter has a complete bidirectional story (write USB *and* back it up), not just a CLI subcommand |
+| Image-library cache (SHA-keyed re-burn skip) | planned | keep previously-used images keyed by SHA in `app_data_dir()/images/`; re-burning the same image skips re-download / re-verify |
 
 ## Safety / forensics
 
@@ -32,6 +34,9 @@ Update this file as work moves; it's the single source of truth.
 | Filesystem inspection per partition | landed (10f5acf on main) by 2 | `am-partitions::sniff::classify` identifies ext2/3/4, NTFS, exFAT, FAT16/32, HFS+, APFS, Linux swap, ISO 9660, SquashFS at the start of each partition |
 | Bootability test (QEMU launch after verify) | landed (e839c71 on feat/qemu-test) by 1 | qemu.rs: detect qemu-system-x86_64/aarch64/i386, launch in -snapshot mode (read-only behaviour, writes to tmpfile), pragmatic verdict based on warmup-survival heuristic; qemu_check + qemu_test_image Tauri commands; 14 unit tests |
 | Forensic-grade burn record (JSON+Markdown export) | landed (b62ac0f on main) by 2 | forensic.rs: tamper-evident report w/ sha256 digest over canonical JSON; HostInfo + BurnSection + LogEntry; 11 unit tests. Tauri command wiring deferred. (instance 1 also claimed this — see notes; their version on a branch if any) |
+| Target-stick auto-detect ("what's on this stick already?") | planned | pre-burn, probe the *target* USB with the same inspect.rs used for sources; report e.g. "this stick currently has Ubuntu 24.04 installer + empty FAT32 partition" so user confirms the right overwrite. Reuses existing code |
+| Boot-mode detection (UEFI vs Legacy BIOS) | planned | sniff for `EFI/BOOT/BOOTX64.EFI` vs MBR boot code vs isolinux config; one sentence in the inspect panel that saves hours of "why won't this boot" debugging. Hooks into inspect.rs |
+| Encrypted-image refusal with real message | planned | qcow2's `crypt_method` is already exposed by am-img-qcow2's Header; surface in the inspect panel: "this image is encrypted — decrypt it before burning" with format-specific guidance |
 
 ## Pipeline / performance
 
@@ -40,6 +45,7 @@ Update this file as work moves; it's the single source of truth.
 | Concurrent verify (read back as we write) | planned | second IO queue on pipelined writer; halves total time on fast media (was claimed by 2; deferred — pipeline.rs collision risk) |
 | Sparse / skip-zero writing | landed-partial (cca8574 on main) by 2 | sparse.rs: SparseFileWriter punches holes for zero chunks on write — saves on disk for backups. Full read-side skip-zero still wants upstream `allocated_extents()` on am-img-* BlockRead — see morning summary for the design sketch |
 | **Bulk parallel burns** (N USBs, one image) | planned | frontend orchestration of existing `start_write`; per-target progress lane |
+| Cluster-size benchmark per device serial | planned | probe 64K/256K/1M/4M write+read speeds on first burn to a new serial; save best chunk size keyed by device serial. Removes hand-tuning |
 
 ## Power-user surface
 

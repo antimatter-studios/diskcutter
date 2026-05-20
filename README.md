@@ -182,7 +182,7 @@ open the DB downgrades to in-memory mode rather than aborting.
 
 Full breakdown lives in [docs/architecture.md](docs/architecture.md).
 Per-release notes in [CHANGELOG.md](CHANGELOG.md). Performance
-tunables in [docs/PERFORMANCE.md](docs/PERFORMANCE.md).
+tunables in [docs/performance.md](docs/performance.md).
 
 ## FAQ
 
