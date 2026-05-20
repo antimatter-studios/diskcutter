@@ -145,27 +145,22 @@ Hash algorithm used for source and read-back integrity check.
   more than sufficient.
 - **When to change it:** if the burn is CPU-bound (rare, but possible
   on slow ARM machines burning fast NVMe), xxhash will close the gap.
-- **Caveat:** xxhash plumbing is wired through the pipeline (vendored
-  xxh64, selectable via `--hash-algo`). See [CHANGELOG.md](../CHANGELOG.md)
-  for the rollout note.
+- **⚠ Half-wired today.** The helper accepts `--hash-algo=` and the
+  Prefs UI saves the value, but [disks.rs::start_write](../src-tauri/src/disks.rs)
+  never passes the flag through to elevated burns — see the TODO in
+  [helper.rs](../src-tauri/src/helper.rs). The elevated `/dev/diskN`
+  burn path defaults to SHA-256 regardless of the saved pref.
+  The knob is effective only on CLI / non-elevated invocations that
+  pass `--hash-algo=` directly.
 
-### `max.mismatches`
+### Mismatch cap (not a runtime knob)
 
-Upper bound on mismatch records collected by the slow-path verifier.
-
-- **Default:** `256`.
-- **What it does:** the fast verify path only compares two hashes; if
-  they disagree, the slow path re-opens source and device and walks
-  them byte-by-byte, recording the first N mismatches (LBA, byte
-  offset, expected, actual) into `burn_mismatches`. This bound is N.
-- **Why the default:** 256 is enough mismatches to spot a pattern (a
-  truncated write at offset X, a single flipped bit, a stuck sector)
-  without ballooning the row count or RAM use if the device is
-  utterly corrupt and every block disagrees.
-- **When to change it:** raise to 1024 if you're forensically
-  diagnosing a problematic card and want a broader sample. Drop to 16
-  / 64 if you just want a yes/no signal and don't care about the
-  specifics.
+The slow-path verifier caps mismatch records at `MAX_MISMATCHES = 256`
+([pipeline.rs](../src-tauri/src/pipeline.rs)). This is a compile-time
+constant — there is no config key. 256 is enough to spot a pattern (a
+truncated write at offset X, a single flipped bit, a stuck sector)
+without ballooning row count or RAM if the device is utterly corrupt.
+Edit the constant if you genuinely need a different bound.
 
 ## Suggested presets
 
@@ -177,7 +172,8 @@ Upper bound on mismatch records collected by the slow-path verifier.
 | Buffered-cache comparison        | block       | 1 MiB       | —       | —     | false       |
 
 If a tweak doesn't appear in that table, it didn't move the needle in
-our testing.
+our testing. `hash.algo` is omitted because it doesn't yet affect the
+elevated burn path (see the half-wired note above).
 
 ## Benchmarking
 
@@ -187,11 +183,11 @@ To reproduce or extend the numbers above, run:
 cargo run --release --example benchmark
 ```
 
-This is being added in a separate change and may not be present in
-your checkout yet; check `src-tauri/examples/` first. The example
-loops over `writer.impl` × `chunk.bytes` × `workers` × `queue.depth`
-permutations against a configurable target and emits a CSV of bytes,
-elapsed, and MB/s for each run.
+The example lives at `src-tauri/examples/benchmark.rs` and loops over
+`writer.impl` × `chunk.bytes` × `workers` × `queue.depth` permutations
+against a configurable target, emitting a CSV of bytes, elapsed, and
+MB/s for each run. A companion `hash_bench` example in the same
+directory benchmarks the CPU-side hash algorithms in isolation.
 
 Numbers in this doc were measured on:
 
