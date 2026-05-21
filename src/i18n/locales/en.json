@@ -363,6 +363,7 @@
       "display": "DISPLAY",
       "behavior": "BEHAVIOR",
       "catalog": "CATALOG",
+      "updates": "UPDATES",
       "diagnostics": "DIAGNOSTICS"
     },
     "label": {
@@ -380,7 +381,13 @@
       "auto_clear_done_seconds": "AUTO CLEAR DONE",
       "catalog_url": "CATALOG URL",
       "catalog_refresh_hours": "CATALOG REFRESH",
+      "update_channel": "UPDATE CHANNEL",
+      "update_dev_endpoint": "DEV MANIFEST URL",
       "debug_logging": "VERBOSE LOGGING"
+    },
+    "update_channel": {
+      "stable": "STABLE",
+      "dev": "DEV (LOCAL)"
     },
     "catalog_refresh": {
       "off": "MANUAL ONLY",
@@ -413,6 +420,19 @@
       "on": "ON",
       "off": "OFF"
     }
+  },
+  "updates": {
+    "title": "APP UPDATES",
+    "current_version": "Current version",
+    "check": "[ U ] CHECK FOR UPDATES",
+    "checking": "Checking…",
+    "up_to_date": "You're on the latest version.",
+    "available": "Update available: {{version}}",
+    "downloading": "Downloading…",
+    "installing": "Installing — the app will relaunch.",
+    "install": "[ I ] INSTALL AND RELAUNCH",
+    "failed": "Could not check for updates: {{error}}",
+    "dev_endpoint_hint": "DEV channel reads from this URL. Run `npm run updates:serve` to host it locally."
   },
   "doctor": {
     "title": "DIAGNOSTICS",

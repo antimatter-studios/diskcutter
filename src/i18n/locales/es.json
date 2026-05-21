@@ -363,6 +363,7 @@
       "display": "PANTALLA",
       "behavior": "COMPORTAMIENTO",
       "catalog": "CATÁLOGO",
+      "updates": "ACTUALIZACIONES",
       "diagnostics": "DIAGNÓSTICO"
     },
     "label": {
@@ -380,7 +381,13 @@
       "auto_clear_done_seconds": "AUTO LIMPIAR HECHO",
       "catalog_url": "URL DEL CATÁLOGO",
       "catalog_refresh_hours": "ACTUALIZAR CATÁLOGO",
+      "update_channel": "CANAL DE ACTUALIZACIÓN",
+      "update_dev_endpoint": "URL DEL MANIFIESTO DEV",
       "debug_logging": "REGISTRO DETALLADO"
+    },
+    "update_channel": {
+      "stable": "ESTABLE",
+      "dev": "DEV (LOCAL)"
     },
     "catalog_refresh": {
       "off": "SOLO MANUAL",
@@ -413,6 +420,19 @@
       "on": "SÍ",
       "off": "NO"
     }
+  },
+  "updates": {
+    "title": "ACTUALIZACIONES",
+    "current_version": "Versión actual",
+    "check": "[ U ] BUSCAR ACTUALIZACIONES",
+    "checking": "Buscando…",
+    "up_to_date": "Estás en la última versión.",
+    "available": "Actualización disponible: {{version}}",
+    "downloading": "Descargando…",
+    "installing": "Instalando — la aplicación se reiniciará.",
+    "install": "[ I ] INSTALAR Y REINICIAR",
+    "failed": "No se pudo comprobar actualizaciones: {{error}}",
+    "dev_endpoint_hint": "El canal DEV lee desde esta URL. Aloja localmente con `npm run updates:serve`."
   },
   "doctor": {
     "title": "DIAGNÓSTICO",
