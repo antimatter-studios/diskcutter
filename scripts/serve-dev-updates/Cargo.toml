@@ -1,0 +1,11 @@
+[package]
+name = "serve-dev-updates"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+tiny_http = "0.12"
+
+[profile.release]
+opt-level = 1
