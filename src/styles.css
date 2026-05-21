@@ -752,6 +752,10 @@ input,select{font:inherit;color:inherit}
   display:flex;gap:8px;margin-top:14px;padding-top:14px;
   border-top:1.5px dashed var(--ink);
 }
+/* Peel "always-available" actions like REFRESH off to the right edge
+   of the bar so the contextual cluster on the left (retry/reset/eject/
+   etc.) reads as the primary grouping. */
+.detail-actions .detail-actions__end{margin-left:auto}
 
 /* verification */
 .ver{display:flex;flex-direction:column;gap:14px}

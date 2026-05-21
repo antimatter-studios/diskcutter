@@ -772,7 +772,7 @@ function JobDetail({ job, accent, onCancel, onRetry, onReset, onRefresh, fdaBloc
           </>
         )}
         <button
-          className={"btn btn-ghost" + (refreshDisabled ? " is-disabled" : "")}
+          className={"btn btn-ghost detail-actions__end" + (refreshDisabled ? " is-disabled" : "")}
           onClick={refreshDisabled ? null : onRefresh}
           aria-disabled={refreshDisabled || undefined}
         >
