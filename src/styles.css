@@ -224,11 +224,6 @@ input,select{font:inherit;color:inherit}
   font-family:var(--display);font-weight:800;font-size:18px;line-height:.95;
   letter-spacing:-.01em;
 }
-.logo-ver{
-  font-family:var(--mono);font-size:9.5px;letter-spacing:.06em;
-  color:var(--mute);margin-top:4px;
-}
-
 .nav{display:flex;flex-direction:column;padding:0 8px;gap:2px}
 .side-item{
   display:grid;grid-template-columns:18px 1fr auto;align-items:center;gap:6px;

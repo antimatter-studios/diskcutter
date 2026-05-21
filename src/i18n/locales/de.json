@@ -370,7 +370,7 @@
       "chunk_bytes": "BLOCKGRÖSSE",
       "workers_count": "ARBEITER",
       "queue_depth": "WARTESCHLANGENTIEFE",
-      "verify_skip": "PRÜFUNG ÜBERSPRINGEN",
+      "verify_skip": "ABBILD PRÜFEN",
       "hash_algo": "HASH-ALGO",
       "max_mismatches": "MAX. ABWEICHUNGEN",
       "language": "SPRACHE",

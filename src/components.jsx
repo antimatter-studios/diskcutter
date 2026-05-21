@@ -91,7 +91,6 @@ function Sidebar({ active, onSelect, jobs, accent, sessionStats }) {
         </div>
         <div className="logo-text">
           <div className="logo-name">{t('app.logo_name_line1')}<br/>{t('app.logo_name_line2')}</div>
-          <div className="logo-ver">v0.4.0-alpha</div>
         </div>
       </div>
 
@@ -1211,7 +1210,11 @@ const PREFS_SECTIONS = [
         options: ['1','2','4','8','16'].map((v) => ({ value: v, label: v })) },
       { key: 'queue.depth', type: 'select',
         options: ['4','8','16','32','64'].map((v) => ({ value: v, label: v })) },
-      { key: 'verify.skip', type: 'toggle' },
+      // The stored key is `verify.skip` (legacy) — preserved so older
+      // configs keep parsing — but the operator-facing label is the
+      // positive form "Verify Image" and the on/off polarity is
+      // inverted: ON means `verify.skip = false` (verify runs).
+      { key: 'verify.skip', type: 'toggle', invert: true },
       { key: 'hash.algo', type: 'select',
         options: [
           { value: 'xxh3', label: 'xxh3' },
@@ -1413,14 +1416,21 @@ function PrefsRow({ field, value, onChange }) {
 function PrefsControl({ field, value, onChange }) {
   const { t } = useTranslation();
   if (field.type === 'toggle') {
-    const on = value === 'true';
+    // `invert: true` flips the display polarity for keys whose stored
+    // form reads backwards from the natural UI question (e.g. the
+    // legacy `verify.skip` is true-to-disable; the operator wants
+    // "Verify Image: ON" which is the opposite truthiness). The
+    // stored value stays in its legacy semantics; only the on/off
+    // label and the new-value-on-click are flipped.
+    const storedTrue = value === 'true';
+    const on = field.invert ? !storedTrue : storedTrue;
     return (
       <button
         type="button"
         className={"prefs-toggle" + (on ? " is-on" : "")}
         role="switch"
         aria-checked={on}
-        onClick={() => onChange(on ? 'false' : 'true')}
+        onClick={() => onChange(on ? (field.invert ? 'true' : 'false') : (field.invert ? 'false' : 'true'))}
       >
         <span className="prefs-toggle-track">
           <span className="prefs-toggle-thumb" />

@@ -370,7 +370,7 @@
       "chunk_bytes": "TAMAÑO DE BLOQUE",
       "workers_count": "TRABAJADORES",
       "queue_depth": "PROFUND. COLA",
-      "verify_skip": "OMITIR VERIFICACIÓN",
+      "verify_skip": "VERIFICAR IMAGEN",
       "hash_algo": "ALGORITMO HASH",
       "max_mismatches": "MÁX. DISCREPANCIAS",
       "language": "IDIOMA",
