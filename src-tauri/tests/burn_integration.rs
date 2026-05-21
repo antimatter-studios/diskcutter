@@ -14,14 +14,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
 
-use diskcutter_lib::hash::HashAlgo;
+use diskcutter_lib::hash::{self, HashAlgo};
 use diskcutter_lib::pipeline::{
     burn, burn_with_hash, verify, verify_hash_only, verify_hash_only_with_hash, BurnError,
     DEFAULT_CHUNK,
 };
 use diskcutter_lib::writers::{DeviceIo, PlainFileDeviceIo};
 
-use sha2::{Digest, Sha256};
 use tempfile::tempdir;
 
 /// Deterministic byte stream from a fixed seed — same output every run.
@@ -42,15 +41,16 @@ fn deterministic_bytes(len: usize, seed: u64) -> Vec<u8> {
     out
 }
 
-fn sha256_hex(bytes: &[u8]) -> String {
-    let mut h = Sha256::new();
+/// Compute the canonical hex digest for `bytes` using the same hash
+/// algorithm the default `pipeline::burn` / `pipeline::verify_hash_only`
+/// wrappers select. Tests use this so they validate "default-algo burn
+/// produces matching readback hex" independent of which specific algo
+/// the default happens to be — currently Xxh3, was SHA-256 before the
+/// Etcher-alignment work.
+fn default_algo_hex(bytes: &[u8]) -> String {
+    let mut h = hash::new(HashAlgo::Xxh3);
     h.update(bytes);
-    let digest = h.finalize();
-    let mut s = String::with_capacity(digest.len() * 2);
-    for b in digest {
-        s.push_str(&format!("{:02x}", b));
-    }
-    s
+    h.finalize_hex()
 }
 
 /// Minimal in-memory streaming source. Tests bundle the known total
@@ -93,7 +93,7 @@ fn burn_then_verify_hash_only_matches() {
         burn(&mut reader, total, writer, DEFAULT_CHUNK, &cancel, |_| {}).expect("burn ok");
 
     assert_eq!(burn_result.bytes_written, data.len() as u64);
-    assert_eq!(burn_result.source_sha256, sha256_hex(&data));
+    assert_eq!(burn_result.source_sha256, default_algo_hex(&data));
 
     let mut device_reader = io.open_read(&target).unwrap();
     let cancel = AtomicBool::new(false);
@@ -372,10 +372,11 @@ fn empty_image_burns_clean() {
 
     let result = burn(&mut reader, total, writer, DEFAULT_CHUNK, &cancel, |_| {}).expect("burn ok");
 
-    // SHA-256 of empty string is well-known.
-    const EMPTY_SHA256: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
     assert_eq!(result.bytes_written, 0);
-    assert_eq!(result.source_sha256, EMPTY_SHA256);
+    // The burn wrapper hashes with the default algorithm; match that
+    // here rather than hard-coding a per-algo constant so the test
+    // continues to pass across hash-default flips.
+    assert_eq!(result.source_sha256, default_algo_hex(b""));
 
     let meta = std::fs::metadata(&target).expect("target exists");
     assert_eq!(meta.len(), 0);
