@@ -549,8 +549,25 @@ function JobRow({ job, accent, expanded, onToggle, onSelectTarget, onBurn, onCan
               [ {t('job.burn')} ]
             </button>
           )}
-          {(writing || verifying) ? (
-            <button className="btn btn-ghost" disabled>[ {t('job.delete')} ]</button>
+          {writing ? (
+            // Aborting an in-flight write is genuinely destructive — the
+            // device is in a half-written state when the operator pulls
+            // the cord. Use the loud red-accent treatment.
+            <button
+              className="btn btn-danger"
+              style={{ '--accent': accent, borderColor: accent, color: accent }}
+              onClick={onCancel}
+            >
+              [ {t('detail.actions.abort')} ]
+            </button>
+          ) : verifying ? (
+            // Verify is read-only — cancelling just shortens the check,
+            // it does not corrupt anything. Ghost styling matches the
+            // idle delete button so the slot looks calmer than during
+            // the writing phase.
+            <button className="btn btn-ghost" onClick={onCancel}>
+              [ {t('detail.actions.cancel_verify')} ]
+            </button>
           ) : (
             <button className="btn btn-ghost" onClick={onRemove}>
               [ {t('job.delete')} ]
@@ -717,11 +734,13 @@ function JobDetail({ job, accent, onCancel, onRetry, onReset, onRefresh, fdaBloc
       </div>
 
       <div className="detail-actions">
-        {job.state === 'writing' || job.state === 'verifying' ? (
-          <button className="btn btn-danger" style={{ '--accent': accent, borderColor: accent, color: accent }} onClick={onCancel}>
-            [ {t('detail.actions.abort')} ]
-          </button>
-        ) : null}
+        {/*
+          Abort / cancel-verify used to live here. They now sit in the
+          row-level job-actions slot (replacing the disabled Delete
+          button) so the operator does not have to expand the detail
+          drawer to stop an in-flight burn. See `job-actions` block
+          above for the three-state writing / verifying / idle switch.
+        */}
         {job.state === 'error' && (
           <>
             <button

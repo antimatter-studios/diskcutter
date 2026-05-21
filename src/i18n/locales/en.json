@@ -217,6 +217,7 @@
     },
     "actions": {
       "abort": "ABORT WRITE",
+      "cancel_verify": "CANCEL VERIFY",
       "retry": "RETRY",
       "retrying": "RETRYING…",
       "retry_waiting_fda": "WAITING FOR FDA",

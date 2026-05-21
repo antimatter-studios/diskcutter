@@ -217,6 +217,7 @@
     },
     "actions": {
       "abort": "SCHREIBEN ABBRECHEN",
+      "cancel_verify": "PRÜFUNG ABBRECHEN",
       "retry": "ERNEUT VERSUCHEN",
       "retrying": "WIRD WIEDERHOLT…",
       "retry_waiting_fda": "WARTE AUF FDA",
