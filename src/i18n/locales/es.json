@@ -390,7 +390,8 @@
     "writer_impl": {
       "raw": "CRUDO",
       "block": "BLOQUE",
-      "pipelined": "EN CADENA"
+      "pipelined": "EN CADENA",
+      "parallel": "PARALELO"
     },
     "theme": {
       "light": "CLARO",

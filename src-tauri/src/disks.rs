@@ -843,6 +843,10 @@ fn spawn_elevated_burn_inner(
     let debug_logging = read_config("debug.logging")
         .map(|v| v == "true")
         .unwrap_or(false);
+    // Honour the UI's hash.algo preference in elevated burns. When None,
+    // the helper applies its built-in Xxh3 default; the flag is only
+    // emitted when the user has explicitly written a value.
+    let hash_algo = read_config("hash.algo");
 
     let helper_cmd = build_helper_command(
         &exe.to_string_lossy(),
@@ -856,6 +860,7 @@ fn spawn_elevated_burn_inner(
         queue_depth,
         skip_verify,
         debug_logging,
+        hash_algo.as_deref(),
     );
     let prompt = "Disk Cutter needs administrator access to write the disk image directly to the device you selected.";
     let script = build_osascript_script(&helper_cmd, prompt);
@@ -917,6 +922,7 @@ fn build_helper_command(
     queue_depth: Option<usize>,
     skip_verify: bool,
     debug_logging: bool,
+    hash_algo: Option<&str>,
 ) -> String {
     let mut cmd = format!(
         "'{}' --helper-burn --image='{}' --target='{}' --job='{}' --progress='{}'",
@@ -943,6 +949,9 @@ fn build_helper_command(
     }
     if debug_logging {
         cmd.push_str(" --debug=true");
+    }
+    if let Some(h) = hash_algo {
+        cmd.push_str(&format!(" --hash-algo='{}'", sq(h)));
     }
     cmd
 }
@@ -2103,6 +2112,7 @@ mod tests {
             None,
             false,
             false,
+            None,
         );
         assert_eq!(
             s,
@@ -2127,6 +2137,7 @@ mod tests {
             None,
             false,
             false,
+            None,
         );
         assert!(s.contains("--image='/tmp/it'\\''s a test.iso'"), "got {s}");
     }
@@ -2145,6 +2156,7 @@ mod tests {
             Some(31),
             true,
             true,
+            Some("xxh3"),
         );
         assert!(s.contains("--writer='pipelined'"), "got {s}");
         assert!(s.contains("--chunk-bytes=2097152"), "got {s}");
@@ -2152,6 +2164,7 @@ mod tests {
         assert!(s.contains("--queue-depth=31"), "got {s}");
         assert!(s.contains("--skip-verify=true"), "got {s}");
         assert!(s.contains("--debug=true"), "got {s}");
+        assert!(s.contains("--hash-algo='xxh3'"), "got {s}");
     }
 
     #[test]
@@ -2168,12 +2181,14 @@ mod tests {
             None,
             false,
             false,
+            None,
         );
         assert!(!s.contains("--chunk-bytes="), "got {s}");
         assert!(!s.contains("--workers="), "got {s}");
         assert!(!s.contains("--queue-depth="), "got {s}");
         assert!(!s.contains("--skip-verify="), "got {s}");
         assert!(!s.contains("--debug="), "got {s}");
+        assert!(!s.contains("--hash-algo="), "got {s}");
     }
 
     #[test]

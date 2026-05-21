@@ -3,11 +3,16 @@ use std::path::Path;
 
 mod block;
 #[cfg(unix)]
+mod parallel;
+#[cfg(unix)]
 mod pipelined;
 mod plain;
 mod raw;
 #[cfg(unix)]
 pub use block::BlockDeviceIo;
+#[cfg(unix)]
+#[allow(unused_imports)]
+pub use parallel::ParallelRawDeviceIo;
 #[cfg(unix)]
 #[allow(unused_imports)]
 pub use pipelined::PipelinedRawDeviceIo;

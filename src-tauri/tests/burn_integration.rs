@@ -312,9 +312,9 @@ fn cancel_mid_verify_returns_cancelled_error() {
 }
 
 #[test]
-fn burn_then_verify_hash_only_round_trips_with_xxhash_on_real_file() {
+fn burn_then_verify_hash_only_round_trips_with_xxh3_on_real_file() {
     // Same shape as `burn_then_verify_hash_only_matches`, but using
-    // HashAlgo::Xxhash end-to-end against a real on-disk target via
+    // HashAlgo::Xxh3 end-to-end against a real on-disk target via
     // PlainFileDeviceIo. Locks the helper-side wiring against regressions.
     let dir = tempdir().unwrap();
     let target = dir.path().join("target.img");
@@ -332,13 +332,13 @@ fn burn_then_verify_hash_only_round_trips_with_xxhash_on_real_file() {
         total,
         writer,
         DEFAULT_CHUNK,
-        HashAlgo::Xxhash,
+        HashAlgo::Xxh3,
         &cancel,
         |_| {},
     )
     .expect("burn ok");
 
-    // xxh64 hex is exactly 16 chars — sanity-check we didn't get a 64-char SHA-256.
+    // xxh3 hex is exactly 16 chars — sanity-check we didn't get a 64-char SHA-256.
     assert_eq!(burn_result.source_sha256.len(), 16);
     assert_eq!(burn_result.bytes_written, data.len() as u64);
 
@@ -348,7 +348,7 @@ fn burn_then_verify_hash_only_round_trips_with_xxhash_on_real_file() {
         device_reader.as_mut(),
         data.len() as u64,
         DEFAULT_CHUNK,
-        HashAlgo::Xxhash,
+        HashAlgo::Xxh3,
         &cancel,
         |_| {},
     )

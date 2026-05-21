@@ -390,7 +390,8 @@
     "writer_impl": {
       "raw": "RAW",
       "block": "BLOCK",
-      "pipelined": "PIPELINED"
+      "pipelined": "PIPELINED",
+      "parallel": "PARALLEL"
     },
     "theme": {
       "light": "LIGHT",

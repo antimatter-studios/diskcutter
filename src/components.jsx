@@ -1176,6 +1176,7 @@ const PREFS_SECTIONS = [
           { value: 'raw', labelKey: 'prefs.writer_impl.raw' },
           { value: 'block', labelKey: 'prefs.writer_impl.block' },
           { value: 'pipelined', labelKey: 'prefs.writer_impl.pipelined' },
+          { value: 'parallel', labelKey: 'prefs.writer_impl.parallel' },
         ] },
       { key: 'chunk.bytes', type: 'select',
         options: [
@@ -1194,8 +1195,8 @@ const PREFS_SECTIONS = [
       { key: 'verify.skip', type: 'toggle' },
       { key: 'hash.algo', type: 'select',
         options: [
+          { value: 'xxh3', label: 'xxh3' },
           { value: 'sha256', label: 'sha256' },
-          { value: 'xxhash', label: 'xxhash' },
         ] },
       { key: 'max.mismatches', type: 'select',
         options: ['16','64','256','1024'].map((v) => ({ value: v, label: v })) },
@@ -1260,7 +1261,7 @@ const PREFS_DEFAULTS = {
   'workers.count': '4',
   'queue.depth': '16',
   'verify.skip': 'false',
-  'hash.algo': 'sha256',
+  'hash.algo': 'xxh3',
   'max.mismatches': '256',
   'language': '',
   'theme': 'light',

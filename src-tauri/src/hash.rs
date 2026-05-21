@@ -1,43 +1,61 @@
 //! Pluggable streaming hashers for the burn pipeline.
 //!
 //! Two algorithms are supported:
-//!   - `Sha256` (default) — cryptographic, slow.
-//!   - `Xxhash` (xxh64)   — non-cryptographic, ~10× faster CPU-side; the
-//!     right choice for burn-integrity checks (we're guarding against bit
-//!     rot and bad sectors, not signing for tamper-detection).
+//!   - `Xxh3` (default) — non-cryptographic, ~10-20 GB/s on Apple silicon NEON
+//!     and AVX2 x86. This is what balena Etcher uses and is the right choice
+//!     for burn-integrity checks: we are guarding against bit rot, truncated
+//!     transfers and bad sectors, not signing for tamper-detection.
+//!   - `Sha256` — cryptographic, slow (~400 MB/s). Kept as an opt-in for
+//!     anyone who specifically wants the cryptographic digest in their
+//!     burn_history audit log.
 //!
-//! The xxh64 implementation in this file is a hand-rolled port of the
-//! canonical xxh64 spec
-//! (<https://github.com/Cyan4973/xxHash/blob/dev/doc/xxhash_spec.md>) so the
-//! crate has no new Cargo dependencies. Canonical test vectors are asserted
-//! in the unit tests below.
+//! Xxh3 is provided by `twox-hash` and goes through its native vector path
+//! (NEON on aarch64, AVX2 on x86_64). Output is the 64-bit hex digest, same
+//! 16-char shape as the previous xxh64 implementation so the column width
+//! constraint in burn_history stays valid.
 //!
 //! The trait `StreamingHasher` is intentionally tiny — `update(&[u8])` plus
 //! `finalize_hex` — so pipeline code can call the same shape for either
 //! algorithm. `finalize_hex` returns lowercase hex to match the existing
 //! SHA-256 output format from `pipeline::hex`.
 //!
-//! Constructed via `hash::new(algo)`; `HashAlgo::parse` accepts the strings
-//! used in the Prefs panel (`"sha256"`, `"xxhash"`, `"xxh64"`).
+//! Constructed via `hash::new(algo)`; `HashAlgo::parse` accepts every string
+//! the Prefs panel has ever written (`"sha256"`, `"xxh3"`, plus the legacy
+//! `"xxhash"` / `"xxh64"` values from old stored configs, which now alias to
+//! Xxh3 since the standalone xxh64 implementation has been retired).
 
 use sha2::{Digest, Sha256};
+use std::hash::Hasher as _;
+use twox_hash::XxHash3_64;
 
 /// Selectable hash algorithm. The string form lives in the Prefs panel as
-/// `hash.algo`. Unknown values fall back to SHA-256 so a typo in config
-/// can't downgrade integrity expectations silently in a surprising way.
+/// `hash.algo`. Unknown values fall back to Xxh3 — the new performance-
+/// oriented default.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HashAlgo {
     Sha256,
-    Xxhash,
+    Xxh3,
 }
 
 impl HashAlgo {
-    /// Parse a user-facing algorithm name. Case-insensitive. Anything we
-    /// don't recognise becomes `Sha256` — the conservative default.
+    /// Parse a user-facing algorithm name. Case-insensitive. Legacy values
+    /// (`xxhash`, `xxh64`) that older versions wrote to config map to Xxh3
+    /// so upgraded installs don't silently fall back to SHA-256. Unknown
+    /// strings also resolve to Xxh3 — the burn defaults to the fast hash.
     pub fn parse(s: &str) -> Self {
         match s.to_ascii_lowercase().as_str() {
-            "xxhash" | "xxh64" => Self::Xxhash,
-            _ => Self::Sha256,
+            "sha256" => Self::Sha256,
+            _ => Self::Xxh3,
+        }
+    }
+
+    /// Canonical short label used in burn_history rows and helper info
+    /// logs. Distinct from `parse` because `parse` is lenient (accepts
+    /// legacy aliases) but the label must be a single canonical form.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Sha256 => "sha256",
+            Self::Xxh3 => "xxh3",
         }
     }
 }
@@ -54,7 +72,7 @@ pub trait StreamingHasher: Send {
 pub fn new(algo: HashAlgo) -> Box<dyn StreamingHasher> {
     match algo {
         HashAlgo::Sha256 => Box::new(Sha256Streaming(Sha256::new())),
-        HashAlgo::Xxhash => Box::new(Xxh64Streaming::new(0)),
+        HashAlgo::Xxh3 => Box::new(Xxh3Streaming(XxHash3_64::new())),
     }
 }
 
@@ -76,191 +94,21 @@ impl StreamingHasher for Sha256Streaming {
     }
 }
 
-// --- xxh64 -------------------------------------------------------------------
+// --- Xxh3 (64-bit) -----------------------------------------------------------
 //
-// Spec reference: <https://github.com/Cyan4973/xxHash/blob/dev/doc/xxhash_spec.md>
-//
-// Algorithm summary:
-//   - Maintain four 64-bit accumulators (`v1..v4`) seeded from `seed` plus
-//     fixed primes. Each 32-byte stripe updates all four lanes in parallel.
-//   - When fewer than 32 bytes remain, hold them in a 32-byte buffer until
-//     a full stripe accumulates.
-//   - On finalize: merge the four lanes into a single 64-bit value (or use
-//     `seed + PRIME5` if no stripes were consumed yet), mix in the total
-//     input length, then consume the tail bytes (8-byte words, then a
-//     4-byte word, then individual bytes) with the appropriate mix steps,
-//     and finally run the avalanche.
-//
-// Constants and the exact bit operations come straight from the spec.
+// Thin wrapper around `twox_hash::XxHash3_64`. The crate exposes the
+// `core::hash::Hasher` trait: `write(&[u8])` feeds bytes, `finish()` returns
+// the 64-bit digest. Internally it dispatches to AVX2 / NEON / SSE2 / portable
+// fallbacks at runtime, which is what gives the ~10-20 GB/s on modern CPUs.
 
-const XXH_PRIME64_1: u64 = 0x9E3779B185EBCA87;
-const XXH_PRIME64_2: u64 = 0xC2B2AE3D27D4EB4F;
-const XXH_PRIME64_3: u64 = 0x165667B19E3779F9;
-const XXH_PRIME64_4: u64 = 0x85EBCA77C2B2AE63;
-const XXH_PRIME64_5: u64 = 0x27D4EB2F165667C5;
+struct Xxh3Streaming(XxHash3_64);
 
-struct Xxh64Streaming {
-    seed: u64,
-    total_len: u64,
-    v1: u64,
-    v2: u64,
-    v3: u64,
-    v4: u64,
-    // Up to 31 unprocessed tail bytes between updates; once we have 32 we
-    // consume a stripe and reset `buf_len` to 0.
-    buf: [u8; 32],
-    buf_len: usize,
-}
-
-impl Xxh64Streaming {
-    fn new(seed: u64) -> Self {
-        Self {
-            seed,
-            total_len: 0,
-            v1: seed.wrapping_add(XXH_PRIME64_1).wrapping_add(XXH_PRIME64_2),
-            v2: seed.wrapping_add(XXH_PRIME64_2),
-            v3: seed,
-            v4: seed.wrapping_sub(XXH_PRIME64_1),
-            buf: [0u8; 32],
-            buf_len: 0,
-        }
+impl StreamingHasher for Xxh3Streaming {
+    fn update(&mut self, buf: &[u8]) {
+        self.0.write(buf);
     }
-
-    fn round(acc: u64, input: u64) -> u64 {
-        let acc = acc.wrapping_add(input.wrapping_mul(XXH_PRIME64_2));
-        let acc = acc.rotate_left(31);
-        acc.wrapping_mul(XXH_PRIME64_1)
-    }
-
-    fn merge_round(acc: u64, val: u64) -> u64 {
-        let val = Self::round(0, val);
-        let acc = acc ^ val;
-        acc.wrapping_mul(XXH_PRIME64_1).wrapping_add(XXH_PRIME64_4)
-    }
-
-    fn avalanche(mut h: u64) -> u64 {
-        h ^= h >> 33;
-        h = h.wrapping_mul(XXH_PRIME64_2);
-        h ^= h >> 29;
-        h = h.wrapping_mul(XXH_PRIME64_3);
-        h ^= h >> 32;
-        h
-    }
-
-    fn consume_stripe(&mut self, stripe: &[u8; 32]) {
-        // Each 32-byte stripe = four little-endian 64-bit lanes.
-        self.v1 = Self::round(
-            self.v1,
-            u64::from_le_bytes(stripe[0..8].try_into().unwrap()),
-        );
-        self.v2 = Self::round(
-            self.v2,
-            u64::from_le_bytes(stripe[8..16].try_into().unwrap()),
-        );
-        self.v3 = Self::round(
-            self.v3,
-            u64::from_le_bytes(stripe[16..24].try_into().unwrap()),
-        );
-        self.v4 = Self::round(
-            self.v4,
-            u64::from_le_bytes(stripe[24..32].try_into().unwrap()),
-        );
-    }
-
-    fn finalize(&self) -> u64 {
-        // 1. Merge lanes (or use the short-input fast path).
-        let mut h64 = if self.total_len >= 32 {
-            let mut h = self
-                .v1
-                .rotate_left(1)
-                .wrapping_add(self.v2.rotate_left(7))
-                .wrapping_add(self.v3.rotate_left(12))
-                .wrapping_add(self.v4.rotate_left(18));
-            h = Self::merge_round(h, self.v1);
-            h = Self::merge_round(h, self.v2);
-            h = Self::merge_round(h, self.v3);
-            h = Self::merge_round(h, self.v4);
-            h
-        } else {
-            self.seed.wrapping_add(XXH_PRIME64_5)
-        };
-
-        // 2. Mix in the total input length.
-        h64 = h64.wrapping_add(self.total_len);
-
-        // 3. Consume any tail bytes (the buffer that never reached a full
-        // 32-byte stripe). Process 8-byte chunks, then a 4-byte chunk, then
-        // individual bytes, each with its own mixing recipe.
-        let tail = &self.buf[..self.buf_len];
-        let mut i = 0;
-        while i + 8 <= tail.len() {
-            let k1 = Self::round(0, u64::from_le_bytes(tail[i..i + 8].try_into().unwrap()));
-            h64 ^= k1;
-            h64 = h64
-                .rotate_left(27)
-                .wrapping_mul(XXH_PRIME64_1)
-                .wrapping_add(XXH_PRIME64_4);
-            i += 8;
-        }
-        if i + 4 <= tail.len() {
-            let k1 = (u32::from_le_bytes(tail[i..i + 4].try_into().unwrap()) as u64)
-                .wrapping_mul(XXH_PRIME64_1);
-            h64 ^= k1;
-            h64 = h64
-                .rotate_left(23)
-                .wrapping_mul(XXH_PRIME64_2)
-                .wrapping_add(XXH_PRIME64_3);
-            i += 4;
-        }
-        while i < tail.len() {
-            let k1 = (tail[i] as u64).wrapping_mul(XXH_PRIME64_5);
-            h64 ^= k1;
-            h64 = h64.rotate_left(11).wrapping_mul(XXH_PRIME64_1);
-            i += 1;
-        }
-
-        // 4. Final avalanche.
-        Self::avalanche(h64)
-    }
-}
-
-impl StreamingHasher for Xxh64Streaming {
-    fn update(&mut self, mut input: &[u8]) {
-        self.total_len = self.total_len.wrapping_add(input.len() as u64);
-
-        // If we already have buffered tail bytes, fill the buffer to 32 and
-        // consume that stripe first.
-        if self.buf_len > 0 {
-            let need = 32 - self.buf_len;
-            if input.len() < need {
-                self.buf[self.buf_len..self.buf_len + input.len()].copy_from_slice(input);
-                self.buf_len += input.len();
-                return;
-            }
-            self.buf[self.buf_len..32].copy_from_slice(&input[..need]);
-            let stripe = self.buf; // copy out before mut-borrow shenanigans
-            self.consume_stripe(&stripe);
-            self.buf_len = 0;
-            input = &input[need..];
-        }
-
-        // Consume as many full 32-byte stripes as possible directly from `input`.
-        while input.len() >= 32 {
-            let mut stripe = [0u8; 32];
-            stripe.copy_from_slice(&input[..32]);
-            self.consume_stripe(&stripe);
-            input = &input[32..];
-        }
-
-        // Stash the remainder for next `update` or finalize.
-        if !input.is_empty() {
-            self.buf[..input.len()].copy_from_slice(input);
-            self.buf_len = input.len();
-        }
-    }
-
     fn finalize_hex(self: Box<Self>) -> String {
-        format!("{:016x}", self.finalize())
+        format!("{:016x}", self.0.finish())
     }
 }
 
@@ -268,39 +116,28 @@ impl StreamingHasher for Xxh64Streaming {
 mod tests {
     use super::*;
 
-    /// Canonical xxh64 vector: empty input, seed=0 → 0xef46db3751d8e999.
+    /// Sanity: xxh3 of the empty input matches the documented constant
+    /// from the xxHash spec (0x2d06800538d394c2). If twox-hash ever
+    /// changes its empty-input output we want this test to catch it.
     #[test]
-    fn xxh64_empty_input_matches_spec() {
-        let h: Box<dyn StreamingHasher> = Box::new(Xxh64Streaming::new(0));
-        assert_eq!(h.finalize_hex(), "ef46db3751d8e999");
+    fn xxh3_empty_input_matches_spec() {
+        let h: Box<dyn StreamingHasher> = Box::new(Xxh3Streaming(XxHash3_64::new()));
+        assert_eq!(h.finalize_hex(), "2d06800538d394c2");
     }
 
-    /// Canonical xxh64 vector: classic Python "Nobody inspects..." string,
-    /// seed=0 → 0xfbcea83c8a378bf1. This is the agreed-upon cross-impl
-    /// sanity vector.
+    /// Sanity: streaming xxh3 across awkward chunk boundaries must yield
+    /// the same digest as a single-shot update. This is what the burn
+    /// pipeline relies on when feeding decompressed chunks of varying
+    /// sizes.
     #[test]
-    fn xxh64_classic_string_matches_spec() {
-        let input = b"Nobody inspects the spammish repetition";
-        let mut h = Xxh64Streaming::new(0);
-        h.update(input);
-        let boxed: Box<dyn StreamingHasher> = Box::new(h);
-        assert_eq!(boxed.finalize_hex(), "fbcea83c8a378bf1");
-    }
-
-    /// A larger payload exercises the 32-byte stripe loop, lane merge, and
-    /// tail-byte handling all at once. Computed against the reference impl.
-    #[test]
-    fn xxh64_streaming_matches_single_shot() {
-        // 200-byte input — non-trivial: covers 6 full stripes (192 bytes)
-        // plus an 8-byte tail.
+    fn xxh3_streaming_matches_single_shot() {
         let payload: Vec<u8> = (0..200u32).map(|i| (i & 0xff) as u8).collect();
 
-        let mut single = Xxh64Streaming::new(0);
+        let mut single = Xxh3Streaming(XxHash3_64::new());
         single.update(&payload);
         let single_hex = Box::new(single).finalize_hex();
 
-        // Same payload, fed in awkward chunk sizes.
-        let mut chunked = Xxh64Streaming::new(0);
+        let mut chunked = Xxh3Streaming(XxHash3_64::new());
         chunked.update(&payload[..1]);
         chunked.update(&payload[1..7]);
         chunked.update(&payload[7..32]);
@@ -311,16 +148,15 @@ mod tests {
 
         assert_eq!(
             single_hex, chunked_hex,
-            "streaming xxh64 must match single-shot regardless of chunk boundaries"
+            "streaming xxh3 must match single-shot regardless of chunk boundaries"
         );
     }
 
     #[test]
-    fn xxh64_single_byte_inputs_avalanche() {
-        // Sanity: two different one-byte inputs should not collide.
-        let mut a = Xxh64Streaming::new(0);
+    fn xxh3_single_byte_inputs_avalanche() {
+        let mut a = Xxh3Streaming(XxHash3_64::new());
         a.update(&[0u8]);
-        let mut b = Xxh64Streaming::new(0);
+        let mut b = Xxh3Streaming(XxHash3_64::new());
         b.update(&[1u8]);
         assert_ne!(
             Box::new(a).finalize_hex(),
@@ -330,17 +166,13 @@ mod tests {
     }
 
     #[test]
-    fn xxh64_dispatch_via_new() {
-        // Exercise the public `hash::new(HashAlgo::Xxhash)` entry point so
-        // it stays wired to Xxh64Streaming.
-        let h = new(HashAlgo::Xxhash);
-        assert_eq!(h.finalize_hex(), "ef46db3751d8e999");
+    fn xxh3_dispatch_via_new() {
+        let h = new(HashAlgo::Xxh3);
+        assert_eq!(h.finalize_hex(), "2d06800538d394c2");
     }
 
     #[test]
     fn sha256_via_new_matches_known_empty_digest() {
-        // Sanity: hashing the empty string via `hash::new(Sha256)` produces
-        // the well-known empty-input SHA-256.
         let h = new(HashAlgo::Sha256);
         assert_eq!(
             h.finalize_hex(),
@@ -349,19 +181,27 @@ mod tests {
     }
 
     #[test]
-    fn hashalgo_parse_recognises_xxhash_variants() {
-        assert_eq!(HashAlgo::parse("xxhash"), HashAlgo::Xxhash);
-        assert_eq!(HashAlgo::parse("xxh64"), HashAlgo::Xxhash);
-        assert_eq!(HashAlgo::parse("XXHASH"), HashAlgo::Xxhash);
-        assert_eq!(HashAlgo::parse("XxHash"), HashAlgo::Xxhash);
+    fn hashalgo_parse_recognises_xxh3_and_legacy_aliases() {
+        assert_eq!(HashAlgo::parse("xxh3"), HashAlgo::Xxh3);
+        assert_eq!(HashAlgo::parse("XXH3"), HashAlgo::Xxh3);
+        // Legacy values older configs may still hold:
+        assert_eq!(HashAlgo::parse("xxhash"), HashAlgo::Xxh3);
+        assert_eq!(HashAlgo::parse("xxh64"), HashAlgo::Xxh3);
+        assert_eq!(HashAlgo::parse("XxHash"), HashAlgo::Xxh3);
     }
 
     #[test]
-    fn hashalgo_parse_falls_back_to_sha256_for_unknown() {
+    fn hashalgo_parse_recognises_sha256_and_defaults_otherwise_to_xxh3() {
         assert_eq!(HashAlgo::parse("sha256"), HashAlgo::Sha256);
         assert_eq!(HashAlgo::parse("SHA256"), HashAlgo::Sha256);
-        assert_eq!(HashAlgo::parse(""), HashAlgo::Sha256);
-        assert_eq!(HashAlgo::parse("md5"), HashAlgo::Sha256);
-        assert_eq!(HashAlgo::parse("anything-else"), HashAlgo::Sha256);
+        assert_eq!(HashAlgo::parse(""), HashAlgo::Xxh3);
+        assert_eq!(HashAlgo::parse("md5"), HashAlgo::Xxh3);
+        assert_eq!(HashAlgo::parse("anything-else"), HashAlgo::Xxh3);
+    }
+
+    #[test]
+    fn hashalgo_label_returns_canonical_short_form() {
+        assert_eq!(HashAlgo::Sha256.label(), "sha256");
+        assert_eq!(HashAlgo::Xxh3.label(), "xxh3");
     }
 }

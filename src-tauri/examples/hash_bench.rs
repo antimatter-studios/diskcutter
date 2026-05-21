@@ -1,4 +1,4 @@
-//! Hash throughput benchmark — SHA-256 vs xxh64.
+//! Hash throughput benchmark — SHA-256 vs xxh3.
 //!
 //! Mirrors `examples/benchmark.rs` in spirit, but isolates the hash step:
 //! generates a deterministic 512 MiB buffer, feeds it through each
@@ -10,8 +10,9 @@
 //! Run:
 //!     cargo run --release --manifest-path src-tauri/Cargo.toml --example hash_bench
 //!
-//! Expectation on modern arm64: xxh64 lands in the multi-GB/s range,
-//! SHA-256 in the hundreds of MB/s — roughly an order of magnitude gap.
+//! Expectation on modern arm64: xxh3 lands in the multi-GB/s range
+//! (NEON path), SHA-256 in the hundreds of MB/s — roughly an order of
+//! magnitude gap.
 
 use std::num::Wrapping;
 use std::time::{Duration, Instant};
@@ -111,8 +112,8 @@ fn main() {
     println!("Running sha256…");
     rows.push(bench("sha256", HashAlgo::Sha256, &payload));
 
-    println!("Running xxh64…");
-    rows.push(bench("xxh64", HashAlgo::Xxhash, &payload));
+    println!("Running xxh3…");
+    rows.push(bench("xxh3", HashAlgo::Xxh3, &payload));
 
     println!();
     print_table(&rows);

@@ -5,6 +5,14 @@ use std::time::{Duration, Instant};
 use crate::hash::{self, HashAlgo};
 use crate::writers::{DeviceReader, DeviceWriter};
 
+/// Diagnostic counterpart to the pwrite-side stats log written by the
+/// pipelined writer. The producer dumps its own per-window timings
+/// here so we can see whether the producer is fast (read + hash + send
+/// well under the device's pwrite time) or itself a bottleneck. Same
+/// fixed-path convention as `PWRITE_STATS_LOG_PATH` — overwritten
+/// across helper runs.
+const PRODUCER_STATS_LOG_PATH: &str = "/tmp/disk-cutter-producer-stats.log";
+
 // 1 MiB matches typical USB-MSC max transfer length on macOS, avoiding
 // kernel-side splitting of bigger writes. Etcher uses the same.
 pub const DEFAULT_CHUNK: usize = 1024 * 1024;
@@ -69,9 +77,9 @@ pub struct BurnResult {
     pub avg_bytes_per_sec: u64,
 }
 
-/// Burn an image to a writer using SHA-256 source-hashing.
+/// Burn an image to a writer using the default Xxh3 source-hashing.
 ///
-/// Backward-compatible wrapper around `burn_with_hash`; existing call sites
+/// Default-algorithm wrapper around `burn_with_hash`; existing call sites
 /// (disks.rs, tests) keep their current signature. New call sites that want
 /// to pick the algorithm at runtime should call `burn_with_hash` directly.
 ///
@@ -93,7 +101,7 @@ pub fn burn(
         total_bytes,
         writer,
         chunk_size,
-        HashAlgo::Sha256,
+        HashAlgo::Xxh3,
         cancel,
         on_progress,
     )
@@ -121,6 +129,14 @@ pub fn burn_with_hash(
     let mut last_emit = Instant::now();
     let mut window_start = Instant::now();
     let mut window_bytes: u64 = 0;
+    // Per-window producer-stage timing accumulators. Reset on every
+    // progress emit alongside `window_*` above so a single line of the
+    // producer log corresponds to the same window the helper reported
+    // a bps for.
+    let mut win_read_us: u64 = 0;
+    let mut win_hash_us: u64 = 0;
+    let mut win_write_us: u64 = 0;
+    let mut win_chunks: u64 = 0;
 
     loop {
         if cancel.load(Ordering::Relaxed) {
@@ -133,6 +149,7 @@ pub fn burn_with_hash(
         // sub-block-sized buffers to /dev/rdiskN EINVALs immediately,
         // so coalesce here and only emit full chunk_size writes (and
         // one possibly-shorter final write at EOF).
+        let read_started = Instant::now();
         let mut n = 0;
         while n < buf.len() {
             match reader.read(&mut buf[n..])? {
@@ -140,13 +157,22 @@ pub fn burn_with_hash(
                 k => n += k,
             }
         }
+        let read_us = read_started.elapsed().as_micros() as u64;
         if n == 0 {
             break;
         }
+        let write_started = Instant::now();
         writer.write_all(&buf[..n])?;
+        let write_us = write_started.elapsed().as_micros() as u64;
+        let hash_started = Instant::now();
         hasher.update(&buf[..n]);
+        let hash_us = hash_started.elapsed().as_micros() as u64;
         done += n as u64;
         window_bytes += n as u64;
+        win_read_us += read_us;
+        win_hash_us += hash_us;
+        win_write_us += write_us;
+        win_chunks += 1;
 
         if last_emit.elapsed() >= Duration::from_millis(250) {
             let win = window_start.elapsed().as_secs_f64().max(0.001);
@@ -157,9 +183,43 @@ pub fn burn_with_hash(
                 bytes_per_sec: bps,
                 elapsed: started.elapsed(),
             });
+
+            // Per-window producer timing. `write_us` here is the time
+            // spent inside `PipelinedWriter::write` — that's mostly
+            // `free_rx.recv()` blocking when the pool is empty, so a
+            // high `avg_write_us` means the worker (= the pwrite) is
+            // the bottleneck. A high `avg_read_us` or `avg_hash_us`
+            // means the producer's own CPU work is the cap. A scenario
+            // where all three are tiny but window throughput is still
+            // ~10 MB/s is the most interesting case — means the
+            // producer is idle most of the window and *something else*
+            // (e.g. the writer's worker is waiting on the kernel) is
+            // gating progress.
+            use std::io::Write as _;
+            if let Ok(mut f) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(PRODUCER_STATS_LOG_PATH)
+            {
+                let denom = win_chunks.max(1);
+                let _ = writeln!(
+                    f,
+                    "producer_window: chunks={win_chunks} bps={bps} \
+                     avg_read_us={} avg_hash_us={} avg_write_us={} \
+                     win_read_us={win_read_us} win_hash_us={win_hash_us} win_write_us={win_write_us}",
+                    win_read_us / denom,
+                    win_hash_us / denom,
+                    win_write_us / denom,
+                );
+            }
+
             last_emit = Instant::now();
             window_start = Instant::now();
             window_bytes = 0;
+            win_read_us = 0;
+            win_hash_us = 0;
+            win_write_us = 0;
+            win_chunks = 0;
         }
     }
 
@@ -218,7 +278,8 @@ pub struct HashOnlyResult {
     pub avg_bytes_per_sec: u64,
 }
 
-/// SHA-256 variant kept for backward compatibility — see `verify_hash_only_with_hash`.
+/// Default-algorithm (Xxh3) variant — see `verify_hash_only_with_hash` for
+/// the algorithm-explicit form.
 pub fn verify_hash_only(
     device: &mut dyn DeviceReader,
     expected_bytes: u64,
@@ -230,7 +291,7 @@ pub fn verify_hash_only(
         device,
         expected_bytes,
         chunk_size,
-        HashAlgo::Sha256,
+        HashAlgo::Xxh3,
         cancel,
         on_progress,
     )
@@ -301,7 +362,8 @@ pub fn verify_hash_only_with_hash(
     })
 }
 
-/// SHA-256 variant kept for backward compatibility — see `verify_with_hash`.
+/// Default-algorithm (Xxh3) variant — see `verify_with_hash` for the
+/// algorithm-explicit form.
 pub fn verify(
     source: &mut dyn Read,
     total_bytes: u64,
@@ -315,7 +377,7 @@ pub fn verify(
         total_bytes,
         device,
         chunk_size,
-        HashAlgo::Sha256,
+        HashAlgo::Xxh3,
         cancel,
         on_progress,
     )
@@ -472,7 +534,6 @@ fn hex_bytes(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
     use crate::writers::{DeviceReader, DeviceWriter};
-    use sha2::{Digest, Sha256};
     use std::cell::RefCell;
     use std::io::{Cursor, Read as IoRead, Write as IoWrite};
     use std::sync::{Arc, Mutex};
@@ -535,12 +596,6 @@ mod tests {
 
     impl DeviceReader for CursorDeviceReader {}
 
-    fn sha256_of(bytes: &[u8]) -> String {
-        let mut h = Sha256::new();
-        h.update(bytes);
-        hex(h.finalize())
-    }
-
     #[allow(clippy::type_complexity)]
     fn make_writer() -> (Box<dyn DeviceWriter>, Arc<Mutex<Vec<u8>>>, Arc<AtomicBool>) {
         let sink = Arc::new(Mutex::new(Vec::new()));
@@ -554,6 +609,12 @@ mod tests {
 
     #[test]
     fn burn_writes_all_source_bytes() {
+        // `burn()` (no explicit algo) defaults to Xxh3 — the
+        // performance-oriented hash. The `source_sha256` field name on
+        // BurnResult is historical and now actually holds the 16-char
+        // xxh3 hex digest. Recompute the expected digest with the same
+        // algorithm so the assertion tracks the wrapper's chosen
+        // default rather than hard-coding it.
         let data: Vec<u8> = (0..10_000u32).map(|i| (i % 256) as u8).collect();
         let mut reader = MockSource::new(data.clone());
         let total = reader.total;
@@ -563,16 +624,18 @@ mod tests {
         let result =
             burn(&mut reader, total, writer, DEFAULT_CHUNK, &cancel, |_| {}).expect("burn ok");
 
+        let mut expected = hash::new(HashAlgo::Xxh3);
+        expected.update(&data);
         assert_eq!(result.bytes_written, data.len() as u64);
-        assert_eq!(result.source_sha256, sha256_of(&data));
+        assert_eq!(result.source_sha256, expected.finalize_hex());
         assert_eq!(*sink.lock().unwrap(), data);
         assert!(finished.load(Ordering::Relaxed));
     }
 
     #[test]
-    fn burn_with_xxhash_emits_xxh64_hex_in_source_field() {
+    fn burn_with_xxh3_emits_xxh3_hex_in_source_field() {
         // 10 KiB of structured data exercises both stripe-loop + tail-byte
-        // paths of xxh64. Compare against the standalone hash::new(Xxhash)
+        // paths of xxh64. Compare against the standalone hash::new(Xxh3)
         // applied to the same buffer — should match byte for byte.
         let data: Vec<u8> = (0..10_000u32).map(|i| (i % 256) as u8).collect();
         let mut reader = MockSource::new(data.clone());
@@ -585,28 +648,28 @@ mod tests {
             total,
             writer,
             DEFAULT_CHUNK,
-            HashAlgo::Xxhash,
+            HashAlgo::Xxh3,
             &cancel,
             |_| {},
         )
         .expect("burn ok");
 
         // Independent xxh64 of the same data — both paths must agree.
-        let mut h = hash::new(HashAlgo::Xxhash);
+        let mut h = hash::new(HashAlgo::Xxh3);
         h.update(&data);
         let expected_hex = h.finalize_hex();
 
         assert_eq!(result.bytes_written, data.len() as u64);
         assert_eq!(
             result.source_sha256, expected_hex,
-            "burn_with_hash(Xxhash) should produce xxh64 hex in source_sha256"
+            "burn_with_hash(Xxh3) should produce xxh64 hex in source_sha256"
         );
-        assert_eq!(result.source_sha256.len(), 16, "xxh64 hex is 16 chars");
+        assert_eq!(result.source_sha256.len(), 16, "xxh3 hex is 16 chars");
         assert_eq!(*sink.lock().unwrap(), data);
     }
 
     #[test]
-    fn burn_then_verify_hash_only_round_trips_with_xxhash() {
+    fn burn_then_verify_hash_only_round_trips_with_xxh3() {
         // End-to-end: burn with xxhash, read back with xxhash, hashes match.
         // Uses the in-memory CollectingWriter + CursorDeviceReader so we
         // don't need a real disk to assert the algorithm threads through.
@@ -621,7 +684,7 @@ mod tests {
             total,
             writer,
             DEFAULT_CHUNK,
-            HashAlgo::Xxhash,
+            HashAlgo::Xxh3,
             &cancel,
             |_| {},
         )
@@ -638,7 +701,7 @@ mod tests {
             &mut dev,
             burn_res.bytes_written,
             DEFAULT_CHUNK,
-            HashAlgo::Xxhash,
+            HashAlgo::Xxh3,
             &cancel,
             |_| {},
         )
@@ -649,7 +712,7 @@ mod tests {
     }
 
     #[test]
-    fn verify_with_hash_xxhash_matches_identical_streams() {
+    fn verify_with_hash_xxh3_matches_identical_streams() {
         let data: Vec<u8> = (0..4096u32).map(|i| (i % 256) as u8).collect();
         let mut src = MockSource::new(data.clone());
         let total = src.total;
@@ -663,7 +726,7 @@ mod tests {
             total,
             &mut dev,
             DEFAULT_CHUNK,
-            HashAlgo::Xxhash,
+            HashAlgo::Xxh3,
             &cancel,
             |_| {},
         )
@@ -672,7 +735,7 @@ mod tests {
         assert!(result.match_);
         assert!(result.mismatches.is_empty());
         assert_eq!(result.source_sha256, result.readback_sha256);
-        assert_eq!(result.source_sha256.len(), 16, "xxh64 hex is 16 chars");
+        assert_eq!(result.source_sha256.len(), 16, "xxh3 hex is 16 chars");
     }
 
     #[test]

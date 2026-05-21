@@ -12,7 +12,7 @@ use crate::joblog::{JobLogger, LogLevel};
 use crate::pipeline::{self, BurnError, VerifyMismatch};
 use crate::source;
 #[cfg(unix)]
-use crate::writers::{BlockDeviceIo, PipelinedRawDeviceIo, RawDeviceIo};
+use crate::writers::{BlockDeviceIo, ParallelRawDeviceIo, PipelinedRawDeviceIo, RawDeviceIo};
 use crate::writers::{DeviceIo, PlainFileDeviceIo};
 
 #[derive(Serialize)]
@@ -88,6 +88,24 @@ impl JobLogger for HelperLogger {
 }
 
 pub fn run_helper(args: &[String]) -> i32 {
+    // Mark this whole helper process as disk-IO IMPORTANT so the
+    // kernel doesn't put our pwrite/pread traffic onto its throttled
+    // background queue. osascript can spawn its child with a lower
+    // inherited IOPolicy in some macOS releases; this resets it
+    // process-wide before any IO. The worker thread that actually
+    // pwrites also separately hoists its pthread QoS — see
+    // `writers::pipelined::set_worker_priorities`. Both belts and
+    // braces because we don't know which exact layer was demoting us.
+    #[cfg(target_os = "macos")]
+    unsafe {
+        // <sys/resource.h>: IOPOL_TYPE_DISK=0, IOPOL_SCOPE_PROCESS=0,
+        // IOPOL_IMPORTANT=1.
+        extern "C" {
+            fn setiopolicy_np(iotype: i32, scope: i32, policy: i32) -> i32;
+        }
+        let _ = setiopolicy_np(0, 0, 1);
+    }
+
     let image = match arg_value(args, "--image=") {
         Some(v) => v,
         None => return 2,
@@ -126,13 +144,15 @@ pub fn run_helper(args: &[String]) -> i32 {
     let debug_enabled: bool = arg_value(args, "--debug=")
         .map(|v| v == "true")
         .unwrap_or(false);
-    // TODO: once disks.rs is no longer hot, propagate config `hash.algo` via
-    // spawn_elevated_burn's helper command line. Until then the helper defaults
-    // to SHA-256 regardless of UI pref.
+    // `--hash-algo=` is now wired through `disks.rs::build_helper_command`
+    // from the UI pref. When absent (older parents, CLI usage), default to
+    // Xxh3 — the fast non-cryptographic hash matching the new build-wide
+    // default, not SHA-256, so out-of-the-box burns are not capped at the
+    // SHA-256 producer-thread ceiling.
     let hash_algo: HashAlgo = arg_value(args, "--hash-algo=")
         .as_deref()
         .map(HashAlgo::parse)
-        .unwrap_or(HashAlgo::Sha256);
+        .unwrap_or(HashAlgo::Xxh3);
 
     // Open in append mode so the file accumulates a historical log of
     // every helper run for this job_id. The parent's tail_helper seeks
@@ -213,10 +233,7 @@ pub fn run_helper(args: &[String]) -> i32 {
         workers,
         queue_depth,
         image_total_bytes,
-        match hash_algo {
-            HashAlgo::Sha256 => "sha256",
-            HashAlgo::Xxhash => "xxh64",
-        },
+        hash_algo.label(),
     ));
     #[cfg(target_os = "macos")]
     if let Some(bs) = probe_device_block_size(&target) {
@@ -542,6 +559,7 @@ fn pick_device_io(
         match writer_choice {
             Some("raw") => Box::new(RawDeviceIo),
             Some("block") => Box::new(BlockDeviceIo),
+            Some("parallel") => Box::new(ParallelRawDeviceIo::new(workers, queue_depth)),
             Some("pipelined") | None => Box::new(PipelinedRawDeviceIo::new(workers, queue_depth)),
             Some(other) => {
                 eprintln!("unknown writer choice {other:?}, falling back to pipelined");
@@ -725,44 +743,62 @@ mod tests {
     }
 
     #[test]
-    fn arg_value_recognises_hash_algo_xxhash() {
-        // The helper parses `--hash-algo=xxhash` straight via `arg_value`,
+    fn arg_value_recognises_hash_algo_xxh3() {
+        // The helper parses `--hash-algo=xxh3` straight via `arg_value`,
         // then routes through `HashAlgo::parse`. Both halves must hold.
-        let a = args(&["--image=/tmp/x.iso", "--hash-algo=xxhash"]);
-        assert_eq!(arg_value(&a, "--hash-algo="), Some("xxhash".into()));
-        assert_eq!(HashAlgo::parse("xxhash"), HashAlgo::Xxhash);
+        let a = args(&["--image=/tmp/x.iso", "--hash-algo=xxh3"]);
+        assert_eq!(arg_value(&a, "--hash-algo="), Some("xxh3".into()));
+        assert_eq!(HashAlgo::parse("xxh3"), HashAlgo::Xxh3);
     }
 
     #[test]
-    fn arg_value_hash_algo_defaults_to_sha256_when_missing() {
-        // Absent flag → helper falls back to SHA-256.
+    fn arg_value_hash_algo_defaults_to_xxh3_when_missing() {
+        // Absent flag → helper falls back to Xxh3 (the new fast default,
+        // matching what `disks.rs::build_helper_command` would have passed).
         let a = args(&["--image=/tmp/x.iso", "--target=/dev/disk5"]);
         assert_eq!(arg_value(&a, "--hash-algo="), None);
         let algo = arg_value(&a, "--hash-algo=")
             .as_deref()
             .map(HashAlgo::parse)
-            .unwrap_or(HashAlgo::Sha256);
-        assert_eq!(algo, HashAlgo::Sha256);
+            .unwrap_or(HashAlgo::Xxh3);
+        assert_eq!(algo, HashAlgo::Xxh3);
     }
 
     #[test]
-    fn arg_value_hash_algo_unknown_value_falls_back_to_sha256() {
+    fn arg_value_hash_algo_unknown_value_falls_back_to_xxh3() {
+        // Unknown algo strings (e.g. a hand-edited config typo) resolve to
+        // Xxh3 via `HashAlgo::parse`, not SHA-256.
         let a = args(&["--hash-algo=blake3"]);
         let algo = arg_value(&a, "--hash-algo=")
             .as_deref()
             .map(HashAlgo::parse)
-            .unwrap_or(HashAlgo::Sha256);
-        assert_eq!(algo, HashAlgo::Sha256);
+            .unwrap_or(HashAlgo::Xxh3);
+        assert_eq!(algo, HashAlgo::Xxh3);
     }
 
     #[test]
-    fn arg_value_hash_algo_accepts_xxh64_alias() {
+    fn arg_value_hash_algo_accepts_legacy_xxh64_alias() {
+        // Older configs stored "xxh64" or "xxhash" — both must keep mapping
+        // to the current fast-hash variant so an upgraded install doesn't
+        // silently downgrade to SHA-256.
         let a = args(&["--hash-algo=xxh64"]);
         let algo = arg_value(&a, "--hash-algo=")
             .as_deref()
             .map(HashAlgo::parse)
-            .unwrap_or(HashAlgo::Sha256);
-        assert_eq!(algo, HashAlgo::Xxhash);
+            .unwrap_or(HashAlgo::Xxh3);
+        assert_eq!(algo, HashAlgo::Xxh3);
+    }
+
+    #[test]
+    fn arg_value_hash_algo_sha256_still_honored() {
+        // Users who specifically want SHA-256 in their burn_history can
+        // still opt in via the Prefs panel; the explicit string parses.
+        let a = args(&["--hash-algo=sha256"]);
+        let algo = arg_value(&a, "--hash-algo=")
+            .as_deref()
+            .map(HashAlgo::parse)
+            .unwrap_or(HashAlgo::Xxh3);
+        assert_eq!(algo, HashAlgo::Sha256);
     }
 
     // ------------------------------------------------------------------
