@@ -1019,6 +1019,20 @@ input,select{font:inherit;color:inherit}
   min-width:32px;text-align:left;
 }
 
+/* ─────────── Updates panel (lives inside the UPDATES prefs section) ─────────── */
+
+.prefs-updates{
+  display:flex;flex-direction:column;gap:8px;padding-top:10px;
+  border-top:1px dashed rgba(12,12,11,.18);margin-top:4px;
+}
+:root[data-theme="dark"] .prefs-updates{border-top-color:rgba(237,232,216,.18)}
+.prefs-updates-actions{display:flex;gap:8px}
+.prefs-updates-status{
+  font-size:11.5px;letter-spacing:.04em;color:var(--mute);padding:2px 0;
+}
+.prefs-updates-status--err{color:var(--hazard)}
+.prefs-updates-hint{color:var(--mute);font-size:11px;letter-spacing:.04em}
+
 /* ─────────── Doctor (diagnostics) panel ─────────── */
 
 .doctor-block{display:flex;flex-direction:column;gap:10px}

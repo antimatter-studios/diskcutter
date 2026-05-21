@@ -362,6 +362,7 @@
       "display": "ANZEIGE",
       "behavior": "VERHALTEN",
       "catalog": "KATALOG",
+      "updates": "UPDATES",
       "diagnostics": "DIAGNOSE"
     },
     "label": {
@@ -379,7 +380,13 @@
       "auto_clear_done_seconds": "AUTO. FERTIGE LÖSCHEN",
       "catalog_url": "KATALOG-URL",
       "catalog_refresh_hours": "KATALOG-AKTUALISIERUNG",
+      "update_channel": "UPDATE-KANAL",
+      "update_dev_endpoint": "DEV-MANIFEST-URL",
       "debug_logging": "AUSFÜHRLICHE PROTOKOLLIERUNG"
+    },
+    "update_channel": {
+      "stable": "STABIL",
+      "dev": "DEV (LOKAL)"
     },
     "catalog_refresh": {
       "off": "NUR MANUELL",
@@ -411,6 +418,19 @@
       "on": "AN",
       "off": "AUS"
     }
+  },
+  "updates": {
+    "title": "APP-UPDATES",
+    "current_version": "Aktuelle Version",
+    "check": "[ U ] NACH UPDATES SUCHEN",
+    "checking": "Suche…",
+    "up_to_date": "Du bist auf der aktuellen Version.",
+    "available": "Update verfügbar: {{version}}",
+    "downloading": "Lade herunter…",
+    "installing": "Installiere — die App wird neu gestartet.",
+    "install": "[ I ] INSTALLIEREN UND NEU STARTEN",
+    "failed": "Update-Prüfung fehlgeschlagen: {{error}}",
+    "dev_endpoint_hint": "DEV-Kanal liest von dieser URL. Lokal hosten mit `npm run updates:serve`."
   },
   "doctor": {
     "title": "DIAGNOSE",

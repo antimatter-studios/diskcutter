@@ -1245,6 +1245,17 @@ const PREFS_SECTIONS = [
     ],
   },
   {
+    key: 'updates',
+    fields: [
+      { key: 'update.channel', type: 'select',
+        options: [
+          { value: 'stable', labelKey: 'prefs.update_channel.stable' },
+          { value: 'dev',    labelKey: 'prefs.update_channel.dev' },
+        ] },
+      { key: 'update.dev_endpoint', type: 'text', placeholder: 'http://localhost:17780/latest.json' },
+    ],
+  },
+  {
     key: 'diagnostics',
     fields: [
       { key: 'debug.logging', type: 'toggle' },
@@ -1269,6 +1280,8 @@ const PREFS_DEFAULTS = {
   'auto.clear_done.seconds': '0',
   'catalog.url': 'https://diskcutter.app/catalog.json',
   'catalog.refresh_hours': '24',
+  'update.channel': 'stable',
+  'update.dev_endpoint': 'http://localhost:17780/latest.json',
   'debug.logging': 'false',
 };
 
@@ -1294,9 +1307,103 @@ function PrefsView({ values, onChange }) {
               />
             ))}
           </div>
+          {sect.key === 'updates' && (
+            <UpdatesPanel
+              channel={values['update.channel'] ?? PREFS_DEFAULTS['update.channel']}
+              devEndpoint={values['update.dev_endpoint'] ?? PREFS_DEFAULTS['update.dev_endpoint']}
+            />
+          )}
         </div>
       ))}
       <DoctorPanel />
+    </div>
+  );
+}
+
+function UpdatesPanel({ channel, devEndpoint }) {
+  const { t } = useTranslation();
+  const [version, setVersion] = React.useState('—');
+  const [status, setStatus] = React.useState('idle'); // idle | checking | available | up_to_date | installing | error
+  const [available, setAvailable] = React.useState(null);
+  const [error, setError] = React.useState(null);
+
+  React.useEffect(() => {
+    invoke('app_info').then((info) => setVersion(info.version)).catch(() => {});
+  }, []);
+
+  // Reset transient state when the channel toggles — what was "available"
+  // on stable is meaningless on dev, and vice versa.
+  React.useEffect(() => {
+    setStatus('idle');
+    setAvailable(null);
+    setError(null);
+  }, [channel, devEndpoint]);
+
+  const endpointOverride = channel === 'dev' ? (devEndpoint || null) : null;
+
+  const check = React.useCallback(async () => {
+    setStatus('checking');
+    setError(null);
+    try {
+      const u = await invoke('updater_check', { endpoint: endpointOverride });
+      if (u) {
+        setAvailable(u);
+        setStatus('available');
+      } else {
+        setAvailable(null);
+        setStatus('up_to_date');
+      }
+    } catch (e) {
+      setError(String(e));
+      setStatus('error');
+    }
+  }, [endpointOverride]);
+
+  const install = React.useCallback(async () => {
+    setStatus('installing');
+    setError(null);
+    try {
+      await invoke('updater_install', { endpoint: endpointOverride });
+      const { relaunch } = await import('@tauri-apps/plugin-process');
+      await relaunch();
+    } catch (e) {
+      setError(String(e));
+      setStatus('error');
+    }
+  }, [endpointOverride]);
+
+  return (
+    <div className="prefs-updates">
+      <div className="prefs-row">
+        <div className="prefs-row-k mono">{t('updates.current_version')}</div>
+        <div className="prefs-row-v mono">{version}</div>
+      </div>
+      <div className="prefs-updates-actions">
+        {status !== 'available' ? (
+          <button className="btn btn-ghost" onClick={check} disabled={status === 'checking' || status === 'installing'}>
+            {status === 'checking' ? t('updates.checking') : t('updates.check')}
+          </button>
+        ) : (
+          <button className="btn btn-ghost" onClick={install} disabled={status === 'installing'}>
+            {status === 'installing' ? t('updates.installing') : t('updates.install')}
+          </button>
+        )}
+      </div>
+      {status === 'up_to_date' && (
+        <div className="prefs-updates-status mono">{t('updates.up_to_date')}</div>
+      )}
+      {status === 'available' && available && (
+        <div className="prefs-updates-status mono">{t('updates.available', { version: available.version })}</div>
+      )}
+      {status === 'installing' && (
+        <div className="prefs-updates-status mono">{t('updates.installing')}</div>
+      )}
+      {status === 'error' && error && (
+        <div className="prefs-updates-status prefs-updates-status--err mono">{t('updates.failed', { error })}</div>
+      )}
+      {channel === 'dev' && (
+        <div className="prefs-updates-hint mono small">{t('updates.dev_endpoint_hint')}</div>
+      )}
     </div>
   );
 }
