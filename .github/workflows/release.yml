@@ -114,6 +114,15 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Updater minisign key — separate from the Apple cert.
+          # When set, tauri-action signs each platform's
+          # .app.tar.gz / .AppImage.tar.gz / .nsis.zip and uploads
+          # the `.sig` alongside the artifact, then appends the
+          # platform entry to a shared `latest.json` on the release.
+          # The pubkey baked into tauri.conf.json verifies these
+          # sigs on the client.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           # Only attach to a release when triggered by a tag push.
           tagName: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
