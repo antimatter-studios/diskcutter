@@ -6,6 +6,20 @@ follows [Calendar Versioning](https://calver.org/) (`YYYY.M.D`).
 
 ## [Unreleased]
 
+### Added
+
+- **In-app updater.** Tauri's updater plugin is now wired with a
+  minisign-signed update channel. Tagged releases on GitHub produce
+  signed installers (`.dmg`/`.deb`/`.rpm`/`.AppImage`/`.exe`) plus
+  smaller signed update tarballs that the app fetches from
+  `releases/latest/download/latest.json`. A new UPDATES section in
+  Prefs lets you check + install with one click.
+- **Dev update channel.** Toggle Prefs → UPDATES to `DEV` to point
+  the updater at a local manifest URL. `npm run updates:publish`
+  builds a signed updater bundle into `dev-updates/` and writes
+  `latest.json`; `npm run updates:serve` hosts the directory over
+  HTTP via a small Rust binary (no Python or external installs).
+
 ## [2026.5.18]
 
 First non-alpha release. Burn pipeline, disk enumeration, verification,

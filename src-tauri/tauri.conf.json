@@ -26,6 +26,7 @@
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": ["app", "dmg", "deb", "rpm", "appimage", "nsis"],
     "publisher": "Chris Thomas",
     "icon": [
@@ -38,6 +39,16 @@
     "macOS": {
       "signingIdentity": "Developer ID Application: Chris Thomas (43UMKXZ8P4)",
       "entitlements": "macos/entitlements.plist"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "active": true,
+      "dialog": false,
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEQ1MkNGNkE4RDREODYzMDUKUldRRlk5alVxUFlzMVdQU1IvOW1UdXlRcG1NYXNYK2JBR3V2OFdhQlR2U2pZTXBJaDFhaGR3aWYK",
+      "endpoints": [
+        "https://github.com/antimatter-studios/diskcutter/releases/latest/download/latest.json"
+      ]
     }
   }
 }

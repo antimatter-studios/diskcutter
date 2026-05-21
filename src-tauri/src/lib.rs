@@ -21,6 +21,7 @@ pub mod readers;
 pub mod snapshot;
 pub mod source;
 pub mod sparse;
+pub mod updater;
 pub mod url_fetch;
 pub mod validate;
 pub mod writers;
@@ -47,6 +48,8 @@ use tauri::{Emitter, Manager, WindowEvent};
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .manage(CancelRegistry::default())
         .manage(ActiveBurns::default())
         .manage(ElevatedJobs::default())
@@ -119,6 +122,8 @@ pub fn run() {
             catalog::catalog_list,
             catalog::catalog_refresh,
             validate::validate_image_contents,
+            updater::updater_check,
+            updater::updater_install,
         ])
         .setup(|app| {
             // Persistence is load-bearing: burn_jobs is the source of truth

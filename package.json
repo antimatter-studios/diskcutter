@@ -17,11 +17,15 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml",
-    "test:all": "npm run test && npm run test:rust"
+    "test:all": "npm run test && npm run test:rust",
+    "updates:publish": "./scripts/publish-dev-update.sh",
+    "updates:serve": "cargo run --release --manifest-path scripts/serve-dev-updates/Cargo.toml -- ./dev-updates 17780"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",
     "@tauri-apps/plugin-dialog": "^2.7.1",
+    "@tauri-apps/plugin-process": "^2.3.1",
+    "@tauri-apps/plugin-updater": "^2.10.1",
     "i18next": "^26.1.0",
     "i18next-browser-languagedetector": "^8.2.1",
     "react": "^18.3.1",
