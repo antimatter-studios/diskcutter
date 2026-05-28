@@ -1,6 +1,6 @@
 [package]
 name = "diskcutter"
-version = "2026.5.28"
+version = "2026.5.28-0"
 description = "Brutalist disk-image writer"
 authors = ["Chris Thomas <chris.alex.thomas@gmail.com>"]
 edition = "2021"
