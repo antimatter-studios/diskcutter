@@ -46,6 +46,7 @@
       "active": true,
       "dialog": false,
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEQ1MkNGNkE4RDREODYzMDUKUldRRlk5alVxUFlzMVdQU1IvOW1UdXlRcG1NYXNYK2JBR3V2OFdhQlR2U2pZTXBJaDFhaGR3aWYK",
+      "dangerousInsecureTransportProtocol": true,
       "endpoints": [
         "https://github.com/antimatter-studios/diskcutter/releases/latest/download/latest.json"
       ]
