@@ -15,6 +15,14 @@ follows [Calendar Versioning](https://calver.org/) (`YYYY.M.D`).
   pipeline runs elevated (osascript) when reading from `/dev/` just like
   the write path.
 
+### Fixed
+
+- `updates:serve` no longer panics when `dev-updates/` directory does not
+  exist — it creates the directory and continues.
+- `updates:publish` no longer commits version bumps for dev iterations;
+  dev builds are versioned `YYYY.M.D-N` and `tauri.conf.json` is
+  patched temporarily during the build only.
+
 ## [2026.5.28]
 
 ### Added
@@ -316,6 +324,7 @@ mocks.
 - Vitest 2 + happy-dom + React Testing Library for the frontend
   test suite.
 
-[Unreleased]: https://github.com/antimatter-studios/diskcutter/compare/2026.5.18...HEAD
+[Unreleased]: https://github.com/antimatter-studios/diskcutter/compare/2026.5.28...HEAD
+[2026.5.28]: https://github.com/antimatter-studios/diskcutter/compare/2026.5.18...2026.5.28
 [2026.5.18]: https://github.com/antimatter-studios/diskcutter/releases/tag/2026.5.18
 [2026.5.12]: https://github.com/antimatter-studios/diskcutter/releases/tag/2026.5.12

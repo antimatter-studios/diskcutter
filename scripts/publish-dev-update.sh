@@ -4,6 +4,12 @@
 # and emit the latest.json manifest the in-app updater fetches when the
 # DEV channel is selected.
 #
+# Dev versioning: reads the base version from package.json (e.g. "2026.5.29"),
+# strips any existing pre-release suffix, then appends "-N" where N
+# auto-increments based on the counter in the existing dev-updates/latest.json.
+# tauri.conf.json is patched to the dev version for the build only and
+# restored afterwards — no version commits needed for dev iterations.
+#
 # Requires TAURI_SIGNING_PRIVATE_KEY_PATH (or _KEY) pointing at the same
 # minisign key whose pubkey is embedded in tauri.conf.json. The signed
 # .app.tar.gz produced by `tauri build --bundles updater` carries an
@@ -23,15 +29,40 @@ if [[ ! -f "$KEY_PATH" ]]; then
   echo "       npx tauri signer generate -w \"$KEY_PATH\" --ci" >&2
   exit 1
 fi
-# Tauri CLI reads TAURI_SIGNING_PRIVATE_KEY as the literal key contents
-# (the _PATH variant is documented but currently ignored by the bundler).
-# Inline the file contents so the bundler picks up the key.
 export TAURI_SIGNING_PRIVATE_KEY="$(cat "$KEY_PATH")"
 export TAURI_SIGNING_PRIVATE_KEY_PASSWORD="${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}"
 
-VERSION="$(node -p "require('./package.json').version")"
+# Compute dev version: strip any existing pre-release suffix, then append -N.
+BASE_VERSION="$(node -p "require('./package.json').version")"
+BASE_CLEAN="${BASE_VERSION%%-*}"
 
-# Detect arch suffix Tauri uses in its target id.
+COUNTER=1
+mkdir -p "$DEV_DIR"
+if [[ -f "$DEV_DIR/latest.json" ]]; then
+  EXISTING_VER="$(node -p "try{require('$DEV_DIR/latest.json').version}catch(e){''}" 2>/dev/null || echo "")"
+  if [[ "$EXISTING_VER" == "${BASE_CLEAN}-"* ]]; then
+    PREV="${EXISTING_VER##*-}"
+    [[ "$PREV" =~ ^[0-9]+$ ]] && COUNTER=$(( PREV + 1 ))
+  fi
+fi
+
+VERSION="${BASE_CLEAN}-${COUNTER}"
+
+# Temporarily patch tauri.conf.json with the dev version; restore on exit.
+TAURI_CONF="src-tauri/tauri.conf.json"
+TAURI_CONF_BAK="${TAURI_CONF}.publish-bak"
+cp "$TAURI_CONF" "$TAURI_CONF_BAK"
+cleanup() { mv "$TAURI_CONF_BAK" "$TAURI_CONF"; }
+trap cleanup EXIT
+
+node -e "
+  const fs = require('fs');
+  const c = JSON.parse(fs.readFileSync('$TAURI_CONF'));
+  c.version = '$VERSION';
+  fs.writeFileSync('$TAURI_CONF', JSON.stringify(c, null, 2) + '\n');
+"
+
+# Detect arch/platform suffix Tauri uses in its target id.
 case "$(uname -m)" in
   arm64|aarch64) ARCH="aarch64" ;;
   x86_64)        ARCH="x86_64" ;;
@@ -50,21 +81,18 @@ npx tauri build --bundles app
 
 BUNDLE_ROOT="$REPO_ROOT/src-tauri/target/release/bundle"
 TARBALL=""
-SIGFILE=""
 case "$PLATFORM" in
   darwin-*)
     TARBALL="$(ls "$BUNDLE_ROOT/macos/"*.app.tar.gz 2>/dev/null | head -1 || true)"
-    SIGFILE="${TARBALL}.sig"
     ;;
   linux-*)
     TARBALL="$(ls "$BUNDLE_ROOT/appimage/"*.AppImage.tar.gz 2>/dev/null | head -1 || true)"
-    SIGFILE="${TARBALL}.sig"
     ;;
   windows-*)
     TARBALL="$(ls "$BUNDLE_ROOT/nsis/"*-setup.nsis.zip 2>/dev/null | head -1 || true)"
-    SIGFILE="${TARBALL}.sig"
     ;;
 esac
+SIGFILE="${TARBALL}.sig"
 
 if [[ -z "$TARBALL" || ! -f "$TARBALL" ]]; then
   echo "error: no updater artifact found under $BUNDLE_ROOT" >&2
@@ -75,10 +103,6 @@ if [[ ! -f "$SIGFILE" ]]; then
   exit 1
 fi
 
-mkdir -p "$DEV_DIR"
-# Normalize the artifact name — Tauri's default bundle name has spaces
-# ("Disk Cutter.app.tar.gz") which produce ugly URLs the updater client
-# tolerates but no one wants to look at.
 case "$PLATFORM" in
   darwin-*)  EXT="app.tar.gz" ;;
   linux-*)   EXT="AppImage.tar.gz" ;;
@@ -90,10 +114,6 @@ cp -f "$SIGFILE" "$DEV_DIR/$TARBALL_BASENAME.sig"
 SIG="$(cat "$SIGFILE")"
 PUBDATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
-# Tauri tolerates the same artifact URL relative to whatever host serves
-# the manifest; we always emit an absolute URL so a different consumer
-# (e.g. another machine on the LAN) can still resolve it via the same
-# server. Keep PORT in sync with serve-dev-updates default.
 PORT="${PORT:-17780}"
 HOST="${HOST:-localhost}"
 URL="http://${HOST}:${PORT}/${TARBALL_BASENAME}"
