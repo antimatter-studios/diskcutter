@@ -115,10 +115,145 @@ function fromArr(state, arr) {
   return { jobs: newJobs, order: newOrder };
 }
 
+let captureCounter = 0;
+function nextCaptureId() {
+  captureCounter += 1;
+  return `capture-${Date.now()}-${captureCounter}`;
+}
+
 export const useQueueStore = create((set, get) => ({
   jobs: {},
   order: [],
   entries: [],
+
+  // -- capture rows --------------------------------------------------
+  captureRows: {},
+  captureOrder: [],
+
+  addCaptureRow() {
+    const id = nextCaptureId();
+    set((s) => ({
+      captureRows: {
+        ...s.captureRows,
+        [id]: { id, source: null, outputPath: null, state: 'configuring', progress: 0, speed: '—', bytesRead: 0, bytesTotal: 0, errorCode: null, errorMessage: null, sourceHash: null },
+      },
+      captureOrder: [...s.captureOrder, id],
+    }));
+    return id;
+  },
+
+  setCaptureSource(id, disk) {
+    set((s) => {
+      const row = s.captureRows[id];
+      if (!row) return {};
+      return { captureRows: { ...s.captureRows, [id]: { ...row, source: disk } } };
+    });
+  },
+
+  setCaptureOutput(id, path) {
+    set((s) => {
+      const row = s.captureRows[id];
+      if (!row) return {};
+      return { captureRows: { ...s.captureRows, [id]: { ...row, outputPath: path } } };
+    });
+  },
+
+  async startCapture(id) {
+    const row = get().captureRows[id];
+    if (!row || !row.source || !row.outputPath) return;
+    set((s) => ({
+      captureRows: {
+        ...s.captureRows,
+        [id]: { ...s.captureRows[id], state: 'reading', progress: 0, errorCode: null, errorMessage: null },
+      },
+    }));
+    try {
+      await invoke('start_capture', {
+        captureId: id,
+        sourceDevice: row.source.device,
+        outputPath: row.outputPath,
+        totalBytes: row.source.bytes || 0,
+      });
+    } catch (e) {
+      set((s) => ({
+        captureRows: {
+          ...s.captureRows,
+          [id]: { ...s.captureRows[id], state: 'error', errorMessage: String(e) },
+        },
+      }));
+    }
+  },
+
+  cancelCapture(id) {
+    invoke('cancel_capture', { captureId: id }).catch((e) => console.error('cancel_capture failed', e));
+  },
+
+  removeCaptureRow(id) {
+    set((s) => {
+      const rows = { ...s.captureRows };
+      delete rows[id];
+      return { captureRows: rows, captureOrder: s.captureOrder.filter((x) => x !== id) };
+    });
+  },
+
+  applyCaptureUpdate(payload) {
+    const id = payload.capture_id;
+    set((s) => {
+      const row = s.captureRows[id];
+      if (!row) return {};
+      return {
+        captureRows: {
+          ...s.captureRows,
+          [id]: {
+            ...row,
+            state: 'reading',
+            progress: payload.progress || 0,
+            speed: payload.speed || '—',
+            bytesRead: payload.bytes_done || 0,
+            bytesTotal: payload.bytes_total || 0,
+          },
+        },
+      };
+    });
+  },
+
+  applyCaptureComplete(payload) {
+    const id = payload.capture_id;
+    set((s) => {
+      const row = s.captureRows[id];
+      if (!row) return {};
+      return {
+        captureRows: {
+          ...s.captureRows,
+          [id]: {
+            ...row,
+            state: 'success',
+            progress: 100,
+            bytesRead: payload.bytes_read || 0,
+            sourceHash: payload.source_hash || null,
+            outputPath: payload.output_path || row.outputPath,
+            elapsedMs: payload.elapsed_ms || 0,
+            avgReadBps: payload.avg_read_bps || 0,
+          },
+        },
+      };
+    });
+  },
+
+  applyCaptureFailure(payload) {
+    const id = payload.capture_id;
+    set((s) => {
+      const row = s.captureRows[id];
+      if (!row) return {};
+      return {
+        captureRows: {
+          ...s.captureRows,
+          [id]: { ...row, state: 'error', errorCode: payload.error_code, errorMessage: payload.error_message },
+        },
+      };
+    });
+  },
+
 
   // -- mutations driven by user actions -----------------------------
 
@@ -559,6 +694,7 @@ export const selectJobs = (s) => orderedJobs(s);
 export const selectEntries = (s) => s.entries;
 export const selectJob = (id) => (s) => s.jobs[id];
 export const selectJobIndex = (id) => (s) => s.order.indexOf(id);
+export const selectCaptureRows = (s) => s.captureOrder.map((id) => s.captureRows[id]).filter(Boolean);
 
 // Listener wiring: call once at mount, return the unsubscribe. The
 // FDA reaction (open System Settings, set fdaBlocked) and the
@@ -634,6 +770,21 @@ export function attachQueueListeners({ onFdaError, onImageInvalid } = {}) {
     if (!mounted) return;
     const p = e.payload;
     useQueueStore.getState().applyScanProgress(p.job_id, null);
+  }).then((u) => subs.push(u));
+
+  listen('disk-cutter://capture-update', (e) => {
+    if (!mounted) return;
+    useQueueStore.getState().applyCaptureUpdate(e.payload);
+  }).then((u) => subs.push(u));
+
+  listen('disk-cutter://capture-complete', (e) => {
+    if (!mounted) return;
+    useQueueStore.getState().applyCaptureComplete(e.payload);
+  }).then((u) => subs.push(u));
+
+  listen('disk-cutter://capture-error', (e) => {
+    if (!mounted) return;
+    useQueueStore.getState().applyCaptureFailure(e.payload);
   }).then((u) => subs.push(u));
 
   return () => {

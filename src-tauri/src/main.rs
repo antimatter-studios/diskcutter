@@ -7,6 +7,9 @@ fn main() {
             "--helper-burn" => {
                 std::process::exit(diskcutter_lib::run_helper(&args[2..]));
             }
+            "--helper-capture" => {
+                std::process::exit(diskcutter_lib::run_helper_capture(&args[2..]));
+            }
             // Recognised CLI subcommands route to the headless runner.
             // Anything else (or no arg) falls through to the GUI so a
             // double-click still launches normally.

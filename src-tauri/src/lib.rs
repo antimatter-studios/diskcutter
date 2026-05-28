@@ -1,4 +1,5 @@
 pub mod backup;
+pub mod capture;
 pub mod catalog;
 pub mod cli;
 pub mod commands;
@@ -28,7 +29,7 @@ pub mod writers;
 pub mod xz_footer;
 
 pub use cli::run_cli;
-pub use helper::run_helper;
+pub use helper::{run_helper, run_helper_capture};
 
 use db::{
     burn_jobs_active, burn_jobs_clear, burn_jobs_list, burn_log_source_for_job, burn_logs_for_job,
@@ -36,9 +37,10 @@ use db::{
     image_scan_lookup, remove_burn_job, requeue_burn, set_burn_target, ui_trace, Db,
 };
 use disks::{
-    abort_and_quit, app_info, cancel_write, check_fda, find_orphan_helpers, has_active_burns,
-    inspect_image, kill_orphan_helpers, list_disks, open_fda_settings, reattach_running_helpers,
-    start_write, verify_image, ActiveBurns, CancelRegistry, ElevatedJobs,
+    abort_and_quit, app_info, cancel_capture, cancel_write, check_fda, find_orphan_helpers,
+    has_active_burns, inspect_image, kill_orphan_helpers, list_disks, open_fda_settings,
+    reattach_running_helpers, start_capture, start_write, verify_image, ActiveBurns,
+    CancelRegistry, ElevatedJobs,
 };
 use std::sync::Mutex;
 use tauri::menu::{AboutMetadataBuilder, MenuBuilder, SubmenuBuilder};
@@ -124,6 +126,8 @@ pub fn run() {
             validate::validate_image_contents,
             updater::updater_check,
             updater::updater_install,
+            start_capture,
+            cancel_capture,
         ])
         .setup(|app| {
             // Persistence is load-bearing: burn_jobs is the source of truth

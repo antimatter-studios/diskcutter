@@ -574,6 +574,166 @@ fn pick_device_io(
     }
 }
 
+// ─────────────────────────────────────────────────────────────────
+// Capture helper  (disk → image file, elevated read path)
+// ─────────────────────────────────────────────────────────────────
+
+#[derive(Serialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+enum CaptureMessage {
+    Progress {
+        bytes_done: u64,
+        bytes_total: u64,
+        bytes_per_sec: u64,
+    },
+    Complete {
+        bytes_read: u64,
+        source_hash: String,
+        elapsed_ms: u64,
+        avg_read_bps: u64,
+    },
+    Error {
+        error_code: String,
+        error_message: String,
+    },
+}
+
+pub fn run_helper_capture(args: &[String]) -> i32 {
+    #[cfg(target_os = "macos")]
+    unsafe {
+        extern "C" {
+            fn setiopolicy_np(iotype: i32, scope: i32, policy: i32) -> i32;
+        }
+        let _ = setiopolicy_np(0, 0, 1);
+    }
+
+    let source = match arg_value(args, "--source=") {
+        Some(v) => v,
+        None => return 2,
+    };
+    let output = match arg_value(args, "--output=") {
+        Some(v) => v,
+        None => return 2,
+    };
+    let progress_path = match arg_value(args, "--progress=") {
+        Some(v) => v,
+        None => return 2,
+    };
+    let capture_id = arg_value(args, "--capture-id=").unwrap_or_default();
+    let compression = arg_value(args, "--compression=")
+        .as_deref()
+        .map(crate::capture::Compression::parse)
+        .unwrap_or(crate::capture::Compression::None);
+    let total_bytes: u64 = arg_value(args, "--total-bytes=")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+
+    let file = match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&progress_path)
+    {
+        Ok(f) => f,
+        Err(_) => return 2,
+    };
+    let writer = Arc::new(Mutex::new(BufWriter::new(file)));
+    let emit = |msg: &CaptureMessage| {
+        if let Ok(mut w) = writer.lock() {
+            if let Ok(s) = serde_json::to_string(msg) {
+                let _ = writeln!(w, "{}", s);
+                let _ = w.flush();
+            }
+        }
+    };
+
+    // Claim the disk via DiskArbitration so mounts are blocked during read.
+    #[cfg(target_os = "macos")]
+    let _disk_claim = if source.starts_with("/dev/") {
+        match crate::disk_arb::DiskClaim::for_dev(&source) {
+            Ok(c) => Some(c),
+            Err(e) => {
+                emit(&CaptureMessage::Error {
+                    error_code: "ETARGET".into(),
+                    error_message: format!("DA claim failed: {e}"),
+                });
+                return 1;
+            }
+        }
+    } else {
+        None
+    };
+
+    let device_io: Box<dyn DeviceIo> = pick_device_io(&source, None, 4, 16);
+    let mut dev_reader = match device_io.open_read(Path::new(&source)) {
+        Ok(r) => r,
+        Err(e) => {
+            let code = if e.raw_os_error() == Some(1)
+                || e.kind() == std::io::ErrorKind::PermissionDenied
+            {
+                "ENEEDS_FDA"
+            } else {
+                "ETARGET"
+            };
+            emit(&CaptureMessage::Error {
+                error_code: code.into(),
+                error_message: format!("open source: {e}"),
+            });
+            return 1;
+        }
+    };
+
+    let cancel = Arc::new(AtomicBool::new(false));
+    if !capture_id.is_empty() {
+        let sentinel = crate::disks::capture_sentinel_path(&capture_id);
+        let cancel_watch = Arc::clone(&cancel);
+        std::thread::spawn(move || loop {
+            if sentinel.exists() {
+                cancel_watch.store(true, Ordering::Relaxed);
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        });
+    }
+
+    let result = crate::capture::capture(
+        &mut *dev_reader,
+        total_bytes,
+        Path::new(&output),
+        compression,
+        &cancel,
+        |p| {
+            emit(&CaptureMessage::Progress {
+                bytes_done: p.bytes_done,
+                bytes_total: p.bytes_total,
+                bytes_per_sec: p.bytes_per_sec,
+            });
+        },
+    );
+
+    match result {
+        Ok(r) => {
+            emit(&CaptureMessage::Complete {
+                bytes_read: r.bytes_read,
+                source_hash: r.source_hash,
+                elapsed_ms: r.elapsed.as_millis() as u64,
+                avg_read_bps: r.avg_bytes_per_sec,
+            });
+            0
+        }
+        Err(e) => {
+            let code = match e {
+                crate::capture::CaptureError::Cancelled => "ECANCELLED",
+                crate::capture::CaptureError::Io(_) => "EIO",
+            };
+            emit(&CaptureMessage::Error {
+                error_code: code.into(),
+                error_message: format!("{e}"),
+            });
+            1
+        }
+    }
+}
+
 fn arg_value(args: &[String], prefix: &str) -> Option<String> {
     args.iter()
         .find_map(|a| a.strip_prefix(prefix).map(|s| s.to_string()))

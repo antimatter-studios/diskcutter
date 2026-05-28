@@ -1651,6 +1651,361 @@ fn tail_helper_reattach(app: AppHandle, job_id: i64, path: String, pid: u32) {
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Capture (disk → image file)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Cancel sentinels for in-flight capture jobs (mirrors cancel_sentinel_path).
+pub fn capture_sentinel_path(capture_id: &str) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("disk-cutter-capture-cancel-{capture_id}.flag"))
+}
+
+#[derive(Serialize, Clone)]
+pub struct CaptureUpdate {
+    pub capture_id: String,
+    pub state: String,
+    pub bytes_done: u64,
+    pub bytes_total: u64,
+    pub progress: f32,
+    pub speed: String,
+}
+
+#[derive(Serialize, Clone)]
+pub struct CaptureComplete {
+    pub capture_id: String,
+    pub bytes_read: u64,
+    pub source_hash: String,
+    pub output_path: String,
+    pub elapsed_ms: u64,
+    pub avg_read_bps: u64,
+}
+
+#[derive(Serialize, Clone)]
+pub struct CaptureFailure {
+    pub capture_id: String,
+    pub error_code: String,
+    pub error_message: String,
+}
+
+fn make_capture_update(
+    capture_id: &str,
+    bytes_done: u64,
+    bytes_total: u64,
+    bytes_per_sec: u64,
+) -> CaptureUpdate {
+    let progress = if bytes_total > 0 {
+        (bytes_done as f64 / bytes_total as f64 * 100.0) as f32
+    } else {
+        0.0
+    };
+    CaptureUpdate {
+        capture_id: capture_id.to_string(),
+        state: "reading".to_string(),
+        bytes_done,
+        bytes_total,
+        progress,
+        speed: format_speed(bytes_per_sec),
+    }
+}
+
+#[tauri::command]
+pub fn start_capture(
+    app: AppHandle,
+    capture_id: String,
+    source_device: String,
+    output_path: String,
+    total_bytes: u64,
+) -> Result<(), String> {
+    let needs_elevation = source_device.starts_with("/dev/") && !is_privileged();
+
+    if needs_elevation {
+        if !fda_granted() {
+            let msg = "Full Disk Access not granted to Disk Cutter".to_string();
+            let _ = app.emit(
+                "disk-cutter://capture-error",
+                CaptureFailure {
+                    capture_id,
+                    error_code: "ENEEDS_FDA".into(),
+                    error_message: msg,
+                },
+            );
+            return Ok(());
+        }
+        return spawn_elevated_capture(app, capture_id, source_device, output_path, total_bytes);
+    }
+
+    // In-process path (used when app is already privileged or source is a file).
+    let cancel = Arc::new(AtomicBool::new(false));
+    let capture_id_clone = capture_id.clone();
+    let app_clone = app.clone();
+    std::thread::spawn(move || {
+        let source = source_device.clone();
+        let device_io: Box<dyn crate::writers::DeviceIo> = if source.starts_with("/dev/") {
+            #[cfg(unix)]
+            {
+                Box::new(RawDeviceIo)
+            }
+            #[cfg(not(unix))]
+            {
+                Box::new(PlainFileDeviceIo)
+            }
+        } else {
+            Box::new(PlainFileDeviceIo)
+        };
+
+        let mut reader = match device_io.open_read(std::path::Path::new(&source)) {
+            Ok(r) => r,
+            Err(e) => {
+                let _ = app_clone.emit(
+                    "disk-cutter://capture-error",
+                    CaptureFailure {
+                        capture_id: capture_id_clone,
+                        error_code: "ETARGET".into(),
+                        error_message: format!("open source: {e}"),
+                    },
+                );
+                return;
+            }
+        };
+
+        let id = capture_id_clone.clone();
+        let app2 = app_clone.clone();
+        let result = crate::capture::capture(
+            &mut *reader,
+            total_bytes,
+            std::path::Path::new(&output_path),
+            crate::capture::Compression::None,
+            &cancel,
+            move |p| {
+                let _ = app2.emit(
+                    "disk-cutter://capture-update",
+                    make_capture_update(&id, p.bytes_done, p.bytes_total, p.bytes_per_sec),
+                );
+            },
+        );
+
+        let _ = std::fs::remove_file(capture_sentinel_path(&capture_id_clone));
+        match result {
+            Ok(r) => {
+                let _ = app_clone.emit(
+                    "disk-cutter://capture-complete",
+                    CaptureComplete {
+                        capture_id: capture_id_clone,
+                        bytes_read: r.bytes_read,
+                        source_hash: r.source_hash,
+                        output_path,
+                        elapsed_ms: r.elapsed.as_millis() as u64,
+                        avg_read_bps: r.avg_bytes_per_sec,
+                    },
+                );
+            }
+            Err(e) => {
+                let code = match e {
+                    crate::capture::CaptureError::Cancelled => "ECANCELLED",
+                    crate::capture::CaptureError::Io(_) => "EIO",
+                };
+                let _ = app_clone.emit(
+                    "disk-cutter://capture-error",
+                    CaptureFailure {
+                        capture_id: capture_id_clone,
+                        error_code: code.into(),
+                        error_message: format!("{e}"),
+                    },
+                );
+            }
+        }
+    });
+
+    Ok(())
+}
+
+#[tauri::command]
+pub fn cancel_capture(capture_id: String) -> Result<(), String> {
+    let _ = std::fs::write(capture_sentinel_path(&capture_id), b"1");
+    Ok(())
+}
+
+fn spawn_elevated_capture(
+    app: AppHandle,
+    capture_id: String,
+    source_device: String,
+    output_path: String,
+    total_bytes: u64,
+) -> Result<(), String> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let progress_path = format!("/tmp/disk-cutter-capture-{capture_id}.jsonl");
+    let _ = std::fs::remove_file(capture_sentinel_path(&capture_id));
+
+    let cmd = format!(
+        "'{}' --helper-capture --source='{}' --output='{}' --capture-id='{}' --progress='{}' --total-bytes={} --compression='none'",
+        sq(&exe.to_string_lossy()),
+        sq(&source_device),
+        sq(&output_path),
+        sq(&capture_id),
+        sq(&progress_path),
+        total_bytes,
+    );
+    let prompt = "Disk Cutter needs administrator access to read the disk image directly from the device you selected.";
+    let script = build_osascript_script(&cmd, prompt);
+
+    let child = std::process::Command::new("osascript")
+        .args(["-e", &script])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("osascript spawn failed: {e}"))?;
+
+    let app_for_tail = app.clone();
+    let capture_id_for_tail = capture_id.clone();
+    let progress_for_tail = progress_path.clone();
+    std::thread::spawn(move || {
+        tail_capture_helper(
+            app_for_tail,
+            capture_id_for_tail,
+            output_path,
+            progress_for_tail,
+            child,
+        );
+    });
+
+    Ok(())
+}
+
+fn tail_capture_helper(
+    app: AppHandle,
+    capture_id: String,
+    output_path: String,
+    path: String,
+    mut child: std::process::Child,
+) {
+    use std::io::{BufRead, BufReader, Seek, SeekFrom};
+
+    // Wait for the progress file to appear (osascript + helper startup).
+    let file_path = std::path::Path::new(&path);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        if file_path.exists() {
+            break;
+        }
+        if std::time::Instant::now() > deadline {
+            let _ = app.emit(
+                "disk-cutter://capture-error",
+                CaptureFailure {
+                    capture_id: capture_id.clone(),
+                    error_code: "ETIMEOUT".into(),
+                    error_message: "helper did not start".into(),
+                },
+            );
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+
+    let file = match std::fs::File::open(&path) {
+        Ok(f) => f,
+        Err(e) => {
+            let _ = app.emit(
+                "disk-cutter://capture-error",
+                CaptureFailure {
+                    capture_id,
+                    error_code: "EIO".into(),
+                    error_message: format!("open progress file: {e}"),
+                },
+            );
+            return;
+        }
+    };
+    let mut reader = BufReader::new(file);
+    // Seek to end so we don't replay stale content from prior runs.
+    let _ = reader.seek(SeekFrom::End(0));
+
+    loop {
+        let mut line = String::new();
+        match reader.read_line(&mut line) {
+            Ok(0) => {
+                // No new data — check if child exited.
+                match child.try_wait() {
+                    Ok(Some(_)) => break,
+                    _ => {
+                        std::thread::sleep(std::time::Duration::from_millis(250));
+                        continue;
+                    }
+                }
+            }
+            Ok(_) => {
+                let line = line.trim();
+                if line.is_empty() {
+                    continue;
+                }
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
+                    match v["kind"].as_str() {
+                        Some("progress") => {
+                            let bytes_done = v["bytes_done"].as_u64().unwrap_or(0);
+                            let bytes_total = v["bytes_total"].as_u64().unwrap_or(0);
+                            let bps = v["bytes_per_sec"].as_u64().unwrap_or(0);
+                            let _ = app.emit(
+                                "disk-cutter://capture-update",
+                                make_capture_update(&capture_id, bytes_done, bytes_total, bps),
+                            );
+                        }
+                        Some("complete") => {
+                            let _ = app.emit(
+                                "disk-cutter://capture-complete",
+                                CaptureComplete {
+                                    capture_id: capture_id.clone(),
+                                    bytes_read: v["bytes_read"].as_u64().unwrap_or(0),
+                                    source_hash: v["source_hash"]
+                                        .as_str()
+                                        .unwrap_or("")
+                                        .to_string(),
+                                    output_path: output_path.clone(),
+                                    elapsed_ms: v["elapsed_ms"].as_u64().unwrap_or(0),
+                                    avg_read_bps: v["avg_read_bps"].as_u64().unwrap_or(0),
+                                },
+                            );
+                            let _ = child.wait();
+                            let _ = std::fs::remove_file(capture_sentinel_path(&capture_id));
+                            return;
+                        }
+                        Some("error") => {
+                            let _ = app.emit(
+                                "disk-cutter://capture-error",
+                                CaptureFailure {
+                                    capture_id: capture_id.clone(),
+                                    error_code: v["error_code"]
+                                        .as_str()
+                                        .unwrap_or("EIO")
+                                        .to_string(),
+                                    error_message: v["error_message"]
+                                        .as_str()
+                                        .unwrap_or("")
+                                        .to_string(),
+                                },
+                            );
+                            let _ = child.wait();
+                            let _ = std::fs::remove_file(capture_sentinel_path(&capture_id));
+                            return;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            Err(_) => break,
+        }
+    }
+
+    // Child exited without a terminal event — emit error.
+    let _ = app.emit(
+        "disk-cutter://capture-error",
+        CaptureFailure {
+            capture_id: capture_id.clone(),
+            error_code: "EIO".into(),
+            error_message: "helper exited unexpectedly".into(),
+        },
+    );
+    let _ = std::fs::remove_file(capture_sentinel_path(&capture_id));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
