@@ -6,6 +6,8 @@ follows [Calendar Versioning](https://calver.org/) (`YYYY.M.D`).
 
 ## [Unreleased]
 
+## [2026.5.28]
+
 ### Added
 
 - **In-app updater.** Tauri's updater plugin is now wired with a

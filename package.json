@@ -1,7 +1,7 @@
 {
   "name": "diskcutter",
   "private": true,
-  "version": "2026.5.18",
+  "version": "2026.5.28",
   "type": "module",
   "author": "Chris Thomas <chris.alex.thomas@gmail.com>",
   "license": "MIT",
