@@ -32,21 +32,25 @@ fi
 export TAURI_SIGNING_PRIVATE_KEY="$(cat "$KEY_PATH")"
 export TAURI_SIGNING_PRIVATE_KEY_PASSWORD="${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}"
 
-# Compute dev version: strip any existing pre-release suffix, then append -N.
+# Compute dev version: strip any existing .N build counter, then append .N.
 BASE_VERSION="$(node -p "require('./package.json').version")"
-BASE_CLEAN="${BASE_VERSION%%-*}"
+# Strip trailing .N if already a dev build (e.g. "2026.5.28.3" -> "2026.5.28")
+BASE_CLEAN="$(echo "$BASE_VERSION" | sed 's/\.[0-9]*$//')"
+# Restore the real base if stripping went too far (3 components is the floor)
+COMPONENT_COUNT="$(echo "$BASE_CLEAN" | tr -cd '.' | wc -c | tr -d ' ')"
+[[ "$COMPONENT_COUNT" -lt 2 ]] && BASE_CLEAN="$BASE_VERSION"
 
 COUNTER=1
 mkdir -p "$DEV_DIR"
 if [[ -f "$DEV_DIR/latest.json" ]]; then
   EXISTING_VER="$(node -p "try{require('$DEV_DIR/latest.json').version}catch(e){''}" 2>/dev/null || echo "")"
-  if [[ "$EXISTING_VER" == "${BASE_CLEAN}-"* ]]; then
-    PREV="${EXISTING_VER##*-}"
+  if [[ "$EXISTING_VER" == "${BASE_CLEAN}."* ]]; then
+    PREV="${EXISTING_VER##*.}"
     [[ "$PREV" =~ ^[0-9]+$ ]] && COUNTER=$(( PREV + 1 ))
   fi
 fi
 
-VERSION="${BASE_CLEAN}-${COUNTER}"
+VERSION="${BASE_CLEAN}.${COUNTER}"
 
 # Temporarily patch tauri.conf.json with the dev version; restore on exit.
 TAURI_CONF="src-tauri/tauri.conf.json"
