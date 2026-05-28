@@ -19,9 +19,14 @@ fn main() {
         .parse()
         .expect("port must be a u16");
 
-    let root = PathBuf::from(&root)
+    let root_path = PathBuf::from(&root);
+    if !root_path.exists() {
+        fs::create_dir_all(&root_path).unwrap_or_else(|e| panic!("could not create {root}: {e}"));
+        eprintln!("created {root} (no updates published yet)");
+    }
+    let root = root_path
         .canonicalize()
-        .unwrap_or_else(|_| panic!("dir not found: {root}"));
+        .unwrap_or_else(|e| panic!("could not resolve {root}: {e}"));
 
     let addr = format!("0.0.0.0:{port}");
     let server = Server::http(&addr).expect("bind failed");
