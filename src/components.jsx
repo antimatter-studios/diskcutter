@@ -166,7 +166,7 @@ function DangerBanner({ confirmed, onConfirm, jobs, accent }) {
 /* ─────────── Toolbar ─────────── */
 
 function Toolbar({
-  onAdd, onAddFromUrl, onBrowseCatalog, onClearDone,
+  onAdd, onAddFromUrl, onBrowseCatalog, onClearDone, onMakeImage,
   jobs, accent,
   copies, onChangeCopies,
 }) {
@@ -180,6 +180,11 @@ function Toolbar({
         <button className="btn btn-ghost" onClick={onAdd}>
           <span className="btn-bracket">[</span> {t('toolbar.add_image')} <span className="btn-bracket">]</span>
         </button>
+        {onMakeImage && (
+          <button className="btn btn-ghost" onClick={onMakeImage}>
+            <span className="btn-bracket">[</span> {t('toolbar.make_image', { defaultValue: 'MAKE IMAGE' })} <span className="btn-bracket">]</span>
+          </button>
+        )}
         {onChangeCopies && (
           <div className="toolbar-copies mono small" aria-label={t('toolbar.copies_label')}>
             <span className="copies-label">{t('toolbar.copies_label')}</span>
@@ -1990,9 +1995,205 @@ function CatalogSheet({ open, onPick, onClose, accent }) {
   );
 }
 
+/* ─────────── Capture Row ─────────── */
+
+// A single "make image from disk" row in the queue.
+// Source disk is on the left (like the image column in a burn row),
+// output file path on the right, progress in the middle.
+function CaptureRow({ row, disks, disksLoading, accent, onSelectSource, onChooseOutput, onStart, onCancel, onRemove }) {
+  const { t } = useTranslation();
+  const isConfiguring = row.state === 'configuring';
+  const isReading = row.state === 'reading';
+  const isSuccess = row.state === 'success';
+  const isError = row.state === 'error';
+  const canStart = isConfiguring && row.source && row.outputPath;
+  const [sourcePickerOpen, setSourcePickerOpen] = useState(false);
+
+  return (
+    <div className="job" style={{ '--accent': accent }}>
+      <div className="job-head">
+        <div className="job-chev" style={{ opacity: 0.3 }}>⬚</div>
+        <div className="job-num mono small" style={{ color: accent, opacity: 0.8 }}>IMG</div>
+
+        {/* Source disk */}
+        <div className="job-image">
+          {row.source ? (
+            <button
+              className="pick-target pick-target--reassign"
+              onClick={() => isConfiguring && setSourcePickerOpen(true)}
+              title={isConfiguring ? 'Change source disk' : undefined}
+              style={!isConfiguring ? { cursor: 'default' } : undefined}
+            >
+              <div className="job-image-name">{row.source.model || row.source.device}</div>
+              <div className="job-image-meta">
+                <span className="mono small">{row.source.device}</span>
+                {row.source.capacity && <><span className="dot">·</span><span>{row.source.capacity}</span></>}
+                {row.source.bus && <><span className="dot">·</span><span className="mono small">{row.source.bus}</span></>}
+              </div>
+            </button>
+          ) : (
+            <button className="pick-target" onClick={() => setSourcePickerOpen(true)}>
+              [ Select source disk ]
+            </button>
+          )}
+        </div>
+
+        <div className="job-arrow">→</div>
+
+        {/* Output file */}
+        <div className="job-target">
+          {row.outputPath ? (
+            <button
+              className="pick-target pick-target--reassign"
+              onClick={() => isConfiguring && onChooseOutput(row.id)}
+              title={isConfiguring ? 'Change output file' : undefined}
+              style={!isConfiguring ? { cursor: 'default' } : undefined}
+            >
+              <div className="job-target-name mono small">{row.outputPath.split('/').pop()}</div>
+              <div className="job-target-meta mono small" style={{ opacity: 0.6 }}>{row.outputPath}</div>
+            </button>
+          ) : (
+            <button className="pick-target" onClick={() => onChooseOutput(row.id)}>
+              [ Choose output file ]
+            </button>
+          )}
+        </div>
+
+        {/* State glyph */}
+        <div className="job-state">
+          {isReading && <span className="state-glyph state--writing" style={{ color: accent }}>▶</span>}
+          {isSuccess && <span className="state-glyph state--ok">✓</span>}
+          {isError && <span className="state-glyph state--err">✕</span>}
+          {isConfiguring && <span className="state-glyph" style={{ opacity: 0.3 }}>○</span>}
+        </div>
+
+        {/* Progress / status */}
+        <div className="job-progress">
+          {isReading && (
+            <div className="progress-wrap">
+              <div className="progress-bar-track">
+                <div className="progress-bar-fill" style={{ width: `${row.progress || 0}%`, background: accent }} />
+              </div>
+              <div className="progress-meta mono small">
+                <span>{Math.round(row.progress || 0)}%</span>
+                <span className="dot">·</span>
+                <span>{row.speed || '—'}</span>
+              </div>
+            </div>
+          )}
+          {isSuccess && (
+            <div className="status-tag" style={{ color: accent }}>
+              {formatBytesCompact(row.bytesRead)} saved
+            </div>
+          )}
+          {isError && (
+            <div className="status-tag status-tag--danger">{row.errorCode || 'error'}</div>
+          )}
+          {isConfiguring && !canStart && (
+            <div className="status-tag faint">configure above to start</div>
+          )}
+        </div>
+
+        {/* Actions */}
+        <div className="job-actions">
+          {isConfiguring && (
+            <button
+              className={"btn btn-burn" + (canStart ? "" : " is-disabled")}
+              style={canStart ? { background: accent, borderColor: accent } : undefined}
+              onClick={canStart ? () => onStart(row.id) : undefined}
+              disabled={!canStart}
+            >
+              [ Read ]
+            </button>
+          )}
+          {isReading && (
+            <button className="btn btn-cancel" onClick={() => onCancel(row.id)}>
+              [ Stop ]
+            </button>
+          )}
+          {(isSuccess || isError || isConfiguring) && (
+            <button className="btn btn-ghost" onClick={() => onRemove(row.id)} title="Remove this row">
+              ✕
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Source disk picker sheet */}
+      {sourcePickerOpen && (
+        <CaptureDiskPickerSheet
+          open={sourcePickerOpen}
+          disks={disks}
+          loading={disksLoading}
+          accent={accent}
+          onPick={(disk) => { onSelectSource(row.id, disk); setSourcePickerOpen(false); }}
+          onClose={() => setSourcePickerOpen(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+// Lightweight source-picker sheet for capture rows — shows all disks
+// (removable and internal), no size filter.
+function CaptureDiskPickerSheet({ open, disks, loading, accent, onPick, onClose }) {
+  const { t } = useTranslation();
+  if (!open) return null;
+  return (
+    <div className="sheet-backdrop" onClick={onClose}>
+      <div className="sheet" onClick={(e) => e.stopPropagation()}>
+        <div className="sheet-head">
+          <div>
+            <div className="sheet-eyebrow">CAPTURE SOURCE</div>
+            <div className="sheet-title">Select disk to image</div>
+          </div>
+          <button className="sheet-x" onClick={onClose}>✕</button>
+        </div>
+        <div className="disk-list">
+          {loading && disks.length === 0 ? (
+            <div className="disk-loading mono small">Loading disks…</div>
+          ) : disks.length === 0 ? (
+            <div className="disk-loading mono small">No disks found</div>
+          ) : disks.map((d) => {
+            const isInternal = d.bus.includes('NVME') || d.flags?.includes('INTERNAL');
+            return (
+              <button
+                key={d.device}
+                className={"disk" + (isInternal ? " disk--system" : "")}
+                onClick={() => onPick(d)}
+              >
+                <div className="disk-icon">{isInternal ? '⊞' : '⬚'}</div>
+                <div className="disk-body">
+                  <div className="disk-row1">
+                    <span className="disk-model">{d.model}</span>
+                    {isInternal && <span className="disk-flag" style={{ color: accent }}>INTERNAL</span>}
+                  </div>
+                  <div className="disk-row2 mono small">
+                    <span>{d.device}</span>
+                    <span className="dot">·</span>
+                    <span>{d.capacity}</span>
+                    <span className="dot">·</span>
+                    <span>{d.bus}</span>
+                    <span className="dot">·</span>
+                    <span>{d.partitions}</span>
+                  </div>
+                </div>
+                <div className="disk-pick">[ {t('picker.pick')} ]</div>
+              </button>
+            );
+          })}
+        </div>
+        <div className="sheet-foot mono small">
+          <button className="picker-link" onClick={onClose}>{t('picker.cancel')}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export {
   WindowChrome, Sidebar, DangerBanner, Toolbar,
   JobRow, EntryRow, DiskPickerSheet, LogsView,
   PrefsView, PREFS_DEFAULTS,
-  CatalogSheet,
+  CatalogSheet, CaptureRow,
 };

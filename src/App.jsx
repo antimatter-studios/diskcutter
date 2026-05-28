@@ -3,10 +3,10 @@ import { Trans, useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { open } from '@tauri-apps/plugin-dialog';
+import { open, save } from '@tauri-apps/plugin-dialog';
 import {
   WindowChrome, Sidebar, DangerBanner, Toolbar,
-  JobRow, EntryRow, DiskPickerSheet, LogsView, PrefsView, PREFS_DEFAULTS, CatalogSheet,
+  JobRow, EntryRow, DiskPickerSheet, LogsView, PrefsView, PREFS_DEFAULTS, CatalogSheet, CaptureRow,
 } from './components.jsx';
 import i18n from './i18n/index.js';
 import {
@@ -16,7 +16,7 @@ import {
 import { useShallow } from 'zustand/react/shallow';
 import { formatBytes } from './format.js';
 import {
-  useQueueStore, attachQueueListeners, selectJobs, selectEntries, startValidation, startScan, clearScanCache,
+  useQueueStore, attachQueueListeners, selectJobs, selectEntries, selectCaptureRows, startValidation, startScan, clearScanCache,
 } from './store/queue.js';
 import {
   computeScene, sceneToTitleKey, computeSessionStats,
@@ -66,6 +66,7 @@ function App() {
   // Object.is check — Maximum-update-depth crash.
   const jobs = useQueueStore(useShallow(selectJobs));
   const entries = useQueueStore(selectEntries);
+  const captureRows = useQueueStore(useShallow(selectCaptureRows));
   // User-chosen "copies" count for the next ADD IMAGE; sticks across adds so
   // the operator can queue several different images at the same copy count
   // without re-setting the stepper each time.
@@ -645,6 +646,51 @@ function App() {
     }
   }, [pushToast]);
 
+  // Capture row handlers
+  const addCaptureRow = useCallback(() => {
+    useQueueStore.getState().addCaptureRow();
+    // Pre-fetch disk list for the source picker that will open immediately.
+    setDisks([]);
+    setDisksLoading(true);
+    invoke('list_disks')
+      .then((d) => setDisks(d || []))
+      .catch((e) => console.error('list_disks failed for capture', e))
+      .finally(() => setDisksLoading(false));
+  }, []);
+
+  const handleCaptureSelectSource = useCallback((id, disk) => {
+    useQueueStore.getState().setCaptureSource(id, disk);
+  }, []);
+
+  const handleCaptureChooseOutput = useCallback(async (id) => {
+    const row = useQueueStore.getState().captureRows[id];
+    const suggestedName = row?.source
+      ? `${(row.source.model || row.source.device).replace(/[^a-z0-9_-]/gi, '_')}.img`
+      : 'disk.img';
+    try {
+      const path = await save({
+        title: 'Save disk image',
+        defaultPath: suggestedName,
+        filters: [{ name: 'Disk Image', extensions: ['img'] }],
+      });
+      if (path) useQueueStore.getState().setCaptureOutput(id, path);
+    } catch (e) {
+      console.error('save dialog failed', e);
+    }
+  }, []);
+
+  const handleCaptureStart = useCallback((id) => {
+    useQueueStore.getState().startCapture(id);
+  }, []);
+
+  const handleCaptureCancel = useCallback((id) => {
+    useQueueStore.getState().cancelCapture(id);
+  }, []);
+
+  const handleCaptureRemove = useCallback((id) => {
+    useQueueStore.getState().removeCaptureRow(id);
+  }, []);
+
   const accent = tw.accent;
   const platform = tw.platform;
   // Density is now a prefs-driven setting. Fall back to the default until the
@@ -686,6 +732,13 @@ function App() {
     onAdd: addImage,
     onAddFromUrl: addImageFromUrl,
     onBrowseCatalog: () => setCatalogOpen(true),
+    onMakeImage: addCaptureRow,
+    captureRows, disks, disksLoading,
+    onCaptureSelectSource: handleCaptureSelectSource,
+    onCaptureChooseOutput: handleCaptureChooseOutput,
+    onCaptureStart: handleCaptureStart,
+    onCaptureCancel: handleCaptureCancel,
+    onCaptureRemove: handleCaptureRemove,
     onBurn: burnJob,
     onCancelJob: cancelJob,
     onRetry: retryJob,
@@ -775,6 +828,7 @@ function AppBody({
   entries, nextCopies, onChangeNextCopies, onDispatchFromEntry,
   onAdd, onAddFromUrl, onBrowseCatalog, onBurn, onCancelJob,
   onRetry, onResetJob, onResetAllErrors, onRefreshJob, onClearDone, onFlashAnother, onCopyText, onRemoveJob,
+  captureRows, disks, disksLoading, onMakeImage, onCaptureSelectSource, onCaptureChooseOutput, onCaptureStart, onCaptureCancel, onCaptureRemove,
 }) {
   const { t } = useTranslation();
   const writingCount = jobs.filter((j) => j.state === 'writing').length;
@@ -888,6 +942,7 @@ function AppBody({
             onAddFromUrl={onAddFromUrl}
             onBrowseCatalog={onBrowseCatalog}
             onClearDone={onClearDone}
+            onMakeImage={onMakeImage}
             jobs={jobs}
             accent={accent}
             copies={nextCopies}
@@ -901,7 +956,7 @@ function AppBody({
           </div>
         ) : onLogs ? (
           <LogsView accent={accent} />
-        ) : visibleJobs.length === 0 && entries.length === 0 ? (
+        ) : visibleJobs.length === 0 && entries.length === 0 && (!captureRows || captureRows.length === 0) ? (
           <EmptyState accent={accent} />
         ) : (
           <div className="queue">
@@ -928,6 +983,20 @@ function AppBody({
               <span>{t('queue.head.progress')}</span>
               <span />
             </div>
+            {captureRows && captureRows.map((row) => (
+              <CaptureRow
+                key={row.id}
+                row={row}
+                disks={disks}
+                disksLoading={disksLoading}
+                accent={accent}
+                onSelectSource={onCaptureSelectSource}
+                onChooseOutput={onCaptureChooseOutput}
+                onStart={onCaptureStart}
+                onCancel={onCaptureCancel}
+                onRemove={onCaptureRemove}
+              />
+            ))}
             {visibleJobs.map((job) => (
               <JobRow
                 key={job.id}

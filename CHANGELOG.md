@@ -6,6 +6,15 @@ follows [Calendar Versioning](https://calver.org/) (`YYYY.M.D`).
 
 ## [Unreleased]
 
+### Added
+
+- **MAKE IMAGE.** New queue row type for imaging a disk to a file. Click
+  `[ MAKE IMAGE ]` in the toolbar, pick a source disk, choose an output
+  `.img` path via the system file picker, then click `[ Read ]`. Progress,
+  speed, and cancel are shown inline alongside burn jobs. The capture
+  pipeline runs elevated (osascript) when reading from `/dev/` just like
+  the write path.
+
 ## [2026.5.28]
 
 ### Added
