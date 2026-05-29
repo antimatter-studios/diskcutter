@@ -1351,20 +1351,22 @@ function PrefsView({ values, onChange }) {
 function UpdatesPanel({ channel, devEndpoint }) {
   const { t } = useTranslation();
   const [version, setVersion] = React.useState('—');
-  const [status, setStatus] = React.useState('idle'); // idle | checking | available | up_to_date | installing | error
-  const [available, setAvailable] = React.useState(null);
+  const [status, setStatus] = React.useState('idle'); // idle | checking | up_to_date | error
+  const [updates, setUpdates] = React.useState([]);
+  const [selected, setSelected] = React.useState(null);
+  const [installing, setInstalling] = React.useState(false);
   const [error, setError] = React.useState(null);
 
   React.useEffect(() => {
     invoke('app_info').then((info) => setVersion(info.version)).catch(() => {});
   }, []);
 
-  // Reset transient state when the channel toggles — what was "available"
-  // on stable is meaningless on dev, and vice versa.
   React.useEffect(() => {
     setStatus('idle');
-    setAvailable(null);
+    setUpdates([]);
+    setSelected(null);
     setError(null);
+    setInstalling(false);
   }, [channel, devEndpoint]);
 
   const endpointOverride = channel === 'dev' ? (devEndpoint || null) : null;
@@ -1372,13 +1374,14 @@ function UpdatesPanel({ channel, devEndpoint }) {
   const check = React.useCallback(async () => {
     setStatus('checking');
     setError(null);
+    setSelected(null);
     try {
       const u = await invoke('updater_check', { endpoint: endpointOverride });
       if (u) {
-        setAvailable(u);
-        setStatus('available');
+        setUpdates([u]);
+        setStatus('idle');
       } else {
-        setAvailable(null);
+        setUpdates([]);
         setStatus('up_to_date');
       }
     } catch (e) {
@@ -1387,8 +1390,10 @@ function UpdatesPanel({ channel, devEndpoint }) {
     }
   }, [endpointOverride]);
 
+  React.useEffect(() => { check(); }, [check]);
+
   const install = React.useCallback(async () => {
-    setStatus('installing');
+    setInstalling(true);
     setError(null);
     try {
       await invoke('updater_install', { endpoint: endpointOverride });
@@ -1396,7 +1401,7 @@ function UpdatesPanel({ channel, devEndpoint }) {
       await relaunch();
     } catch (e) {
       setError(String(e));
-      setStatus('error');
+      setInstalling(false);
     }
   }, [endpointOverride]);
 
@@ -1404,30 +1409,52 @@ function UpdatesPanel({ channel, devEndpoint }) {
     <div className="prefs-updates">
       <div className="prefs-row">
         <div className="prefs-row-k mono">{t('updates.current_version')}</div>
-        <div className="prefs-row-v mono">{version}</div>
-      </div>
-      <div className="prefs-updates-actions">
-        {status !== 'available' ? (
-          <button className="btn btn-ghost" onClick={check} disabled={status === 'checking' || status === 'installing'}>
+        <div className="prefs-row-v" style={{ gap: '12px' }}>
+          <span className="mono">{version}</span>
+          <button className="btn btn-danger" onClick={check} disabled={status === 'checking' || installing}>
             {status === 'checking' ? t('updates.checking') : t('updates.check')}
           </button>
-        ) : (
-          <button className="btn btn-ghost" onClick={install} disabled={status === 'installing'}>
-            {status === 'installing' ? t('updates.installing') : t('updates.install')}
-          </button>
-        )}
+        </div>
       </div>
       {status === 'up_to_date' && (
         <div className="prefs-updates-status mono">{t('updates.up_to_date')}</div>
       )}
-      {status === 'available' && available && (
-        <div className="prefs-updates-status mono">{t('updates.available', { version: available.version })}</div>
-      )}
-      {status === 'installing' && (
-        <div className="prefs-updates-status mono">{t('updates.installing')}</div>
-      )}
       {status === 'error' && error && (
         <div className="prefs-updates-status prefs-updates-status--err mono">{t('updates.failed', { error })}</div>
+      )}
+      {installing && (
+        <div className="prefs-updates-status mono">{t('updates.installing')}</div>
+      )}
+      {updates.length > 0 && (
+        <div className="prefs-updates-table">
+          {selected && (
+            <div className="prefs-updates-warning">
+              <p className="mono">{t('updates.warning_replacing', { current: version, selected: selected.version })}</p>
+              <p className="mono">{t('updates.warning_corrupt')}</p>
+              <p className="mono">{t('updates.warning_migrations')}</p>
+              <div className="prefs-updates-warning-actions">
+                <button className="btn btn-ghost" onClick={() => setSelected(null)} disabled={installing}>
+                  {t('updates.cancel')}
+                </button>
+                <button className="btn btn-danger" onClick={install} disabled={installing}>
+                  {t('updates.install_confirm')}
+                </button>
+              </div>
+            </div>
+          )}
+          {updates.map((u) => (
+            <div key={u.version} className="prefs-updates-row">
+              <span className="mono">{u.version}</span>
+              <button
+                className="btn btn-ghost"
+                onClick={() => setSelected(u)}
+                disabled={installing || selected?.version === u.version}
+              >
+                {t('updates.select')}
+              </button>
+            </div>
+          ))}
+        </div>
       )}
       {channel === 'dev' && (
         <div className="prefs-updates-hint mono small">{t('updates.dev_endpoint_hint')}</div>

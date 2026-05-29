@@ -28,6 +28,10 @@ pub async fn updater_check(
     app: AppHandle,
     endpoint: Option<String>,
 ) -> Result<Option<UpdateInfo>, String> {
+    eprintln!(
+        "[updater_check] endpoint={endpoint:?} current={}",
+        app.package_info().version
+    );
     let updater = build(&app, endpoint)?;
     let update = updater.check().await.map_err(|e| e.to_string())?;
     Ok(update.map(|u| UpdateInfo {
