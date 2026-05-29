@@ -5,6 +5,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+struct DoneOnDrop(Arc<AtomicBool>);
+impl Drop for DoneOnDrop {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
+}
+
 use serde::Serialize;
 
 use crate::hash::HashAlgo;
@@ -287,6 +294,8 @@ pub fn run_helper(args: &[String]) -> i32 {
     };
 
     let cancel = Arc::new(AtomicBool::new(false));
+    let done = Arc::new(AtomicBool::new(false));
+    let _done_guard = DoneOnDrop(Arc::clone(&done));
     // Watch the parent-controlled sentinel file. The parent (running as the
     // invoking user) writes to `disks::cancel_sentinel_path(job_id)`; the
     // helper runs as root via osascript, so signals are not an option —
@@ -296,9 +305,13 @@ pub fn run_helper(args: &[String]) -> i32 {
     if !job_id.is_empty() {
         let sentinel = crate::disks::cancel_sentinel_path(&job_id);
         let cancel_watch = Arc::clone(&cancel);
+        let done_watch = Arc::clone(&done);
         std::thread::spawn(move || loop {
             if sentinel.exists() {
                 cancel_watch.store(true, Ordering::Relaxed);
+                return;
+            }
+            if done_watch.load(Ordering::Relaxed) {
                 return;
             }
             std::thread::sleep(Duration::from_millis(200));
@@ -683,12 +696,18 @@ pub fn run_helper_capture(args: &[String]) -> i32 {
     };
 
     let cancel = Arc::new(AtomicBool::new(false));
+    let done = Arc::new(AtomicBool::new(false));
+    let _done_guard = DoneOnDrop(Arc::clone(&done));
     if !capture_id.is_empty() {
         let sentinel = crate::disks::capture_sentinel_path(&capture_id);
         let cancel_watch = Arc::clone(&cancel);
+        let done_watch = Arc::clone(&done);
         std::thread::spawn(move || loop {
             if sentinel.exists() {
                 cancel_watch.store(true, Ordering::Relaxed);
+                return;
+            }
+            if done_watch.load(Ordering::Relaxed) {
                 return;
             }
             std::thread::sleep(Duration::from_millis(200));
