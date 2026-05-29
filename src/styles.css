@@ -1031,6 +1031,22 @@ input,select{font:inherit;color:inherit}
 }
 .prefs-updates-status--err{color:var(--hazard)}
 .prefs-updates-hint{color:var(--mute);font-size:11px;letter-spacing:.04em}
+.prefs-updates-table{
+  display:flex;flex-direction:column;gap:0;
+  border:1.5px solid var(--ink);margin-top:4px;
+}
+.prefs-updates-warning{
+  padding:12px 16px;background:rgba(255,74,23,.08);border-bottom:1.5px solid var(--ink);
+  text-align:center;display:flex;flex-direction:column;gap:6px;align-items:center;
+}
+.prefs-updates-warning p{margin:0;font-size:11.5px;letter-spacing:.04em;line-height:1.5}
+.prefs-updates-warning-actions{display:flex;gap:8px;margin-top:4px;justify-content:center}
+.prefs-updates-row{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:8px 12px;border-bottom:1px solid rgba(12,12,11,.12);
+}
+.prefs-updates-row:last-child{border-bottom:0}
+:root[data-theme="dark"] .prefs-updates-row{border-bottom-color:rgba(237,232,216,.12)}
 
 /* ─────────── Doctor (diagnostics) panel ─────────── */
 
