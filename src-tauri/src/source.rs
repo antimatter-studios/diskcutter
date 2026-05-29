@@ -63,6 +63,7 @@ pub fn probe(path: &Path) -> Option<SourceInfo> {
         Some("vmdk") => probe_vmdk(path, source_bytes),
         Some("xz") | Some("gz") | Some("gzip") | Some("bz2") | Some("bzip2") | Some("zst")
         | Some("zstd") => probe_compressed(path, ext.as_deref(), source_bytes),
+        Some("zip") => probe_zip(path, source_bytes),
         Some("iso") | Some("img") | Some("bin") | Some("raw") => {
             // Could secretly be a compressed source renamed to .iso etc.
             // — defer to magic-by-head.
@@ -135,6 +136,18 @@ pub fn open_streaming_with_log(
                 .map_err(|e| io::Error::other(format!("vmdk: {e:?}")))?;
             Box::new(BlockReadStreamer::new(r))
         }
+        Family::Zip => {
+            log.debug("source: family=zip, routing to ZipChannelReader");
+            let file = std::fs::File::open(path)?;
+            let mut archive =
+                zip::ZipArchive::new(std::io::BufReader::new(file)).map_err(io::Error::other)?;
+            let idx = crate::zip_utils::find_image_entry_index(&mut archive)
+                .ok_or_else(|| io::Error::other("no image entry in ZIP"))?;
+            Box::new(crate::zip_utils::ZipChannelReader::new(
+                path.to_path_buf(),
+                idx,
+            )?)
+        }
         Family::Streaming => {
             log.debug("source: family=streaming, routing to DiskReader (decoder chain)");
             Box::new(DiskReader::open_with_log(path, log)?)
@@ -145,13 +158,14 @@ pub fn open_streaming_with_log(
 
 /// Classify a format label back to its container family. Container
 /// labels begin with `QCOW2` / `VHD` / `VHDX` / `VMDK` (and only those —
-/// see the probe helpers). Everything else flows through the decoder
-/// chain.
+/// see the probe helpers). ZIP labels begin with `ZIP`. Everything else
+/// flows through the decoder chain.
 enum Family {
     Qcow2,
     Vhd,
     Vhdx,
     Vmdk,
+    Zip,
     Streaming,
 }
 
@@ -164,6 +178,8 @@ fn classify(label: &str) -> Family {
         Family::Vhd
     } else if label.starts_with("VMDK") {
         Family::Vmdk
+    } else if label.starts_with("ZIP") {
+        Family::Zip
     } else {
         Family::Streaming
     }
@@ -252,6 +268,23 @@ fn compressed_label_for_ext(ext: Option<&str>) -> &'static str {
         Some("zst") | Some("zstd") => "ZSTD",
         _ => "COMPRESSED",
     }
+}
+
+fn probe_zip(path: &Path, source_bytes: u64) -> Option<SourceInfo> {
+    use std::io::BufReader;
+    let file = std::fs::File::open(path).ok()?;
+    let mut archive = zip::ZipArchive::new(BufReader::new(file)).ok()?;
+    let idx = crate::zip_utils::find_image_entry_index(&mut archive)?;
+    let entry = archive.by_index(idx).ok()?;
+    let uncompressed = entry.size();
+    let name = entry.name().to_string();
+    drop(entry);
+    Some(SourceInfo {
+        path: path.to_path_buf(),
+        format_label: format!("ZIP ({})", name),
+        source_bytes,
+        uncompressed_bytes: uncompressed,
+    })
 }
 
 fn probe_by_magic(path: &Path, source_bytes: u64, ext: Option<&str>) -> Option<SourceInfo> {

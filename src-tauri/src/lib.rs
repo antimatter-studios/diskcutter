@@ -27,6 +27,7 @@ pub mod url_fetch;
 pub mod validate;
 pub mod writers;
 pub mod xz_footer;
+pub mod zip_utils;
 
 pub use cli::run_cli;
 pub use helper::{run_helper, run_helper_capture};
