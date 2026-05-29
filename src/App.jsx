@@ -347,7 +347,7 @@ function App() {
           'iso', 'img', 'bin', 'raw',
           'qcow2', 'qcow',
           'vhd', 'vhdx', 'vmdk',
-          'gz', 'xz', 'bz2', 'zst',
+          'gz', 'xz', 'bz2', 'zst', 'zip',
         ],
       }],
     });

@@ -24,6 +24,7 @@
 //! then bootability) without re-running the underlying probes.
 
 use std::cell::OnceCell;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use fs_core::{BlockRead, FileDevice};
@@ -47,6 +48,7 @@ pub enum ImageFormat {
     CompressedXz,
     CompressedBz2,
     CompressedZst,
+    CompressedZip,
 }
 
 impl ImageFormat {
@@ -61,6 +63,7 @@ impl ImageFormat {
             ImageFormat::CompressedXz => "xz",
             ImageFormat::CompressedBz2 => "bzip2",
             ImageFormat::CompressedZst => "zstd",
+            ImageFormat::CompressedZip => "zip",
         }
     }
     pub fn is_compressed(self) -> bool {
@@ -70,6 +73,7 @@ impl ImageFormat {
                 | ImageFormat::CompressedXz
                 | ImageFormat::CompressedBz2
                 | ImageFormat::CompressedZst
+                | ImageFormat::CompressedZip
         )
     }
 }
@@ -220,6 +224,10 @@ impl DiskImage {
             Some("zst") | Some("zstd") => {
                 (ImageFormat::CompressedZst, decompressed_prefix(path, log)?)
             }
+            Some("zip") => (
+                ImageFormat::CompressedZip,
+                zip_decompressed_prefix(path, log)?,
+            ),
             _ => {
                 let r = FileDevice::open(path).map_err(std::io::Error::other)?;
                 log.debug(&format!(
@@ -346,6 +354,41 @@ fn decompressed_prefix(
     }
     buf.truncate(filled);
     log.debug(&format!("scan: decompressed prefix = {} bytes", buf.len()));
+    Ok(Backend::Compressed { prefix: buf })
+}
+
+fn zip_decompressed_prefix(
+    path: &Path,
+    log: &dyn crate::joblog::JobLogger,
+) -> Result<Backend, ImageError> {
+    use std::io::BufReader;
+    let file = std::fs::File::open(path)?;
+    let mut archive = zip::ZipArchive::new(BufReader::new(file))
+        .map_err(|e| ImageError::Io(std::io::Error::other(e)))?;
+    let idx = crate::zip_utils::find_image_entry_index(&mut archive)
+        .ok_or_else(|| ImageError::Io(std::io::Error::other("no image entry in ZIP")))?;
+    log.debug(&format!("scan: zip entry index={idx}"));
+    let mut entry = archive
+        .by_index(idx)
+        .map_err(|e| ImageError::Io(std::io::Error::other(e)))?;
+    log.debug(&format!(
+        "scan: decompressing first {} bytes of zip prefix for fs sniff",
+        SNIFF_WINDOW_BYTES
+    ));
+    let mut buf = vec![0u8; SNIFF_WINDOW_BYTES];
+    let mut filled = 0usize;
+    while filled < buf.len() {
+        match entry.read(&mut buf[filled..]) {
+            Ok(0) => break,
+            Ok(n) => filled += n,
+            Err(e) => return Err(ImageError::Io(e)),
+        }
+    }
+    buf.truncate(filled);
+    log.debug(&format!(
+        "scan: zip decompressed prefix = {} bytes",
+        buf.len()
+    ));
     Ok(Backend::Compressed { prefix: buf })
 }
 
