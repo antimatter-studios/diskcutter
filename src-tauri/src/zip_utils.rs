@@ -86,7 +86,6 @@ impl Read for ZipChannelReader {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         while self.pos >= self.current.len() {
             match self.rx.recv() {
-                Ok(Ok(chunk)) if chunk.is_empty() => return Ok(0),
                 Ok(Ok(chunk)) => {
                     self.current = chunk;
                     self.pos = 0;
@@ -102,6 +101,3 @@ impl Read for ZipChannelReader {
         Ok(n)
     }
 }
-
-// ZipChannelReader is Send because it only holds mpsc::Receiver + Vec<u8>
-unsafe impl Send for ZipChannelReader {}
