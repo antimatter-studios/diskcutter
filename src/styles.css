@@ -567,6 +567,7 @@ input,select{font:inherit;color:inherit}
 .pick-target--reassign,.pick-target--readonly{
   padding:6px 12px;
   height:auto;min-height:var(--row-btn-h);
+  overflow:hidden;
   /* Override the single-line .pick-target inline-flex layout so the
      name and meta stack vertically. Otherwise both children render
      baseline-aligned on one row ("STORAGE DEVICE31.90 GB · USB"). */

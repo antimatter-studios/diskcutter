@@ -4,9 +4,9 @@
 # and emit the latest.json manifest the in-app updater fetches when the
 # DEV channel is selected.
 #
-# Dev versioning: reads the base version from package.json (e.g. "2026.5.29"),
-# strips any existing pre-release suffix, then appends "-N" where N
-# auto-increments based on the counter in the existing dev-updates/latest.json.
+# Dev versioning: sources scripts/version.sh and calls calver_next_dev()
+# which derives YYYY.M.D from the system clock and auto-increments the -N
+# suffix based on dev-updates/latest.json (resets to 1 on a new day).
 # tauri.conf.json is patched to the dev version for the build only and
 # restored afterwards — no version commits needed for dev iterations.
 #
@@ -20,6 +20,9 @@ set -euo pipefail
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 cd "$REPO_ROOT"
 
+# shellcheck source=scripts/version.sh
+source "$REPO_ROOT/scripts/version.sh"
+
 DEV_DIR="$REPO_ROOT/dev-updates"
 KEY_PATH="${TAURI_SIGNING_PRIVATE_KEY_PATH:-$HOME/.diskcutter-updater/updater.key}"
 
@@ -32,23 +35,8 @@ fi
 export TAURI_SIGNING_PRIVATE_KEY="$(cat "$KEY_PATH")"
 export TAURI_SIGNING_PRIVATE_KEY_PASSWORD="${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}"
 
-# Compute dev version: strip the -0 release suffix to get the base, then
-# append -N where N auto-increments from the existing dev-updates/latest.json.
-# Releases are tagged YYYY.M.D-0; dev builds are YYYY.M.D-1, -2, etc.
-BASE_VERSION="$(node -p "require('./package.json').version")"
-BASE_CLEAN="${BASE_VERSION%%-*}"  # e.g. "2026.5.28-0" -> "2026.5.28"
-
-COUNTER=1
 mkdir -p "$DEV_DIR"
-if [[ -f "$DEV_DIR/latest.json" ]]; then
-  EXISTING_VER="$(node -p "try{require('$DEV_DIR/latest.json').version}catch(e){''}" 2>/dev/null || echo "")"
-  if [[ "$EXISTING_VER" == "${BASE_CLEAN}-"* ]]; then
-    PREV="${EXISTING_VER##*-}"
-    [[ "$PREV" =~ ^[0-9]+$ ]] && COUNTER=$(( PREV + 1 ))
-  fi
-fi
-
-VERSION="${BASE_CLEAN}-${COUNTER}"
+VERSION="$(calver_next_dev "$DEV_DIR/latest.json")"
 
 # Temporarily patch tauri.conf.json with the dev version; restore on exit.
 TAURI_CONF="src-tauri/tauri.conf.json"
