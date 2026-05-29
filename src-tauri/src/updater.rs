@@ -34,6 +34,11 @@ fn build(
         let parsed = Url::parse(&url).map_err(|e| format!("bad endpoint URL: {e}"))?;
         b = b.endpoints(vec![parsed]).map_err(|e| e.to_string())?;
     }
+    // In debug builds the dev server uses a self-signed cert; skip validation there only.
+    #[cfg(debug_assertions)]
+    {
+        b = b.configure_client(|c| c.danger_accept_invalid_certs(true));
+    }
     b.build().map_err(|e| e.to_string())
 }
 
@@ -68,7 +73,7 @@ pub async fn updater_install(app: AppHandle, endpoint: Option<String>) -> Result
 }
 
 /// Fetch updates.json and return up to 10 dev-channel entries (newest first).
-/// `endpoint` is the full URL to latest.json; updates.json is derived from it.
+/// Self-signed certs are accepted — dev server runs locally over HTTPS without a trusted CA.
 #[tauri::command]
 pub async fn updater_fetch_updates(endpoint: String) -> Result<Vec<UpdateEntry>, String> {
     let base = endpoint
@@ -77,19 +82,21 @@ pub async fn updater_fetch_updates(endpoint: String) -> Result<Vec<UpdateEntry>,
         .unwrap_or(endpoint.clone());
     let url = format!("{base}/updates.json");
 
-    let entries =
-        tauri::async_runtime::spawn_blocking(move || -> Result<Vec<UpdateEntry>, String> {
-            let body = ureq::get(&url)
-                .call()
-                .map_err(|e| format!("updates fetch failed: {e}"))?
-                .into_string()
-                .map_err(|e| e.to_string())?;
-            let manifest: UpdatesManifest =
-                serde_json::from_str(&body).map_err(|e| format!("updates parse failed: {e}"))?;
-            Ok(manifest.dev.into_iter().take(10).collect())
-        })
-        .await
-        .map_err(|e| e.to_string())??;
+    let mut client_builder = reqwest::Client::builder();
+    #[cfg(debug_assertions)]
+    {
+        client_builder = client_builder.danger_accept_invalid_certs(true);
+    }
+    let client = client_builder.build().map_err(|e| e.to_string())?;
 
-    Ok(entries)
+    let manifest: UpdatesManifest = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("updates fetch failed: {e}"))?
+        .json()
+        .await
+        .map_err(|e| format!("updates parse failed: {e}"))?;
+
+    Ok(manifest.dev.into_iter().take(10).collect())
 }

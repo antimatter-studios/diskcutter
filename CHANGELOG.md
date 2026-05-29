@@ -31,10 +31,10 @@ follows [Calendar Versioning](https://calver.org/) (`YYYY.M.D`).
   row is labelled "← installed, you are here". Install targets a
   per-version endpoint so downgrades work correctly.
 - `updates:serve` now runs Caddy in Docker over HTTPS (`https://localhost:17780`),
-  replacing the plain-HTTP Rust mini-server. On first run the script
-  installs Caddy's local CA into the macOS system keychain (one sudo
-  prompt). The `dangerousInsecureTransportProtocol` flag is removed from
-  `tauri.conf.json`.
+  replacing the plain-HTTP Rust mini-server. No CA installation needed — the
+  app accepts the self-signed cert in debug builds only via
+  `#[cfg(debug_assertions)]`; release builds always require a valid cert.
+  `dangerousInsecureTransportProtocol` is removed from `tauri.conf.json`.
 
 ## [2026.5.28]
 
