@@ -1736,9 +1736,26 @@ pub fn start_capture(
 
     // In-process path (used when app is already privileged or source is a file).
     let cancel = Arc::new(AtomicBool::new(false));
+    let done = Arc::new(AtomicBool::new(false));
     let capture_id_clone = capture_id.clone();
     let app_clone = app.clone();
     std::thread::spawn(move || {
+        // Translate sentinel file writes from cancel_capture into the in-process cancel flag.
+        {
+            let sentinel = capture_sentinel_path(&capture_id_clone);
+            let cancel_watch = Arc::clone(&cancel);
+            let done_watch = Arc::clone(&done);
+            std::thread::spawn(move || loop {
+                if sentinel.exists() {
+                    cancel_watch.store(true, Ordering::Release);
+                    return;
+                }
+                if done_watch.load(Ordering::Acquire) {
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(200));
+            });
+        }
         let source = source_device.clone();
         let device_io: Box<dyn crate::writers::DeviceIo> = if source.starts_with("/dev/") {
             #[cfg(unix)]
@@ -1764,6 +1781,7 @@ pub fn start_capture(
                         error_message: format!("open source: {e}"),
                     },
                 );
+                done.store(true, Ordering::Release);
                 return;
             }
         };
@@ -1784,6 +1802,7 @@ pub fn start_capture(
             },
         );
 
+        done.store(true, Ordering::Release);
         let _ = std::fs::remove_file(capture_sentinel_path(&capture_id_clone));
         match result {
             Ok(r) => {
