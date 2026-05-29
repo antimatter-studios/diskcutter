@@ -22,7 +22,7 @@ cd "$REPO_ROOT"
 source "$REPO_ROOT/scripts/version.sh"
 
 PORT="${PORT:-17780}"
-HOST="${HOST:-127.0.0.1}"
+HOST="${HOST:-localhost}"
 SERVER="https://${HOST}:${PORT}"
 
 KEY_PATH="${TAURI_SIGNING_PRIVATE_KEY_PATH:-$HOME/.diskcutter-updater/updater.key}"
