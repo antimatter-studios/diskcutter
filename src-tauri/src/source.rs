@@ -310,6 +310,9 @@ fn probe_by_magic(path: &Path, source_bytes: u64, ext: Option<&str>) -> Option<S
     if magic::is_zstd(&head) {
         return probe_compressed(path, Some("zst"), source_bytes);
     }
+    if magic::is_zip(&head) {
+        return probe_zip(path, source_bytes);
+    }
     let tail = magic::read_tail(path, 512);
     if magic::is_vhd_footer(&tail) {
         return probe_vhd(path, source_bytes);

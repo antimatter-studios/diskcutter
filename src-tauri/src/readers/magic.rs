@@ -89,6 +89,10 @@ pub(crate) fn is_zstd(head: &[u8]) -> bool {
     head.starts_with(&[0x28, 0xB5, 0x2F, 0xFD])
 }
 
+pub(crate) fn is_zip(head: &[u8]) -> bool {
+    head.starts_with(&[0x50, 0x4B, 0x03, 0x04])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
