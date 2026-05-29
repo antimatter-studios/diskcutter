@@ -701,12 +701,24 @@ mod tests {
             e.finish().unwrap()
         };
         let zst_bytes = zstd::encode_all(&image[..], 0).unwrap();
+        let zip_bytes = {
+            use std::io::Write;
+            let mut buf = std::io::Cursor::new(Vec::new());
+            let mut zw = zip::ZipWriter::new(&mut buf);
+            let opts = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Deflated);
+            zw.start_file("disk.img", opts).unwrap();
+            zw.write_all(&image).unwrap();
+            zw.finish().unwrap();
+            buf.into_inner()
+        };
 
-        let cases: [(&str, &[u8], ImageFormat); 4] = [
+        let cases: [(&str, &[u8], ImageFormat); 5] = [
             ("disk.img.gz", &gz_bytes, ImageFormat::CompressedGz),
             ("disk.img.xz", &xz_bytes, ImageFormat::CompressedXz),
             ("disk.img.bz2", &bz2_bytes, ImageFormat::CompressedBz2),
             ("disk.img.zst", &zst_bytes, ImageFormat::CompressedZst),
+            ("disk.img.zip", &zip_bytes, ImageFormat::CompressedZip),
         ];
 
         for (name, body, expected_format) in cases {
