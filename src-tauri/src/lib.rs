@@ -126,6 +126,7 @@ pub fn run() {
             validate::validate_image_contents,
             updater::updater_check,
             updater::updater_install,
+            updater::updater_fetch_updates,
             start_capture,
             cancel_capture,
         ])
