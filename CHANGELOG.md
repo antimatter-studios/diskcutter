@@ -26,6 +26,10 @@ follows [Calendar Versioning](https://calver.org/) (`YYYY.M.D`).
   maintains a consolidated `updates.json` manifest (keyed by channel)
   alongside the existing `latest.json`. A legacy `catalog.json` is kept
   in sync for clients on `<=2026.5.29-3`.
+- Dev-channel Updates panel now lists all available dev builds (up to 10,
+  newest first). The currently-installed version is greyed out and its
+  row is labelled "← installed, you are here". Install targets a
+  per-version endpoint so downgrades work correctly.
 
 ## [2026.5.28]
 

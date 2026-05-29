@@ -1280,7 +1280,7 @@ const PREFS_SECTIONS = [
           { value: 'stable', labelKey: 'prefs.update_channel.stable' },
           { value: 'dev',    labelKey: 'prefs.update_channel.dev' },
         ] },
-      { key: 'update.dev_endpoint', type: 'text', placeholder: 'http://localhost:17780/latest.json' },
+      { key: 'update.dev_endpoint', type: 'text', placeholder: 'http://localhost:17780/updates.json' },
     ],
   },
   {
@@ -1309,7 +1309,7 @@ const PREFS_DEFAULTS = {
   'catalog.url': 'https://diskcutter.app/catalog.json',
   'catalog.refresh_hours': '24',
   'update.channel': 'stable',
-  'update.dev_endpoint': 'http://localhost:17780/latest.json',
+  'update.dev_endpoint': 'http://localhost:17780/updates.json',
   'debug.logging': 'false',
 };
 
@@ -1348,6 +1348,13 @@ function PrefsView({ values, onChange }) {
   );
 }
 
+function calverGt(a, b) {
+  const parse = v => { const [date, n = '0'] = v.split('-'); const [y, m, d] = date.split('.').map(Number); return [y, m, d, Number(n)]; };
+  const pa = parse(a), pb = parse(b);
+  for (let i = 0; i < 4; i++) { if (pa[i] !== pb[i]) return pa[i] > pb[i]; }
+  return false;
+}
+
 function UpdatesPanel({ channel, devEndpoint }) {
   const { t } = useTranslation();
   const [version, setVersion] = React.useState('—');
@@ -1357,8 +1364,10 @@ function UpdatesPanel({ channel, devEndpoint }) {
   const [installing, setInstalling] = React.useState(false);
   const [error, setError] = React.useState(null);
 
+  const [versionLoaded, setVersionLoaded] = React.useState(false);
+
   React.useEffect(() => {
-    invoke('app_info').then((info) => setVersion(info.version)).catch(() => {});
+    invoke('app_info').then((info) => { setVersion(info.version); setVersionLoaded(true); }).catch(() => { setVersionLoaded(true); });
   }, []);
 
   React.useEffect(() => {
@@ -1376,34 +1385,45 @@ function UpdatesPanel({ channel, devEndpoint }) {
     setError(null);
     setSelected(null);
     try {
-      const u = await invoke('updater_check', { endpoint: endpointOverride });
-      if (u) {
-        setUpdates([u]);
-        setStatus('idle');
+      if (channel === 'dev' && endpointOverride) {
+        const entries = await invoke('updater_fetch_updates', { endpoint: endpointOverride });
+        setUpdates(entries.slice(0, 10));
+        setStatus(entries.length > 0 ? 'idle' : 'up_to_date');
       } else {
-        setUpdates([]);
-        setStatus('up_to_date');
+        const u = await invoke('updater_check', { endpoint: endpointOverride });
+        if (u) {
+          setUpdates([u]);
+          setStatus('idle');
+        } else {
+          setUpdates([]);
+          setStatus('up_to_date');
+        }
       }
     } catch (e) {
       setError(String(e));
       setStatus('error');
     }
-  }, [endpointOverride]);
+  }, [channel, endpointOverride]);
 
-  React.useEffect(() => { check(); }, [check]);
+  React.useEffect(() => { if (versionLoaded) check(); }, [check, versionLoaded]);
+
+  const versionEndpoint = React.useMemo(() => {
+    if (!selected || channel !== 'dev' || !endpointOverride) return endpointOverride;
+    return endpointOverride.replace(/\/[^/]*$/, `/${selected.version}.json`);
+  }, [selected, channel, endpointOverride]);
 
   const install = React.useCallback(async () => {
     setInstalling(true);
     setError(null);
     try {
-      await invoke('updater_install', { endpoint: endpointOverride });
+      await invoke('updater_install', { endpoint: versionEndpoint });
       const { relaunch } = await import('@tauri-apps/plugin-process');
       await relaunch();
     } catch (e) {
       setError(String(e));
       setInstalling(false);
     }
-  }, [endpointOverride]);
+  }, [versionEndpoint]);
 
   return (
     <div className="prefs-updates">
@@ -1442,18 +1462,23 @@ function UpdatesPanel({ channel, devEndpoint }) {
               </div>
             </div>
           )}
-          {updates.map((u) => (
-            <div key={u.version} className="prefs-updates-row">
-              <span className="mono">{u.version}</span>
-              <button
-                className="btn btn-ghost"
-                onClick={() => setSelected(u)}
-                disabled={installing || selected?.version === u.version}
-              >
-                {t('updates.select')}
-              </button>
-            </div>
-          ))}
+          {updates.map((u) => {
+            const isCurrent = u.version === version;
+            return (
+              <div key={u.version} className="prefs-updates-row">
+                <span className="mono" style={isCurrent ? { opacity: 0.45 } : {}}>
+                  {u.version}{isCurrent ? ' ← installed, you are here' : ''}
+                </span>
+                <button
+                  className="btn btn-ghost"
+                  onClick={() => setSelected(u)}
+                  disabled={installing || selected?.version === u.version || isCurrent}
+                >
+                  {t('updates.select')}
+                </button>
+              </div>
+            );
+          })}
         </div>
       )}
       {channel === 'dev' && (
