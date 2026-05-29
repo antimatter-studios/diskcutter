@@ -8,7 +8,7 @@ use std::time::Duration;
 struct DoneOnDrop(Arc<AtomicBool>);
 impl Drop for DoneOnDrop {
     fn drop(&mut self) {
-        self.0.store(true, Ordering::Relaxed);
+        self.0.store(true, Ordering::Release);
     }
 }
 
@@ -311,7 +311,7 @@ pub fn run_helper(args: &[String]) -> i32 {
                 cancel_watch.store(true, Ordering::Relaxed);
                 return;
             }
-            if done_watch.load(Ordering::Relaxed) {
+            if done_watch.load(Ordering::Acquire) {
                 return;
             }
             std::thread::sleep(Duration::from_millis(200));
@@ -707,7 +707,7 @@ pub fn run_helper_capture(args: &[String]) -> i32 {
                 cancel_watch.store(true, Ordering::Relaxed);
                 return;
             }
-            if done_watch.load(Ordering::Relaxed) {
+            if done_watch.load(Ordering::Acquire) {
                 return;
             }
             std::thread::sleep(Duration::from_millis(200));
