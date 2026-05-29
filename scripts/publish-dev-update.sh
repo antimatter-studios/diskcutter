@@ -108,20 +108,52 @@ PORT="${PORT:-17780}"
 HOST="${HOST:-localhost}"
 URL="http://${HOST}:${PORT}/${TARBALL_BASENAME}"
 
-MANIFEST="$DEV_DIR/latest.json"
-cat > "$MANIFEST" <<EOF
+PLATFORM_JSON="{
+    \"${PLATFORM}\": {
+      \"signature\": \"${SIG}\",
+      \"url\": \"${URL}\"
+    }
+  }"
+
+# Per-version JSON — used by the updater when installing a specific version.
+VERSION_JSON="$DEV_DIR/${VERSION}.json"
+cat > "$VERSION_JSON" <<EOF
 {
   "version": "${VERSION}",
   "notes": "dev build ${VERSION}",
   "pub_date": "${PUBDATE}",
-  "platforms": {
-    "${PLATFORM}": {
-      "signature": "${SIG}",
-      "url": "${URL}"
-    }
-  }
+  "platforms": ${PLATFORM_JSON}
 }
 EOF
 
+# latest.json — always points at the newest version (Tauri updater format).
+MANIFEST="$DEV_DIR/latest.json"
+cp -f "$VERSION_JSON" "$MANIFEST"
+
+# updates.json — consolidated manifest (replaces catalog.json + latest.json in future versions).
+# Keyed by channel; each entry includes full platform data so the updater can install directly.
+UPDATES="$DEV_DIR/updates.json"
+node -e "
+  const fs = require('fs');
+  let u = { dev: [] };
+  try { u = JSON.parse(fs.readFileSync('$UPDATES', 'utf8')); } catch (_) {}
+  if (!Array.isArray(u.dev)) u.dev = [];
+  const entry = JSON.parse(fs.readFileSync('$VERSION_JSON', 'utf8'));
+  u.dev.unshift(entry);
+  fs.writeFileSync('$UPDATES', JSON.stringify(u, null, 2) + '\n');
+"
+
+# catalog.json — legacy format for clients on <=2026.5.29-3; keep in sync until retired.
+CATALOG="$DEV_DIR/catalog.json"
+node -e "
+  const fs = require('fs');
+  let u = JSON.parse(fs.readFileSync('$UPDATES', 'utf8'));
+  const cat = { versions: u.dev.map(e => ({ version: e.version, notes: e.notes, pub_date: e.pub_date })) };
+  fs.writeFileSync('$CATALOG', JSON.stringify(cat, null, 2) + '\n');
+"
+
 echo "→ wrote $MANIFEST"
+echo "→ wrote $VERSION_JSON"
+echo "→ updated $UPDATES"
+echo "→ updated $CATALOG (legacy compat)"
 echo "→ serve with: npm run updates:serve"
