@@ -1421,6 +1421,7 @@ function UpdatesPanel({ channel, devEndpoint }) {
       await relaunch();
     } catch (e) {
       setError(String(e));
+      setStatus('error');
       setInstalling(false);
     }
   }, [versionEndpoint]);
