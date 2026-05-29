@@ -1280,7 +1280,7 @@ const PREFS_SECTIONS = [
           { value: 'stable', labelKey: 'prefs.update_channel.stable' },
           { value: 'dev',    labelKey: 'prefs.update_channel.dev' },
         ] },
-      { key: 'update.dev_endpoint', type: 'text', placeholder: 'http://localhost:17780/updates.json' },
+      { key: 'update.dev_endpoint', type: 'text', placeholder: 'https://localhost:17780/updates.json' },
     ],
   },
   {
@@ -1309,7 +1309,7 @@ const PREFS_DEFAULTS = {
   'catalog.url': 'https://diskcutter.app/catalog.json',
   'catalog.refresh_hours': '24',
   'update.channel': 'stable',
-  'update.dev_endpoint': 'http://localhost:17780/updates.json',
+  'update.dev_endpoint': 'https://localhost:17780/updates.json',
   'debug.logging': 'false',
 };
 

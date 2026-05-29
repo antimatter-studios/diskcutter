@@ -19,7 +19,7 @@
     "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml",
     "test:all": "npm run test && npm run test:rust",
     "updates:publish": "./scripts/publish-dev-update.sh",
-    "updates:serve": "cargo run --release --manifest-path scripts/serve-dev-updates/Cargo.toml -- ./dev-updates 17780"
+    "updates:serve": "./scripts/serve-dev-updates.sh"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",

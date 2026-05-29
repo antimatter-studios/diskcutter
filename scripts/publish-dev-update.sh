@@ -106,7 +106,7 @@ PUBDATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 PORT="${PORT:-17780}"
 HOST="${HOST:-localhost}"
-URL="http://${HOST}:${PORT}/${TARBALL_BASENAME}"
+URL="https://${HOST}:${PORT}/${TARBALL_BASENAME}"
 
 PLATFORM_JSON="{
     \"${PLATFORM}\": {

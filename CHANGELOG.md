@@ -30,6 +30,11 @@ follows [Calendar Versioning](https://calver.org/) (`YYYY.M.D`).
   newest first). The currently-installed version is greyed out and its
   row is labelled "← installed, you are here". Install targets a
   per-version endpoint so downgrades work correctly.
+- `updates:serve` now runs Caddy in Docker over HTTPS (`https://localhost:17780`),
+  replacing the plain-HTTP Rust mini-server. On first run the script
+  installs Caddy's local CA into the macOS system keychain (one sudo
+  prompt). The `dangerousInsecureTransportProtocol` flag is removed from
+  `tauri.conf.json`.
 
 ## [2026.5.28]
 
