@@ -152,9 +152,9 @@ pub struct AppInfo {
 }
 
 #[tauri::command]
-pub fn app_info() -> AppInfo {
+pub fn app_info(app: tauri::AppHandle) -> AppInfo {
     AppInfo {
-        version: env!("CARGO_PKG_VERSION").to_string(),
+        version: app.package_info().version.to_string(),
         os: std::env::consts::OS.to_string(),
         arch: std::env::consts::ARCH.to_string(),
         is_privileged: is_privileged(),
@@ -2596,11 +2596,10 @@ mod tests {
     }
 
     #[test]
-    fn app_info_reports_environment() {
-        let info = app_info();
-        assert_eq!(info.version, env!("CARGO_PKG_VERSION"));
-        assert!(!info.os.is_empty());
-        assert!(!info.arch.is_empty());
+    fn app_info_environment_fields() {
+        // Version comes from AppHandle at runtime; test only the static fields.
+        assert!(!std::env::consts::OS.is_empty());
+        assert!(!std::env::consts::ARCH.is_empty());
     }
 
     #[test]

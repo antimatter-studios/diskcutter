@@ -154,7 +154,7 @@ pub fn run() {
 
             let about = AboutMetadataBuilder::new()
                 .name(Some("Disk Cutter"))
-                .version(Some(env!("CARGO_PKG_VERSION")))
+                .version(Some("".to_string()))
                 .authors(Some(authors))
                 .comments(Some(env!("CARGO_PKG_DESCRIPTION")))
                 .copyright(Some(format!("© {} Chris Thomas", current_year())))
