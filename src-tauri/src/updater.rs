@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 use tauri::Url;
 use tauri_plugin_updater::UpdaterExt;
@@ -9,6 +9,20 @@ pub struct UpdateInfo {
     pub version: String,
     pub body: Option<String>,
     pub date: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct UpdateEntry {
+    pub version: String,
+    pub notes: Option<String>,
+    pub pub_date: Option<String>,
+    pub platforms: Option<serde_json::Value>,
+}
+
+#[derive(Deserialize)]
+struct UpdatesManifest {
+    #[serde(default)]
+    dev: Vec<UpdateEntry>,
 }
 
 fn build(
@@ -28,10 +42,6 @@ pub async fn updater_check(
     app: AppHandle,
     endpoint: Option<String>,
 ) -> Result<Option<UpdateInfo>, String> {
-    eprintln!(
-        "[updater_check] endpoint={endpoint:?} current={}",
-        app.package_info().version
-    );
     let updater = build(&app, endpoint)?;
     let update = updater.check().await.map_err(|e| e.to_string())?;
     Ok(update.map(|u| UpdateInfo {
@@ -55,4 +65,31 @@ pub async fn updater_install(app: AppHandle, endpoint: Option<String>) -> Result
         .await
         .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// Fetch updates.json and return up to 10 dev-channel entries (newest first).
+/// `endpoint` is the full URL to latest.json; updates.json is derived from it.
+#[tauri::command]
+pub async fn updater_fetch_updates(endpoint: String) -> Result<Vec<UpdateEntry>, String> {
+    let base = endpoint
+        .rsplit_once('/')
+        .map(|(b, _)| b.to_string())
+        .unwrap_or(endpoint.clone());
+    let url = format!("{base}/updates.json");
+
+    let entries =
+        tauri::async_runtime::spawn_blocking(move || -> Result<Vec<UpdateEntry>, String> {
+            let body = ureq::get(&url)
+                .call()
+                .map_err(|e| format!("updates fetch failed: {e}"))?
+                .into_string()
+                .map_err(|e| e.to_string())?;
+            let manifest: UpdatesManifest =
+                serde_json::from_str(&body).map_err(|e| format!("updates parse failed: {e}"))?;
+            Ok(manifest.dev.into_iter().take(10).collect())
+        })
+        .await
+        .map_err(|e| e.to_string())??;
+
+    Ok(entries)
 }
