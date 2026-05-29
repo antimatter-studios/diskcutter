@@ -65,6 +65,23 @@ jobs:
 
       - run: npm ci
 
+      - name: Set release version
+        shell: bash
+        run: |
+          source scripts/version.sh
+          # On a tag push the tag IS the version base (e.g. 2026.5.29 → 2026.5.29-0).
+          # On workflow_dispatch (no tag) fall back to today's date.
+          if [[ "${GITHUB_REF:-}" == refs/tags/* ]]; then
+            TAG="${GITHUB_REF_NAME}"
+            # Strip optional leading 'v' and ensure -0 release suffix.
+            BASE="${TAG#v}"
+            BASE="${BASE%%-*}"   # drop any existing suffix
+            VER="${BASE}-0"
+          else
+            VER="$(calver_release)"
+          fi
+          version_bump "$VER"
+
       - name: Generate release notes from CHANGELOG
         id: notes
         if: startsWith(github.ref, 'refs/tags/')

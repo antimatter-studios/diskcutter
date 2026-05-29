@@ -2077,7 +2077,7 @@ function CaptureRow({ row, disks, disksLoading, accent, onSelectSource, onChoose
               style={!isConfiguring ? { cursor: 'default' } : undefined}
             >
               <div className="job-target-name mono small">{row.outputPath.split('/').pop()}</div>
-              <div className="job-target-meta mono small" style={{ opacity: 0.6 }}>{row.outputPath}</div>
+              <div className="job-target-meta mono small" style={{ opacity: 0.6, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', width: '100%' }}>{row.outputPath}</div>
             </button>
           ) : (
             <button className="pick-target" onClick={() => onChooseOutput(row.id)}>
