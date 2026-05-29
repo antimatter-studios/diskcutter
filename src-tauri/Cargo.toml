@@ -38,7 +38,8 @@ am-img-vmdk = "0.2"
 am-fs-core = "0.2"
 am-partitions = "0.3"
 ureq = { version = "2", features = ["tls", "native-certs"] }
-reqwest = { version = "0.13", features = ["json"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+rustls = { version = "0.23", features = ["ring"] }
 
 [dev-dependencies]
 tempfile = "3"

@@ -3,10 +3,13 @@
 # Shared version utilities for dev builds and releases.
 # Source this file; do not execute directly.
 #
-# Version format: YYYY.M.D-N
-#   YYYY.M.D  — CalVer date (no leading zeros; Tauri enforces strict semver)
-#   -0        — stable release suffix
-#   -1, -2 …  — dev build suffix (auto-increments per day)
+# Version format: YYYY.M.D-N[-branch-slug]
+#   YYYY.M.D      — CalVer date (no leading zeros; Tauri enforces strict semver)
+#   -0            — stable release suffix
+#   -1, -2 …      — dev build suffix (auto-increments per day, global across branches)
+#   -branch-slug  — present when built from a non-main branch; stripped of common
+#                   prefixes (feature/, fix/, chore/, etc.) and normalized to
+#                   lowercase alphanumeric + hyphens, max 24 chars
 
 # Emit YYYY.M.D from the current system clock.
 calver_today() {
@@ -19,21 +22,58 @@ calver_release() {
 }
 
 # Given the path to a dev-updates/latest.json, emit the next dev version
-# for today (YYYY.M.D-N), auto-incrementing N within the same day.
+# for today (YYYY.M.D-N[-branch-slug]), auto-incrementing N globally across
+# all branches so no two branches collide on the same N for a given day.
 calver_next_dev() {
   local manifest="${1:-}"
   local base
   base="$(calver_today)"
+
+  # Derive branch slug from the current git branch.
+  local branch_slug=""
+  local branch
+  branch="$(git branch --show-current 2>/dev/null || echo "")"
+  # Strip the first path component (feature/, fix/, chore/, etc.)
+  [[ "$branch" == */* ]] && branch="${branch#*/}"
+  # Normalize: lowercase, squeeze non-alnum runs into single hyphen, trim ends
+  branch="$(printf '%s' "$branch" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-' | sed 's/^-*//' | sed 's/-*$//')"
+  branch="${branch:0:24}"
+  if [[ -n "$branch" && "$branch" != "main" && "$branch" != "master" && "$branch" != "develop" ]]; then
+    branch_slug="-${branch}"
+  fi
+
+  # Find the highest N used today across ALL branches in updates.json so that
+  # concurrent worktrees don't emit duplicate N values.
   local counter=1
-  if [[ -f "$manifest" ]]; then
+  local updates_json
+  updates_json="$(dirname "${manifest:-/nonexistent}")/updates.json"
+  if [[ -f "$updates_json" ]]; then
+    local max_n
+    max_n="$(node -p "
+      try {
+        const u = JSON.parse(require('fs').readFileSync('$updates_json', 'utf8'));
+        const base = '$base';
+        const nums = (u.dev || [])
+          .map(e => e.version)
+          .filter(v => v.startsWith(base + '-'))
+          .map(v => { const m = v.slice(base.length + 1).match(/^(\d+)/); return m ? parseInt(m[1]) : 0; })
+          .filter(n => n > 0);
+        nums.length ? Math.max(...nums) : 0;
+      } catch(e) { 0 }
+    " 2>/dev/null || echo "0")"
+    [[ "$max_n" =~ ^[0-9]+$ ]] && counter=$(( max_n + 1 ))
+  elif [[ -n "$manifest" && -f "$manifest" ]]; then
+    # Fallback: no updates.json yet, read latest.json
     local existing
-    existing="$(node -p "try{require('$manifest').version}catch(e){''}" 2>/dev/null || echo "")"
+    existing="$(node -p "try{JSON.parse(require('fs').readFileSync('$manifest','utf8')).version}catch(e){''}" 2>/dev/null || echo "")"
     if [[ "$existing" == "${base}-"* ]]; then
-      local prev="${existing##*-}"
+      local prev="${existing#${base}-}"
+      prev="${prev%%-*}"
       [[ "$prev" =~ ^[0-9]+$ ]] && counter=$(( prev + 1 ))
     fi
   fi
-  echo "${base}-${counter}"
+
+  echo "${base}-${counter}${branch_slug}"
 }
 
 # Patch tauri.conf.json, package.json, and Cargo.toml to the given version.

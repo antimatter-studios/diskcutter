@@ -1,19 +1,17 @@
 #!/usr/bin/env bash
 #
-# Build the macOS .app + updater bundle, copy artifacts into ./dev-updates/,
-# and emit the latest.json manifest the in-app updater fetches when the
-# DEV channel is selected.
+# Build the macOS .app + updater bundle and publish it to the local dev update
+# server via HTTPS PUT.  The server (npm run updates:serve) can be running from
+# any worktree — publishing just needs its URL.
 #
-# Dev versioning: sources scripts/version.sh and calls calver_next_dev()
-# which derives YYYY.M.D from the system clock and auto-increments the -N
-# suffix based on dev-updates/latest.json (resets to 1 on a new day).
+# Dev versioning: sources scripts/version.sh and calls calver_next_dev().
+# Version format: YYYY.M.D-N[-branch-slug]  (N is global across all branches
+# for the day; branch slug is auto-derived from the current git branch).
 # tauri.conf.json is patched to the dev version for the build only and
-# restored afterwards — no version commits needed for dev iterations.
+# restored afterwards — no version commits needed.
 #
-# Requires TAURI_SIGNING_PRIVATE_KEY_PATH (or _KEY) pointing at the same
-# minisign key whose pubkey is embedded in tauri.conf.json. The signed
-# .app.tar.gz produced by `tauri build --bundles updater` carries an
-# adjacent .sig file we splice into the manifest.
+# Requires TAURI_SIGNING_PRIVATE_KEY_PATH pointing at the minisign key whose
+# pubkey is embedded in tauri.conf.json.
 
 set -euo pipefail
 
@@ -23,7 +21,10 @@ cd "$REPO_ROOT"
 # shellcheck source=scripts/version.sh
 source "$REPO_ROOT/scripts/version.sh"
 
-DEV_DIR="$REPO_ROOT/dev-updates"
+PORT="${PORT:-17780}"
+HOST="${HOST:-127.0.0.1}"
+SERVER="https://${HOST}:${PORT}"
+
 KEY_PATH="${TAURI_SIGNING_PRIVATE_KEY_PATH:-$HOME/.diskcutter-updater/updater.key}"
 
 if [[ ! -f "$KEY_PATH" ]]; then
@@ -35,14 +36,27 @@ fi
 export TAURI_SIGNING_PRIVATE_KEY="$(cat "$KEY_PATH")"
 export TAURI_SIGNING_PRIVATE_KEY_PASSWORD="${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}"
 
-mkdir -p "$DEV_DIR"
-VERSION="$(calver_next_dev "$DEV_DIR/latest.json")"
+# Check the update server is reachable before starting a long build.
+if ! curl -sk -o /dev/null --max-time 2 "$SERVER/"; then
+  echo "error: dev update server not responding at $SERVER" >&2
+  echo "       start it with: npm run updates:serve" >&2
+  exit 1
+fi
+
+# Fetch current updates.json from server so calver can determine next N.
+TMPDIR_PUBLISH="$(mktemp -d)"
+curl -sk "$SERVER/updates.json" -o "$TMPDIR_PUBLISH/updates.json" 2>/dev/null || true
+
+VERSION="$(calver_next_dev "$TMPDIR_PUBLISH/placeholder.json")"
 
 # Temporarily patch tauri.conf.json with the dev version; restore on exit.
 TAURI_CONF="src-tauri/tauri.conf.json"
 TAURI_CONF_BAK="${TAURI_CONF}.publish-bak"
 cp "$TAURI_CONF" "$TAURI_CONF_BAK"
-cleanup() { mv "$TAURI_CONF_BAK" "$TAURI_CONF"; }
+cleanup() {
+  mv "$TAURI_CONF_BAK" "$TAURI_CONF"
+  rm -rf "$TMPDIR_PUBLISH"
+}
 trap cleanup EXIT
 
 node -e "
@@ -99,14 +113,14 @@ case "$PLATFORM" in
   windows-*) EXT="nsis.zip" ;;
 esac
 TARBALL_BASENAME="diskcutter-${VERSION}-${PLATFORM}.${EXT}"
-cp -f "$TARBALL" "$DEV_DIR/$TARBALL_BASENAME"
-cp -f "$SIGFILE" "$DEV_DIR/$TARBALL_BASENAME.sig"
 SIG="$(cat "$SIGFILE")"
 PUBDATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
-PORT="${PORT:-17780}"
-HOST="${HOST:-localhost}"
-URL="https://${HOST}:${PORT}/${TARBALL_BASENAME}"
+URL="${SERVER}/${TARBALL_BASENAME}"
+
+echo "→ uploading $TARBALL_BASENAME"
+curl -sk -X PUT "$SERVER/$TARBALL_BASENAME"     -T "$TARBALL"  -o /dev/null
+curl -sk -X PUT "$SERVER/$TARBALL_BASENAME.sig" -T "$SIGFILE"  -o /dev/null
 
 PLATFORM_JSON="{
     \"${PLATFORM}\": {
@@ -115,8 +129,7 @@ PLATFORM_JSON="{
     }
   }"
 
-# Per-version JSON — used by the updater when installing a specific version.
-VERSION_JSON="$DEV_DIR/${VERSION}.json"
+VERSION_JSON="$TMPDIR_PUBLISH/${VERSION}.json"
 cat > "$VERSION_JSON" <<EOF
 {
   "version": "${VERSION}",
@@ -126,34 +139,30 @@ cat > "$VERSION_JSON" <<EOF
 }
 EOF
 
-# latest.json — always points at the newest version (Tauri updater format).
-MANIFEST="$DEV_DIR/latest.json"
-cp -f "$VERSION_JSON" "$MANIFEST"
-
-# updates.json — consolidated manifest (replaces catalog.json + latest.json in future versions).
-# Keyed by channel; each entry includes full platform data so the updater can install directly.
-UPDATES="$DEV_DIR/updates.json"
+# Merge new entry into updates.json (already fetched into TMPDIR_PUBLISH).
 node -e "
   const fs = require('fs');
   let u = { dev: [] };
-  try { u = JSON.parse(fs.readFileSync('$UPDATES', 'utf8')); } catch (_) {}
+  try { u = JSON.parse(fs.readFileSync('$TMPDIR_PUBLISH/updates.json', 'utf8')); } catch (_) {}
   if (!Array.isArray(u.dev)) u.dev = [];
   const entry = JSON.parse(fs.readFileSync('$VERSION_JSON', 'utf8'));
   u.dev.unshift(entry);
-  fs.writeFileSync('$UPDATES', JSON.stringify(u, null, 2) + '\n');
+  fs.writeFileSync('$TMPDIR_PUBLISH/updates.json', JSON.stringify(u, null, 2) + '\n');
 "
 
-# catalog.json — legacy format for clients on <=2026.5.29-3; keep in sync until retired.
-CATALOG="$DEV_DIR/catalog.json"
+# catalog.json — legacy compat for clients on <=2026.5.29-3.
 node -e "
   const fs = require('fs');
-  let u = JSON.parse(fs.readFileSync('$UPDATES', 'utf8'));
+  const u = JSON.parse(fs.readFileSync('$TMPDIR_PUBLISH/updates.json', 'utf8'));
   const cat = { versions: u.dev.map(e => ({ version: e.version, notes: e.notes, pub_date: e.pub_date })) };
-  fs.writeFileSync('$CATALOG', JSON.stringify(cat, null, 2) + '\n');
+  fs.writeFileSync('$TMPDIR_PUBLISH/catalog.json', JSON.stringify(cat, null, 2) + '\n');
 "
 
-echo "→ wrote $MANIFEST"
-echo "→ wrote $VERSION_JSON"
-echo "→ updated $UPDATES"
-echo "→ updated $CATALOG (legacy compat)"
-echo "→ serve with: npm run updates:serve"
+echo "→ uploading manifests"
+curl -sk -X PUT "$SERVER/${VERSION}.json" -T "$VERSION_JSON"                   -o /dev/null
+curl -sk -X PUT "$SERVER/latest.json"     -T "$VERSION_JSON"                   -o /dev/null
+curl -sk -X PUT "$SERVER/updates.json"    -T "$TMPDIR_PUBLISH/updates.json"    -o /dev/null
+curl -sk -X PUT "$SERVER/catalog.json"    -T "$TMPDIR_PUBLISH/catalog.json"    -o /dev/null
+
+echo "→ published $VERSION"
+echo "→ $SERVER/updates.json"
