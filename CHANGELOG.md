@@ -22,6 +22,10 @@ follows [Calendar Versioning](https://calver.org/) (`YYYY.M.D`).
 - `updates:publish` no longer commits version bumps for dev iterations;
   dev builds are versioned `YYYY.M.D-N` and `tauri.conf.json` is
   patched temporarily during the build only.
+- `updates:publish` now writes a per-version `<VERSION>.json` file and
+  maintains a consolidated `updates.json` manifest (keyed by channel)
+  alongside the existing `latest.json`. A legacy `catalog.json` is kept
+  in sync for clients on `<=2026.5.29-3`.
 
 ## [2026.5.28]
 
