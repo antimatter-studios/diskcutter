@@ -103,7 +103,9 @@ impl Enumeration {
 static LAST_GOOD_DISKS: Mutex<Vec<Disk>> = Mutex::new(Vec::new());
 
 /// Friendly one-line label for a disk: "MODEL · CAPACITY", trimming whichever
-/// half is missing.
+/// half is missing. Only the macOS wedge path calls this today (and the tests),
+/// so it reads as dead code on other platforms' lib builds.
+#[allow(dead_code)]
 fn friendly_name(d: &Disk) -> String {
     match (d.model.trim(), d.capacity.trim()) {
         ("", "") => d.device.clone(),
@@ -113,7 +115,9 @@ fn friendly_name(d: &Disk) -> String {
     }
 }
 
-/// Look up a device's friendly name from the last good enumeration.
+/// Look up a device's friendly name from the last good enumeration. Only the
+/// macOS wedge path calls this today (and the tests).
+#[allow(dead_code)]
 fn cached_name(device: &str) -> Option<String> {
     let g = LAST_GOOD_DISKS.lock().ok()?;
     g.iter().find(|d| d.device == device).map(friendly_name)
@@ -493,7 +497,7 @@ fn list_dev_whole_disks() -> Vec<String> {
 /// How long to wait on a single external disk-tool invocation before giving up
 /// and killing it. Generous enough for a healthy machine with many disks,
 /// short enough that a wedged device doesn't stall enumeration for long.
-#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+#[cfg(target_os = "macos")]
 const DISK_TOOL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
 
 #[cfg(target_os = "macos")]

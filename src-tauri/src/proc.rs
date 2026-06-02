@@ -79,7 +79,10 @@ pub fn output_with_timeout(mut cmd: Command, timeout: Duration) -> io::Result<Ou
     })
 }
 
-#[cfg(test)]
+// These tests drive real child processes via unix shell tools
+// (echo/sleep/sh/yes), so they only run on unix. The helper itself is
+// cross-platform std::process and compiles everywhere.
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 
