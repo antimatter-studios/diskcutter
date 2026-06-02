@@ -513,5 +513,27 @@
       "error": "ERROR",
       "cancelled": "CANCELLED"
     }
+  },
+  "device_wedged": {
+    "eyebrow": "DEVICE NOT RESPONDING",
+    "title": "A disk stopped responding",
+    "intro": "One of your SD cards or readers has stopped responding. Let’s unplug it so the app works again — it only takes a moment.",
+    "suspect_known": "This device stopped responding:",
+    "unplug_now": "Unplug it now. The app will continue automatically once it’s removed.",
+    "suspect_unknown_title": "We can’t tell exactly which one",
+    "suspect_unknown": "Unplug your cards or readers one at a time — the app will tell you the moment it recovers. Start with the one you inserted most recently.",
+    "candidates_label": "Possible devices:",
+    "burning_tag": "Burning — do NOT unplug",
+    "safe_tag": "Idle — safe to unplug",
+    "unknown_device": "Unknown device",
+    "checking": "Checking…",
+    "waiting": "Waiting for you to unplug the device…",
+    "recheck": "[ I UNPLUGGED IT — CHECK AGAIN ]",
+    "recovered_title": "Working again",
+    "recovered": "All devices are responding. You’re good to go.",
+    "step_hub": "Still stuck? Try unplugging the whole USB hub or all card readers at once, then check again.",
+    "step_reboot": "If it’s still frozen, restart your computer to clear the stuck device.",
+    "dismiss": "[ DISMISS ]",
+    "handle_myself": "I’ll handle it myself"
   }
 }

@@ -513,5 +513,27 @@
       "error": "ERROR",
       "cancelled": "CANCELADO"
     }
+  },
+  "device_wedged": {
+    "eyebrow": "EL DISPOSITIVO NO RESPONDE",
+    "title": "Un disco dejó de responder",
+    "intro": "Una de tus tarjetas SD o lectores dejó de responder. Vamos a desconectarlo para que la app vuelva a funcionar; solo toma un momento.",
+    "suspect_known": "Este dispositivo dejó de responder:",
+    "unplug_now": "Desconéctalo ahora. La app continuará automáticamente cuando lo quites.",
+    "suspect_unknown_title": "No podemos saber exactamente cuál",
+    "suspect_unknown": "Desconecta tus tarjetas o lectores uno por uno; la app te avisará en cuanto se recupere. Empieza por el que insertaste más recientemente.",
+    "candidates_label": "Posibles dispositivos:",
+    "burning_tag": "Grabando: NO desconectar",
+    "safe_tag": "Inactivo: seguro desconectar",
+    "unknown_device": "Dispositivo desconocido",
+    "checking": "Comprobando…",
+    "waiting": "Esperando a que desconectes el dispositivo…",
+    "recheck": "[ LO DESCONECTÉ — COMPROBAR DE NUEVO ]",
+    "recovered_title": "Funciona de nuevo",
+    "recovered": "Todos los dispositivos responden. Ya puedes continuar.",
+    "step_hub": "¿Sigue bloqueado? Prueba a desconectar todo el concentrador USB o todos los lectores a la vez y vuelve a comprobar.",
+    "step_reboot": "Si sigue congelado, reinicia el equipo para liberar el dispositivo bloqueado.",
+    "dismiss": "[ CERRAR ]",
+    "handle_myself": "Lo gestiono yo mismo"
   }
 }
