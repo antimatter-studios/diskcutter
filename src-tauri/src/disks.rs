@@ -442,6 +442,34 @@ pub fn probe_disk_nodes() -> Vec<String> {
     list_dev_whole_disks()
 }
 
+/// Re-run enumeration and report whether it completed without any device
+/// wedging. The recovery wizard calls this after the operator unplugs a card
+/// to decide whether to dismiss itself. Async + bounded for the same reason as
+/// `list_disks`. Also refreshes the last-good cache as a side effect.
+#[tauri::command]
+pub async fn recheck_disks_healthy(app: AppHandle) -> bool {
+    tauri::async_runtime::spawn_blocking(move || {
+        let result = enumerate();
+        update_last_good(&result.disks);
+        // Re-emit so the wizard updates its suspect list if a DIFFERENT device
+        // is still wedged after the unplug.
+        if !result.wedged.is_empty() || result.total_failure {
+            let _ = app.emit(
+                "disk-cutter://device-wedged",
+                DeviceWedged {
+                    devices: result.wedged,
+                    total_failure: result.total_failure,
+                },
+            );
+            false
+        } else {
+            true
+        }
+    })
+    .await
+    .unwrap_or(false)
+}
+
 #[cfg(target_os = "macos")]
 fn list_dev_whole_disks() -> Vec<String> {
     let mut out = Vec::new();

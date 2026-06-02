@@ -513,5 +513,27 @@
       "error": "FEHLER",
       "cancelled": "ABGEBROCHEN"
     }
+  },
+  "device_wedged": {
+    "eyebrow": "GERÄT REAGIERT NICHT",
+    "title": "Ein Datenträger reagiert nicht mehr",
+    "intro": "Eine deiner SD-Karten oder Lesegeräte reagiert nicht mehr. Lass es uns abziehen, damit die App wieder funktioniert – das dauert nur einen Moment.",
+    "suspect_known": "Dieses Gerät reagiert nicht mehr:",
+    "unplug_now": "Zieh es jetzt ab. Die App fährt automatisch fort, sobald es entfernt wurde.",
+    "suspect_unknown_title": "Wir können nicht genau sagen, welches",
+    "suspect_unknown": "Zieh deine Karten oder Lesegeräte einzeln ab – die App meldet sich, sobald sie sich erholt. Beginne mit dem zuletzt eingesteckten.",
+    "candidates_label": "Mögliche Geräte:",
+    "burning_tag": "Wird beschrieben – NICHT abziehen",
+    "safe_tag": "Inaktiv – sicher abziehbar",
+    "unknown_device": "Unbekanntes Gerät",
+    "checking": "Wird geprüft…",
+    "waiting": "Warte, bis du das Gerät abziehst…",
+    "recheck": "[ ABGEZOGEN – ERNEUT PRÜFEN ]",
+    "recovered_title": "Funktioniert wieder",
+    "recovered": "Alle Geräte reagieren wieder. Du kannst weitermachen.",
+    "step_hub": "Immer noch blockiert? Zieh den gesamten USB-Hub oder alle Kartenleser auf einmal ab und prüfe erneut.",
+    "step_reboot": "Wenn es weiterhin hängt, starte deinen Computer neu, um das blockierte Gerät zu lösen.",
+    "dismiss": "[ SCHLIESSEN ]",
+    "handle_myself": "Ich kümmere mich selbst darum"
   }
 }

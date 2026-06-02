@@ -92,6 +92,10 @@ function App() {
   // Set when the user requests window close while burns are still active.
   // Shape: { active: [{ job_id, target }], phase?: 'cancelling' | 'exiting' }
   const [closeBlocked, setCloseBlocked] = useState(null);
+  // Set when the backend reports a wedged disk device (diskutil/enumeration
+  // timed out). Drives the guided unplug-recovery wizard.
+  // Shape: { devices: [{ device, name, certain }], total_failure }
+  const [wedged, setWedged] = useState(null);
   const [toasts, setToasts] = useState([]);
   const toastIdRef = useRef(0);
   const sessionStartRef = useRef(Date.now());
@@ -297,6 +301,18 @@ function App() {
       if (!mounted) return;
       const phase = e.payload?.phase || null;
       setCloseBlocked((prev) => (prev ? { ...prev, phase } : prev));
+    }).then((u) => subs.push(u));
+
+    // A disk device stopped responding (diskutil/enumeration timed out).
+    // Open the guided unplug wizard so a non-technical operator can recover
+    // without the app having frozen. Re-fires on each failed re-check with the
+    // current suspect list.
+    listen('disk-cutter://device-wedged', (e) => {
+      if (!mounted) return;
+      setWedged({
+        devices: e.payload?.devices || [],
+        total_failure: !!e.payload?.total_failure,
+      });
     }).then((u) => subs.push(u));
 
     return () => {
@@ -697,6 +713,12 @@ function App() {
   // hydrate completes so first paint doesn't flicker between sizes.
   const density = prefs.density || PREFS_DEFAULTS.density;
 
+  // Devices with a burn currently in flight — the wizard tags these
+  // "do NOT unplug" so the operator never yanks a card mid-write.
+  const burningDevices = new Set(
+    jobs.filter((j) => j.state === 'writing' && j.target?.device).map((j) => j.target.device)
+  );
+
   const errorJob = jobs.find((j) => j.state === 'error');
   const errorMsg = errorJob && errorJob.errorCode
     ? (ERROR_CODES.includes(errorJob.errorCode)
@@ -787,6 +809,13 @@ function App() {
         state={closeBlocked}
         accent={accent}
         onCancel={() => setCloseBlocked(null)}
+      />
+
+      <DeviceWedgedWizard
+        state={wedged}
+        accent={accent}
+        burningDevices={burningDevices}
+        onDismiss={() => setWedged(null)}
       />
 
       <ToastLayer toasts={toasts} onDismiss={handleDismissToast} />
@@ -1105,6 +1134,171 @@ function CloseBlockedDialog({ state, accent, onCancel }) {
             {aborting ? t('close_blocked.stopping') : t('close_blocked.abort')}
           </button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// Guided recovery when a disk device stops responding (diskutil/enumeration
+// timed out). The app no longer freezes — instead we walk a (possibly
+// non-technical) operator through unplugging the stuck card, auto-detect the
+// unplug, and confirm recovery. Escalates hub → reboot if re-checks keep
+// failing.
+function DeviceWedgedWizard({ state, accent, burningDevices, onDismiss }) {
+  const { t } = useTranslation();
+  const [attempts, setAttempts] = useState(0);
+  const [checking, setChecking] = useState(false);
+  const [recovered, setRecovered] = useState(false);
+  const baselineRef = useRef(null); // /dev node set at open / after each check
+  const busyRef = useRef(false); // prevents overlapping re-checks
+  const wasOpenRef = useRef(false);
+  const open = !!state;
+
+  // Fresh open (null -> set): reset transient state and snapshot the current
+  // /dev nodes so we can notice when one disappears.
+  useEffect(() => {
+    if (open && !wasOpenRef.current) {
+      setAttempts(0);
+      setRecovered(false);
+      baselineRef.current = null;
+      invoke('probe_disk_nodes')
+        .then((n) => { baselineRef.current = n || []; })
+        .catch(() => {});
+    }
+    wasOpenRef.current = open;
+  }, [open]);
+
+  const recheck = useCallback(async () => {
+    if (busyRef.current) return;
+    busyRef.current = true;
+    setChecking(true);
+    try {
+      const ok = await invoke('recheck_disks_healthy');
+      try { baselineRef.current = await invoke('probe_disk_nodes'); } catch { /* keep old baseline */ }
+      if (ok) {
+        setRecovered(true);
+        setTimeout(() => onDismiss(), 1600);
+      } else {
+        setAttempts((a) => a + 1);
+      }
+    } catch {
+      setAttempts((a) => a + 1);
+    } finally {
+      busyRef.current = false;
+      setChecking(false);
+    }
+  }, [onDismiss]);
+
+  // While open, poll the instant /dev node list; when something is removed
+  // (operator unplugged a device), verify recovery automatically.
+  useEffect(() => {
+    if (!open || recovered) return undefined;
+    const id = setInterval(async () => {
+      if (busyRef.current) return;
+      let nodes;
+      try { nodes = await invoke('probe_disk_nodes'); } catch { return; }
+      const base = baselineRef.current;
+      if (base && nodes.length < base.length) recheck();
+    }, 1500);
+    return () => clearInterval(id);
+  }, [open, recovered, recheck]);
+
+  if (!state) return null;
+
+  const devices = state.devices || [];
+  const certain = devices.find((d) => d.certain);
+  const stage = attempts >= 4 ? 2 : attempts >= 2 ? 1 : 0;
+
+  const deviceRow = (d) => {
+    const burning = burningDevices?.has(d.device);
+    return (
+      <div key={d.device} className="disk-row" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', gap: 12 }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontWeight: 600 }}>{d.name || t('device_wedged.unknown_device')}</div>
+          <div className="mono small" style={{ opacity: 0.6 }}>{d.device}</div>
+        </div>
+        <div className={'status-tag' + (burning ? ' status-tag--danger' : '')} style={{ whiteSpace: 'nowrap' }}>
+          {burning ? t('device_wedged.burning_tag') : t('device_wedged.safe_tag')}
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div className="sheet-backdrop" role="alertdialog" aria-modal="true">
+      <div className="sheet" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 480 }}>
+        <div className="sheet-head">
+          <div>
+            <div className="sheet-eyebrow" style={{ color: accent }}>{t('device_wedged.eyebrow')}</div>
+            <div className="sheet-title">
+              {recovered ? t('device_wedged.recovered_title') : t('device_wedged.title')}
+            </div>
+          </div>
+        </div>
+
+        {recovered ? (
+          <>
+            <div className="sheet-warning" style={{ color: accent }}>
+              <span>✓</span>{t('device_wedged.recovered')}
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', padding: 18 }}>
+              <button className="btn" onClick={onDismiss} style={{ background: accent, color: '#fff', borderColor: accent }}>
+                {t('device_wedged.dismiss')}
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <div style={{ padding: '0 18px', opacity: 0.85 }}>{t('device_wedged.intro')}</div>
+
+            <div className="disk-list" style={{ padding: '12px 18px' }}>
+              {certain ? (
+                <>
+                  <div style={{ fontWeight: 600, marginBottom: 6 }}>{t('device_wedged.suspect_known')}</div>
+                  {deviceRow(certain)}
+                  <div style={{ marginTop: 8 }}>{t('device_wedged.unplug_now')}</div>
+                </>
+              ) : (
+                <>
+                  <div style={{ fontWeight: 600 }}>{t('device_wedged.suspect_unknown_title')}</div>
+                  <div style={{ margin: '6px 0' }}>{t('device_wedged.suspect_unknown')}</div>
+                  {devices.length > 0 && (
+                    <>
+                      <div style={{ fontWeight: 600, marginTop: 8 }}>{t('device_wedged.candidates_label')}</div>
+                      {devices.map(deviceRow)}
+                    </>
+                  )}
+                </>
+              )}
+            </div>
+
+            {stage >= 1 && (
+              <div className="sheet-warning"><span style={{ color: accent }}>⚠</span>{t('device_wedged.step_hub')}</div>
+            )}
+            {stage >= 2 && (
+              <div className="sheet-warning"><span style={{ color: accent }}>⚠</span>{t('device_wedged.step_reboot')}</div>
+            )}
+
+            <div style={{ display: 'flex', gap: 10, padding: 18, justifyContent: 'space-between', alignItems: 'center' }}>
+              <button className="btn btn-ghost" onClick={onDismiss} style={{ opacity: 0.7 }}>
+                {t('device_wedged.handle_myself')}
+              </button>
+              <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                <span className="mono small" style={{ opacity: 0.7 }}>
+                  {checking ? t('device_wedged.checking') : t('device_wedged.waiting')}
+                </span>
+                <button
+                  className="btn"
+                  onClick={recheck}
+                  disabled={checking}
+                  style={{ background: accent, color: '#fff', borderColor: accent }}
+                >
+                  {t('device_wedged.recheck')}
+                </button>
+              </div>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
