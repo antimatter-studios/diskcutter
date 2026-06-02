@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Disk Cutter",
-  "version": "2026.5.28-0",
+  "version": "2026.6.2-0",
   "identifier": "com.diskcutter.app",
   "build": {
     "beforeBuildCommand": "npm run build",
@@ -27,7 +27,14 @@
   "bundle": {
     "active": true,
     "createUpdaterArtifacts": true,
-    "targets": ["app", "dmg", "deb", "rpm", "appimage", "nsis"],
+    "targets": [
+      "app",
+      "dmg",
+      "deb",
+      "rpm",
+      "appimage",
+      "nsis"
+    ],
     "publisher": "Chris Thomas",
     "icon": [
       "icons/32x32.png",
