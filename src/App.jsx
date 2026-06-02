@@ -1151,22 +1151,44 @@ function DeviceWedgedWizard({ state, accent, burningDevices, onDismiss }) {
   const [recovered, setRecovered] = useState(false);
   const baselineRef = useRef(null); // /dev node set at open / after each check
   const busyRef = useRef(false); // prevents overlapping re-checks
-  const wasOpenRef = useRef(false);
+  const prevSigRef = useRef(null);
   const open = !!state;
 
-  // Fresh open (null -> set): reset transient state and snapshot the current
-  // /dev nodes so we can notice when one disappears.
+  // Identity of the current wedge situation: the set of suspect devices (plus
+  // a total-failure marker). A re-check that re-emits for the SAME stuck device
+  // keeps this signature; a genuinely different device changes it.
+  const sig = state
+    ? (state.total_failure ? 'TF:' : '') + (state.devices || []).map((d) => d.device).sort().join(',')
+    : null;
+
+  // Reset transient state only when the wedge situation actually changes —
+  // a fresh open, or a DIFFERENT device. Crucially we do NOT reset on a
+  // re-emit for the same stuck device (recheck still failing), so escalation
+  // advice keeps progressing instead of snapping back to step 1. Resetting on
+  // a changed situation also clears a stale `recovered` (and, via the effect
+  // below, cancels its pending auto-dismiss) so a newly-wedged device can't be
+  // silently dismissed by the previous device's recovery timer.
   useEffect(() => {
-    if (open && !wasOpenRef.current) {
+    if (!open) { prevSigRef.current = null; return; }
+    if (sig !== prevSigRef.current) {
+      prevSigRef.current = sig;
       setAttempts(0);
       setRecovered(false);
-      baselineRef.current = null;
       invoke('probe_disk_nodes')
         .then((n) => { baselineRef.current = n || []; })
         .catch(() => {});
     }
-    wasOpenRef.current = open;
-  }, [open]);
+  }, [open, sig]);
+
+  // Auto-dismiss shortly after recovery. Driven by an effect (not a bare
+  // setTimeout in recheck) so that if a new wedge arrives within the window —
+  // which flips `recovered` back to false above — the cleanup cancels the
+  // timer instead of dismissing the new alert.
+  useEffect(() => {
+    if (!recovered) return undefined;
+    const id = setTimeout(() => onDismiss(), 1600);
+    return () => clearTimeout(id);
+  }, [recovered, onDismiss]);
 
   const recheck = useCallback(async () => {
     if (busyRef.current) return;
@@ -1177,7 +1199,6 @@ function DeviceWedgedWizard({ state, accent, burningDevices, onDismiss }) {
       try { baselineRef.current = await invoke('probe_disk_nodes'); } catch { /* keep old baseline */ }
       if (ok) {
         setRecovered(true);
-        setTimeout(() => onDismiss(), 1600);
       } else {
         setAttempts((a) => a + 1);
       }
@@ -1187,7 +1208,7 @@ function DeviceWedgedWizard({ state, accent, burningDevices, onDismiss }) {
       busyRef.current = false;
       setChecking(false);
     }
-  }, [onDismiss]);
+  }, []);
 
   // While open, poll the instant /dev node list; when something is removed
   // (operator unplugged a device), verify recovery automatically.
