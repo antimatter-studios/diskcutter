@@ -1076,6 +1076,22 @@ function SectorMap({ progress, accent }) {
 
 /* ─────────── Disk picker sheet ─────────── */
 
+// Centered loading panel shown in the disk pickers while enumeration runs
+// (now async + bounded, so it can take a beat). Stepped spinner matches the
+// app's other steps() animations.
+function DiskLoading({ accent }) {
+  const { t } = useTranslation();
+  return (
+    <div className="disk-loading">
+      <div className="disk-loading-spinner" style={{ borderTopColor: accent }} aria-hidden="true" />
+      <div className="disk-loading-text">
+        <div className="disk-loading-label">{t('picker.loading', { defaultValue: 'Loading disks' })}</div>
+        <div className="disk-loading-sub">{t('picker.loading_sub', { defaultValue: 'Scanning connected devices' })}</div>
+      </div>
+    </div>
+  );
+}
+
 function DiskPickerSheet({ open, disks, loading, jobImage, onPick, onClose, onRefresh, accent }) {
   const { t } = useTranslation();
   const [refreshedAt, setRefreshedAt] = React.useState(Date.now());
@@ -1114,9 +1130,7 @@ function DiskPickerSheet({ open, disks, loading, jobImage, onPick, onClose, onRe
 
         <div className="disk-list">
           {loading && disks.length === 0 ? (
-            <div className="disk-loading mono small">
-              {t('picker.loading', { defaultValue: 'Loading disks…' })}
-            </div>
+            <DiskLoading accent={accent} />
           ) : (() => {
             const decorated = disks.map((d) => {
               const tooSmall = jobImage && d.bytes < jobImage.bytes;
@@ -2204,9 +2218,9 @@ function CaptureDiskPickerSheet({ open, disks, loading, accent, onPick, onClose 
         </div>
         <div className="disk-list">
           {loading && disks.length === 0 ? (
-            <div className="disk-loading mono small">Loading disks…</div>
+            <DiskLoading accent={accent} />
           ) : disks.length === 0 ? (
-            <div className="disk-loading mono small">No disks found</div>
+            <div className="disk-loading"><div className="disk-loading-empty">{t('picker.empty', { defaultValue: 'No disks found' })}</div></div>
           ) : disks.map((d) => {
             const isInternal = d.bus.includes('NVME') || d.flags?.includes('INTERNAL');
             return (

@@ -268,7 +268,10 @@
     "disks_detected_other": "{{count}} DISKS DETECTED",
     "refresh": "[ R ] REFRESH",
     "cancel": "[ ESC ] CANCEL",
-    "refreshed": "REFRESHED {{seconds}}s AGO"
+    "refreshed": "REFRESHED {{seconds}}s AGO",
+    "loading": "Loading disks",
+    "loading_sub": "Scanning connected devices",
+    "empty": "No disks found"
   },
   "drag": {
     "drop_here": "DROP DISK IMAGE HERE"

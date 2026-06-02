@@ -268,7 +268,10 @@
     "disks_detected_other": "{{count}} DATENTRÄGER ERKANNT",
     "refresh": "[ R ] AKTUALISIEREN",
     "cancel": "[ ESC ] ABBRECHEN",
-    "refreshed": "VOR {{seconds}}s AKTUALISIERT"
+    "refreshed": "VOR {{seconds}}s AKTUALISIERT",
+    "loading": "Datenträger werden geladen",
+    "loading_sub": "Verbundene Geräte werden gescannt",
+    "empty": "Keine Datenträger gefunden"
   },
   "drag": {
     "drop_here": "ABBILD HIER ABLEGEN"
