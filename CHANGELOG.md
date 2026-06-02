@@ -6,6 +6,8 @@ follows [Calendar Versioning](https://calver.org/) (`YYYY.M.D`).
 
 ## [Unreleased]
 
+## [2026.6.2]
+
 ### Added
 
 - **MAKE IMAGE.** New queue row type for imaging a disk to a file. Click
@@ -14,9 +16,23 @@ follows [Calendar Versioning](https://calver.org/) (`YYYY.M.D`).
   speed, and cancel are shown inline alongside burn jobs. The capture
   pipeline runs elevated (osascript) when reading from `/dev/` just like
   the write path.
+- **Guided recovery wizard for an unresponsive disk.** When a disk stops
+  responding, a step-through dialog opens automatically: it names the stuck
+  card when it can (or lists likely candidates when it can't be pinned down),
+  marks which devices are idle-and-safe-to-unplug versus mid-burn, auto-detects
+  the unplug, confirms recovery, and escalates its advice (try the hub, then
+  reboot) if the device stays stuck.
+- Centered **"Loading disks"** panel in the disk pickers — a stepped spinner
+  with a clear label, replacing the small top-left text.
 
 ### Fixed
 
+- **A wedged disk no longer freezes the app.** Disk enumeration shelled out to
+  external tools (`diskutil`/`ps`/`osascript`) synchronously on the UI thread,
+  so an SD card or reader that made `diskutil` hang would freeze the whole
+  window into a blank, unresponsive state. Enumeration now runs off the main
+  thread and every external-tool call is bounded by an 8&nbsp;second timeout — a
+  stuck device produces a brief delay and a partial list instead of a hang.
 - `updates:serve` no longer panics when `dev-updates/` directory does not
   exist — it creates the directory and continues.
 - `updates:publish` no longer commits version bumps for dev iterations;
@@ -337,7 +353,8 @@ mocks.
 - Vitest 2 + happy-dom + React Testing Library for the frontend
   test suite.
 
-[Unreleased]: https://github.com/antimatter-studios/diskcutter/compare/2026.5.28...HEAD
+[Unreleased]: https://github.com/antimatter-studios/diskcutter/compare/2026.6.2...HEAD
+[2026.6.2]: https://github.com/antimatter-studios/diskcutter/compare/2026.5.28...2026.6.2
 [2026.5.28]: https://github.com/antimatter-studios/diskcutter/compare/2026.5.18...2026.5.28
 [2026.5.18]: https://github.com/antimatter-studios/diskcutter/releases/tag/2026.5.18
 [2026.5.12]: https://github.com/antimatter-studios/diskcutter/releases/tag/2026.5.12
