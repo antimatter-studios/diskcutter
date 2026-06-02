@@ -17,6 +17,7 @@ pub mod image_scan;
 pub mod inspect;
 pub mod joblog;
 pub mod pipeline;
+pub mod proc;
 pub mod qemu;
 pub mod readers;
 pub mod snapshot;
@@ -40,8 +41,8 @@ use db::{
 use disks::{
     abort_and_quit, app_info, cancel_capture, cancel_write, check_fda, find_orphan_helpers,
     has_active_burns, inspect_image, kill_orphan_helpers, list_disks, open_fda_settings,
-    reattach_running_helpers, start_capture, start_write, verify_image, ActiveBurns,
-    CancelRegistry, ElevatedJobs,
+    probe_disk_nodes, reattach_running_helpers, start_capture, start_write, verify_image,
+    ActiveBurns, CancelRegistry, ElevatedJobs,
 };
 use std::sync::Mutex;
 use tauri::menu::{AboutMetadataBuilder, MenuBuilder, SubmenuBuilder};
@@ -87,6 +88,7 @@ pub fn run() {
             find_orphan_helpers,
             kill_orphan_helpers,
             list_disks,
+            probe_disk_nodes,
             inspect_image,
             start_write,
             cancel_write,

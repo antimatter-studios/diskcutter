@@ -55,6 +55,88 @@ pub struct Disk {
     pub flags: Vec<String>,
 }
 
+/// A device the OS disk tool stopped responding for — the input the
+/// "unplug it" recovery wizard reacts to.
+#[derive(Serialize, Clone)]
+pub struct WedgedDevice {
+    /// Device node, e.g. "/dev/disk7".
+    pub device: String,
+    /// Friendly label ("SANDISK ULTRA · 32 GB") recovered from the last good
+    /// enumeration, since we can't probe the device now that it's hung.
+    pub name: Option<String>,
+    /// `true` when this exact device's own probe timed out (high confidence).
+    /// `false` when enumeration as a whole hung and this is only a candidate.
+    pub certain: bool,
+}
+
+/// Emitted on `disk-cutter://device-wedged` whenever enumeration hits a
+/// timeout. The frontend turns this into the guided unplug wizard.
+#[derive(Serialize, Clone)]
+pub struct DeviceWedged {
+    pub devices: Vec<WedgedDevice>,
+    /// `true` when `diskutil list` itself hung, so we never got a device list
+    /// and `devices` are best-effort candidates pulled from /dev nodes.
+    pub total_failure: bool,
+}
+
+/// Result of one enumeration pass: the disks we could read, plus any that
+/// wedged.
+pub struct Enumeration {
+    pub disks: Vec<Disk>,
+    pub wedged: Vec<WedgedDevice>,
+    pub total_failure: bool,
+}
+
+impl Enumeration {
+    fn clean(disks: Vec<Disk>) -> Self {
+        Enumeration {
+            disks,
+            wedged: Vec::new(),
+            total_failure: false,
+        }
+    }
+}
+
+/// Last successful enumeration, keyed implicitly by `Disk::device`. Lets the
+/// wedge detector put a human-readable name on a device whose probe now hangs.
+/// `Mutex::new` + `Vec::new` are const, so no lazy-init crate is needed.
+static LAST_GOOD_DISKS: Mutex<Vec<Disk>> = Mutex::new(Vec::new());
+
+/// Friendly one-line label for a disk: "MODEL · CAPACITY", trimming whichever
+/// half is missing.
+fn friendly_name(d: &Disk) -> String {
+    match (d.model.trim(), d.capacity.trim()) {
+        ("", "") => d.device.clone(),
+        (m, "") => m.to_string(),
+        ("", c) => c.to_string(),
+        (m, c) => format!("{m} · {c}"),
+    }
+}
+
+/// Look up a device's friendly name from the last good enumeration.
+fn cached_name(device: &str) -> Option<String> {
+    let g = LAST_GOOD_DISKS.lock().ok()?;
+    g.iter().find(|d| d.device == device).map(friendly_name)
+}
+
+/// Merge a fresh set of successfully-enumerated disks into the last-good cache.
+/// Updates entries we just saw and keeps prior entries for devices that didn't
+/// appear this pass (e.g. one wedged) so their names stay recoverable.
+fn update_last_good(disks: &[Disk]) {
+    if disks.is_empty() {
+        return;
+    }
+    if let Ok(mut g) = LAST_GOOD_DISKS.lock() {
+        for d in disks {
+            if let Some(slot) = g.iter_mut().find(|c| c.device == d.device) {
+                *slot = d.clone();
+            } else {
+                g.push(d.clone());
+            }
+        }
+    }
+}
+
 #[derive(Serialize, Clone)]
 pub struct JobUpdate {
     pub job_id: i64,
@@ -165,12 +247,17 @@ pub fn app_info(app: tauri::AppHandle) -> AppInfo {
 /// These can hold devices open (esp. /dev/diskN) and block new burns. Returns
 /// the PIDs so the frontend can offer to clean them up.
 #[tauri::command]
-pub fn find_orphan_helpers() -> Vec<u32> {
+pub async fn find_orphan_helpers() -> Vec<u32> {
+    tauri::async_runtime::spawn_blocking(find_orphan_helpers_blocking)
+        .await
+        .unwrap_or_default()
+}
+
+fn find_orphan_helpers_blocking() -> Vec<u32> {
     let me = std::process::id();
-    let out = match std::process::Command::new("ps")
-        .args(["-A", "-o", "pid=,user=,command="])
-        .output()
-    {
+    let mut cmd = std::process::Command::new("ps");
+    cmd.args(["-A", "-o", "pid=,user=,command="]);
+    let out = match crate::proc::output_with_timeout(cmd, std::time::Duration::from_secs(8)) {
         Ok(o) => o,
         Err(_) => return Vec::new(),
     };
@@ -205,8 +292,18 @@ pub fn find_orphan_helpers() -> Vec<u32> {
 }
 
 /// Kill orphan helper PIDs via osascript admin (they're root-owned).
+///
+/// The osascript admin prompt blocks until the user responds to the password
+/// dialog — so this runs on a blocking-pool thread, never the main thread,
+/// or the whole UI would freeze behind the prompt.
 #[tauri::command]
-pub fn kill_orphan_helpers(pids: Vec<u32>) -> Result<(), String> {
+pub async fn kill_orphan_helpers(pids: Vec<u32>) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || kill_orphan_helpers_blocking(pids))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn kill_orphan_helpers_blocking(pids: Vec<u32>) -> Result<(), String> {
     if pids.is_empty() {
         return Ok(());
     }
@@ -283,46 +380,174 @@ fn is_privileged() -> bool {
     }
 }
 
+/// Enumerate disks. Shells out to `diskutil`/`lsblk`/`powershell`, any of
+/// which can hang on a wedged device — so this MUST stay off the main thread.
+/// It is `async` and runs the blocking enumeration on a blocking-pool thread;
+/// the tool calls inside are themselves bounded by a timeout. A wedged device
+/// therefore yields a short delay and a (possibly partial) list, never a
+/// frozen UI.
 #[tauri::command]
-pub fn list_disks() -> Vec<Disk> {
+pub async fn list_disks(app: AppHandle) -> Vec<Disk> {
+    tauri::async_runtime::spawn_blocking(move || list_disks_blocking(Some(app)))
+        .await
+        .unwrap_or_default()
+}
+
+/// Enumerate, refresh the last-good cache, and — if anything wedged — emit
+/// `disk-cutter://device-wedged` so the frontend can launch the unplug wizard.
+/// `app` is `None` only in tests (no event emitted there).
+fn list_disks_blocking(app: Option<AppHandle>) -> Vec<Disk> {
+    let result = enumerate();
+    update_last_good(&result.disks);
+
+    if let Some(app) = app {
+        if !result.wedged.is_empty() || result.total_failure {
+            let _ = app.emit(
+                "disk-cutter://device-wedged",
+                DeviceWedged {
+                    devices: result.wedged,
+                    total_failure: result.total_failure,
+                },
+            );
+        }
+    }
+    result.disks
+}
+
+fn enumerate() -> Enumeration {
     #[cfg(target_os = "macos")]
     {
-        enumerate_macos().unwrap_or_default()
+        enumerate_macos()
     }
     #[cfg(target_os = "linux")]
     {
-        enumerate_linux().unwrap_or_default()
+        Enumeration::clean(enumerate_linux().unwrap_or_default())
     }
     #[cfg(target_os = "windows")]
     {
-        enumerate_windows().unwrap_or_default()
+        Enumeration::clean(enumerate_windows().unwrap_or_default())
     }
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     {
-        Vec::new()
+        Enumeration::clean(Vec::new())
     }
 }
 
+/// Instant list of whole-disk device nodes straight from `/dev` (a kernel
+/// readdir — it never blocks, even when `diskutil` is wedged). The wizard
+/// polls this while open to notice when the user unplugs something, then
+/// re-runs `list_disks` to confirm recovery.
+#[tauri::command]
+pub fn probe_disk_nodes() -> Vec<String> {
+    list_dev_whole_disks()
+}
+
 #[cfg(target_os = "macos")]
-fn enumerate_macos() -> Option<Vec<Disk>> {
-    use std::process::Command;
-
-    let list = Command::new("diskutil")
-        .args(["list", "-plist"])
-        .output()
-        .ok()?;
-    if !list.status.success() {
-        return None;
-    }
-    let ids = parse_disks_plist(&list.stdout)?;
-
+fn list_dev_whole_disks() -> Vec<String> {
     let mut out = Vec::new();
-    for id in ids {
-        if let Some(d) = info_for_macos(&id) {
-            out.push(d);
+    if let Ok(entries) = std::fs::read_dir("/dev") {
+        for e in entries.flatten() {
+            let name = e.file_name().to_string_lossy().into_owned();
+            if is_whole_disk(&name) {
+                out.push(format!("/dev/{name}"));
+            }
         }
     }
-    Some(out)
+    out.sort();
+    out
+}
+
+#[cfg(not(target_os = "macos"))]
+fn list_dev_whole_disks() -> Vec<String> {
+    Vec::new()
+}
+
+/// How long to wait on a single external disk-tool invocation before giving up
+/// and killing it. Generous enough for a healthy machine with many disks,
+/// short enough that a wedged device doesn't stall enumeration for long.
+#[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+const DISK_TOOL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
+
+#[cfg(target_os = "macos")]
+fn enumerate_macos() -> Enumeration {
+    use std::process::Command;
+
+    let mut cmd = Command::new("diskutil");
+    cmd.args(["list", "-plist"]);
+    let list = match crate::proc::output_with_timeout(cmd, DISK_TOOL_TIMEOUT) {
+        Ok(o) if o.status.success() => o,
+        // `diskutil list` itself hung: we have no device list. Fall back to
+        // /dev nodes as unplug candidates and flag total failure.
+        Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {
+            return Enumeration {
+                disks: Vec::new(),
+                wedged: candidate_wedged_from_dev(),
+                total_failure: true,
+            };
+        }
+        // Ran but errored, or spawn failed — not a wedge, just nothing to show.
+        _ => return Enumeration::clean(Vec::new()),
+    };
+    let ids = match parse_disks_plist(&list.stdout) {
+        Some(ids) => ids,
+        None => return Enumeration::clean(Vec::new()),
+    };
+
+    let mut disks = Vec::new();
+    let mut wedged = Vec::new();
+    for id in ids {
+        match info_for_macos(&id) {
+            Ok(Some(d)) => disks.push(d),
+            Ok(None) => {} // info failed cleanly — skip, not a wedge
+            Err(WedgeTimeout) => {
+                let device = format!("/dev/{id}");
+                wedged.push(WedgedDevice {
+                    name: cached_name(&device),
+                    device,
+                    certain: true,
+                });
+            }
+        }
+    }
+    Enumeration {
+        disks,
+        wedged,
+        total_failure: false,
+    }
+}
+
+/// Marker: a per-device `diskutil info` call timed out (the device is wedged),
+/// as distinct from a clean "couldn't parse / not a disk" miss.
+#[cfg(target_os = "macos")]
+struct WedgeTimeout;
+
+/// Whole-disk /dev nodes offered as unplug candidates when enumeration totally
+/// failed. Internal/system disks (per the last-good cache) are excluded so we
+/// never tell the operator to yank their boot drive; nodes unknown to the
+/// cache are kept — a freshly-inserted card is the likeliest culprit.
+#[cfg(target_os = "macos")]
+fn candidate_wedged_from_dev() -> Vec<WedgedDevice> {
+    let cache = LAST_GOOD_DISKS.lock().ok();
+    let mut out = Vec::new();
+    for device in list_dev_whole_disks() {
+        let cached = cache
+            .as_ref()
+            .and_then(|c| c.iter().find(|d| d.device == device));
+        match cached {
+            Some(d) if d.flags.iter().any(|f| f == "INTERNAL") => continue,
+            Some(d) => out.push(WedgedDevice {
+                device,
+                name: Some(friendly_name(d)),
+                certain: false,
+            }),
+            None => out.push(WedgedDevice {
+                device,
+                name: None,
+                certain: false,
+            }),
+        }
+    }
+    out
 }
 
 #[cfg(any(target_os = "macos", test))]
@@ -346,18 +571,18 @@ fn parse_disks_plist(bytes: &[u8]) -> Option<Vec<String>> {
 }
 
 #[cfg(target_os = "macos")]
-fn info_for_macos(id: &str) -> Option<Disk> {
+fn info_for_macos(id: &str) -> Result<Option<Disk>, WedgeTimeout> {
     use std::process::Command;
 
     let path = format!("/dev/{id}");
-    let out = Command::new("diskutil")
-        .args(["info", "-plist", &path])
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
+    let mut cmd = Command::new("diskutil");
+    cmd.args(["info", "-plist", &path]);
+    match crate::proc::output_with_timeout(cmd, DISK_TOOL_TIMEOUT) {
+        Ok(out) if out.status.success() => Ok(parse_disk_info_plist(&out.stdout, path)),
+        Ok(_) => Ok(None),
+        Err(e) if e.kind() == std::io::ErrorKind::TimedOut => Err(WedgeTimeout),
+        Err(_) => Ok(None),
     }
-    parse_disk_info_plist(&out.stdout, path)
 }
 
 #[cfg(any(target_os = "macos", test))]
@@ -2626,9 +2851,61 @@ mod tests {
         assert!(verify_image(1).is_ok());
     }
 
+    fn disk(device: &str, model: &str, capacity: &str, flags: &[&str]) -> Disk {
+        Disk {
+            device: device.into(),
+            model: model.into(),
+            capacity: capacity.into(),
+            bytes: 0,
+            bus: "USB".into(),
+            partitions: String::new(),
+            flags: flags.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn friendly_name_joins_model_and_capacity_trimming_blanks() {
+        assert_eq!(
+            friendly_name(&disk("/dev/disk7", "SANDISK ULTRA", "32 GB", &[])),
+            "SANDISK ULTRA · 32 GB"
+        );
+        assert_eq!(
+            friendly_name(&disk("/dev/disk7", "SANDISK", "", &[])),
+            "SANDISK"
+        );
+        assert_eq!(
+            friendly_name(&disk("/dev/disk7", "", "32 GB", &[])),
+            "32 GB"
+        );
+        // Nothing useful → fall back to the device node, never an empty label.
+        assert_eq!(
+            friendly_name(&disk("/dev/disk7", "", "", &[])),
+            "/dev/disk7"
+        );
+    }
+
+    #[test]
+    fn last_good_cache_names_a_device_after_it_drops_out() {
+        // Simulate a good pass that saw disk7, then a pass where it wedged.
+        update_last_good(&[disk(
+            "/dev/diskTEST7",
+            "SANDISK ULTRA",
+            "32 GB",
+            &["REMOVABLE"],
+        )]);
+        assert_eq!(
+            cached_name("/dev/diskTEST7").as_deref(),
+            Some("SANDISK ULTRA · 32 GB")
+        );
+        assert_eq!(cached_name("/dev/diskTEST_absent"), None);
+    }
+
     #[test]
     fn list_disks_returns_without_panic() {
-        let _ = list_disks();
+        // `list_disks` is async (offloads to a blocking thread); exercise the
+        // blocking enumeration directly so the test needs no runtime. `None`
+        // app handle → no event emitted.
+        let _ = list_disks_blocking(None);
     }
 
     #[test]
