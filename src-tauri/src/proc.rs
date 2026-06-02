@@ -70,8 +70,18 @@ pub fn output_with_timeout(mut cmd: Command, timeout: Duration) -> io::Result<Ou
         }
     };
 
-    let stdout = rx_out.recv().unwrap_or_default();
-    let stderr = rx_err.recv().unwrap_or_default();
+    // Collect the drained output with a short grace period rather than an
+    // unbounded recv(). The child has exited, so its own pipe write ends are
+    // closed and the drain threads normally hit EOF immediately. But if the
+    // child spawned a grandchild that inherited stdout/stderr, that grandchild
+    // keeps the write end open and the drain thread never sees EOF — an
+    // unbounded recv() would hang here. Bounding it means a pathological
+    // grandchild costs us its captured output, never a stuck call. The drain
+    // threads are detached, so any still-blocked reader exits on its own when
+    // the pipe finally closes.
+    let grace = Duration::from_secs(2);
+    let stdout = rx_out.recv_timeout(grace).unwrap_or_default();
+    let stderr = rx_err.recv_timeout(grace).unwrap_or_default();
     Ok(Output {
         status,
         stdout,
