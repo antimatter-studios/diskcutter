@@ -844,6 +844,30 @@ input,select{font:inherit;color:inherit}
   display:flex;gap:8px;align-items:center;color:var(--ink);font-weight:600;
 }
 .disk-list{flex:1;overflow:auto}
+.disk-loading{
+  height:100%;min-height:260px;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:20px;padding:56px 24px;text-align:center;
+}
+.disk-loading-spinner{
+  width:38px;height:38px;
+  border:3px solid rgba(12,12,11,.18);
+  border-top-color:var(--accent,var(--ink));
+  animation:disk-spin .8s steps(8,end) infinite;
+}
+@keyframes disk-spin{to{transform:rotate(1turn)}}
+.disk-loading-text{display:flex;flex-direction:column;gap:7px}
+.disk-loading-label{
+  font-family:var(--mono);font-size:12.5px;letter-spacing:.2em;font-weight:700;
+  text-transform:uppercase;color:var(--ink);
+}
+.disk-loading-sub{
+  font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;color:var(--mute);
+}
+.disk-loading-empty{
+  font-family:var(--mono);font-size:12px;letter-spacing:.1em;font-weight:600;
+  text-transform:uppercase;color:var(--mute);
+}
 .disk{
   width:100%;display:grid;grid-template-columns:42px 1fr auto;gap:14px;align-items:center;
   padding:14px 20px;background:transparent;border:0;border-bottom:1.5px solid rgba(12,12,11,.15);
