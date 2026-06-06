@@ -86,22 +86,37 @@ jobs:
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 
       # TEMP DIAGNOSTIC (remove before merge): the Windows lib-test exe fails to
-      # launch with STATUS_ENTRYPOINT_NOT_FOUND. Dump its imported DLLs/symbols
-      # so we can see which import the runner can't resolve.
-      - name: (diag) Windows test-exe imports
+      # launch with STATUS_ENTRYPOINT_NOT_FOUND. Build main's exe too and diff
+      # the imported symbols to find what this branch newly pulls in.
+      - name: (diag) Windows import delta vs main
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          cargo test --manifest-path src-tauri/Cargo.toml --no-run
-          $exe = Get-ChildItem src-tauri/target/debug/deps/diskcutter_lib-*.exe | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-          Write-Host "EXE: $($exe.FullName)"
           $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
           $vs = & $vswhere -latest -property installationPath
           $dumpbin = (Get-ChildItem "$vs\VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe" | Select-Object -First 1).FullName
-          Write-Host "== DEPENDENTS =="
-          & $dumpbin /DEPENDENTS $exe.FullName
-          Write-Host "== IMPORTS (DLL + symbol names) =="
-          & $dumpbin /IMPORTS $exe.FullName | Select-String -Pattern '\.dll|ProcessPrng|GetTempPath2|WaitOnAddress|Bcrypt|Synch|api-ms'
+          function Syms($exe) {
+            (& $dumpbin /IMPORTS $exe) | ForEach-Object {
+              if ($_ -match '^\s+(\S+\.dll)\s*$') { $matches[1].ToLower() }
+              elseif ($_ -match '^\s+[0-9A-Fa-f]+\s+(\S+)\s*$') { $matches[1] }
+            } | Sort-Object -Unique
+          }
+          cargo test --manifest-path src-tauri/Cargo.toml --no-run
+          $mine = (Get-ChildItem src-tauri/target/debug/deps/diskcutter_lib-*.exe | Sort-Object LastWriteTime -Descending | Select-Object -First 1).FullName
+          $minesyms = Syms $mine
+          git fetch --depth=1 origin main
+          git worktree add ../maincheck FETCH_HEAD
+          Push-Location ../maincheck
+          npm ci
+          npm run build
+          cargo test --manifest-path src-tauri/Cargo.toml --no-run
+          $main = (Get-ChildItem src-tauri/target/debug/deps/diskcutter_lib-*.exe | Sort-Object LastWriteTime -Descending | Select-Object -First 1).FullName
+          $mainsyms = Syms $main
+          Pop-Location
+          Write-Host "== imported symbols in THIS BRANCH but NOT in main =="
+          Compare-Object $mainsyms $minesyms | Where-Object { $_.SideIndicator -eq '=>' } | ForEach-Object { $_.InputObject }
+          Write-Host "== imported symbols in main but NOT in this branch =="
+          Compare-Object $mainsyms $minesyms | Where-Object { $_.SideIndicator -eq '<=' } | ForEach-Object { $_.InputObject }
 
       - name: cargo test
         run: cargo test --manifest-path src-tauri/Cargo.toml
