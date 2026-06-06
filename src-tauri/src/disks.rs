@@ -252,9 +252,10 @@ pub fn app_info(app: tauri::AppHandle) -> AppInfo {
 /// the PIDs so the frontend can offer to clean them up.
 #[tauri::command]
 pub async fn find_orphan_helpers() -> Vec<u32> {
-    tauri::async_runtime::spawn_blocking(find_orphan_helpers_blocking)
-        .await
-        .unwrap_or_default()
+    // An async command body runs on the async runtime, not the UI thread, so
+    // the blocking `ps` call here can't freeze the window — no need to hop
+    // through async_runtime::spawn_blocking.
+    find_orphan_helpers_blocking()
 }
 
 fn find_orphan_helpers_blocking() -> Vec<u32> {
@@ -298,13 +299,11 @@ fn find_orphan_helpers_blocking() -> Vec<u32> {
 /// Kill orphan helper PIDs via osascript admin (they're root-owned).
 ///
 /// The osascript admin prompt blocks until the user responds to the password
-/// dialog — so this runs on a blocking-pool thread, never the main thread,
-/// or the whole UI would freeze behind the prompt.
+/// dialog. As an async command this body runs on the async runtime, not the
+/// UI thread, so the prompt can't freeze the window.
 #[tauri::command]
 pub async fn kill_orphan_helpers(pids: Vec<u32>) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || kill_orphan_helpers_blocking(pids))
-        .await
-        .map_err(|e| e.to_string())?
+    kill_orphan_helpers_blocking(pids)
 }
 
 fn kill_orphan_helpers_blocking(pids: Vec<u32>) -> Result<(), String> {
@@ -386,15 +385,13 @@ fn is_privileged() -> bool {
 
 /// Enumerate disks. Shells out to `diskutil`/`lsblk`/`powershell`, any of
 /// which can hang on a wedged device — so this MUST stay off the main thread.
-/// It is `async` and runs the blocking enumeration on a blocking-pool thread;
-/// the tool calls inside are themselves bounded by a timeout. A wedged device
+/// As an `async` command its body runs on the async runtime, not the UI
+/// thread, and the tool calls inside are bounded by a timeout. A wedged device
 /// therefore yields a short delay and a (possibly partial) list, never a
 /// frozen UI.
 #[tauri::command]
 pub async fn list_disks(app: AppHandle) -> Vec<Disk> {
-    tauri::async_runtime::spawn_blocking(move || list_disks_blocking(Some(app)))
-        .await
-        .unwrap_or_default()
+    list_disks_blocking(Some(app))
 }
 
 /// Enumerate, refresh the last-good cache, and — if anything wedged — emit
@@ -452,26 +449,22 @@ pub fn probe_disk_nodes() -> Vec<String> {
 /// `list_disks`. Also refreshes the last-good cache as a side effect.
 #[tauri::command]
 pub async fn recheck_disks_healthy(app: AppHandle) -> bool {
-    tauri::async_runtime::spawn_blocking(move || {
-        let result = enumerate();
-        update_last_good(&result.disks);
-        // Re-emit so the wizard updates its suspect list if a DIFFERENT device
-        // is still wedged after the unplug.
-        if !result.wedged.is_empty() || result.total_failure {
-            let _ = app.emit(
-                "disk-cutter://device-wedged",
-                DeviceWedged {
-                    devices: result.wedged,
-                    total_failure: result.total_failure,
-                },
-            );
-            false
-        } else {
-            true
-        }
-    })
-    .await
-    .unwrap_or(false)
+    let result = enumerate();
+    update_last_good(&result.disks);
+    // Re-emit so the wizard updates its suspect list if a DIFFERENT device
+    // is still wedged after the unplug.
+    if !result.wedged.is_empty() || result.total_failure {
+        let _ = app.emit(
+            "disk-cutter://device-wedged",
+            DeviceWedged {
+                devices: result.wedged,
+                total_failure: result.total_failure,
+            },
+        );
+        false
+    } else {
+        true
+    }
 }
 
 #[cfg(target_os = "macos")]

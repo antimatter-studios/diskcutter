@@ -6,10 +6,10 @@
 //!     Tauri runs synchronous `#[command] fn`s on the **main thread**, so a
 //!     hung tool there freezes the whole UI — a blank, unresponsive window.
 //!     The fix has two parts that must BOTH hold: commands that shell out are
-//!     `async fn` and offload the blocking work via
-//!     `tauri::async_runtime::spawn_blocking` (keeps the main thread free), and
-//!     the spawn itself runs under [`output_with_timeout`] (so a hung tool
-//!     returns an error instead of pinning a blocking-pool thread forever).
+//!     `async fn` (so their body runs on the async runtime, not the UI thread,
+//!     keeping the window responsive), and each external call runs under
+//!     [`output_with_timeout`] (so a hung tool returns an error instead of
+//!     pinning a runtime thread forever).
 //!
 //!  2. A child that writes more than the pipe buffer holds will block on
 //!     `write` if we don't drain its output. We read stdout/stderr on
@@ -26,8 +26,8 @@ use std::time::{Duration, Instant};
 /// killed and reaped before returning so we don't leak zombies. stdout/stderr
 /// are drained concurrently, so this is safe for tools with large output.
 ///
-/// Intended to be called from inside `spawn_blocking` — it sleeps on the
-/// calling thread, which must never be the main thread.
+/// Sleeps on the calling thread, so call it from an async command body (which
+/// runs on a runtime thread) — never directly on the UI thread.
 pub fn output_with_timeout(mut cmd: Command, timeout: Duration) -> io::Result<Output> {
     cmd.stdin(Stdio::null())
         .stdout(Stdio::piped())
