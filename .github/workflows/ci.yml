@@ -85,6 +85,24 @@ jobs:
       - name: cargo clippy --all-targets -- -D warnings
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 
+      # TEMP DIAGNOSTIC (remove before merge): the Windows lib-test exe fails to
+      # launch with STATUS_ENTRYPOINT_NOT_FOUND. Dump its imported DLLs/symbols
+      # so we can see which import the runner can't resolve.
+      - name: (diag) Windows test-exe imports
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cargo test --manifest-path src-tauri/Cargo.toml --no-run
+          $exe = Get-ChildItem src-tauri/target/debug/deps/diskcutter_lib-*.exe | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          Write-Host "EXE: $($exe.FullName)"
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -latest -property installationPath
+          $dumpbin = (Get-ChildItem "$vs\VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe" | Select-Object -First 1).FullName
+          Write-Host "== DEPENDENTS =="
+          & $dumpbin /DEPENDENTS $exe.FullName
+          Write-Host "== IMPORTS (DLL + symbol names) =="
+          & $dumpbin /IMPORTS $exe.FullName | Select-String -Pattern '\.dll|ProcessPrng|GetTempPath2|WaitOnAddress|Bcrypt|Synch|api-ms'
+
       - name: cargo test
         run: cargo test --manifest-path src-tauri/Cargo.toml
 
