@@ -85,6 +85,34 @@ jobs:
       - name: cargo clippy --all-targets -- -D warnings
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 
+      - name: (diag) capture windows loader error for test exe
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cargo test --manifest-path src-tauri/Cargo.toml --no-run
+          $exe = Get-ChildItem src-tauri/target/debug/deps/diskcutter_lib-*.exe | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          Write-Host "EXE: $($exe.FullName)"
+          # Run it directly; STATUS_ENTRYPOINT_NOT_FOUND (0xc0000139) surfaces as a
+          # hard error. Capture exit code and any stderr.
+          $out = & $exe.FullName --list 2>&1
+          Write-Host "exit code: $LASTEXITCODE (0x$('{0:X}' -f $LASTEXITCODE))"
+          Write-Host "stdout/stderr:"; $out | ForEach-Object { Write-Host $_ }
+          # The loader's 'entry point X not found in DLL Y' message lands in the
+          # Application event log (Application Error / WER / SideBySide).
+          Write-Host "== recent Application event log =="
+          Get-WinEvent -LogName Application -MaxEvents 30 -ErrorAction SilentlyContinue |
+            Where-Object { $_.Message -match 'entry point|procedure|diskcutter|0xc0000139|could not be located|\.dll' } |
+            ForEach-Object { Write-Host "---`n$($_.TimeCreated) [$($_.ProviderName)]`n$($_.Message)" }
+          # Full import table for offline analysis.
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $dumpbin = $null
+          if (Test-Path $vswhere) {
+            $vs = & $vswhere -latest -property installationPath
+            if ($vs) { $dumpbin = (Get-ChildItem "$vs\VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe" -ErrorAction SilentlyContinue | Select-Object -First 1).FullName }
+          }
+          if ($dumpbin) { Write-Host "== IMPORTS =="; & $dumpbin /IMPORTS $exe.FullName }
+          exit 0
+
       - name: cargo test
         run: cargo test --manifest-path src-tauri/Cargo.toml
 
