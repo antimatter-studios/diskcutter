@@ -391,28 +391,38 @@ fn is_privileged() -> bool {
 /// frozen UI.
 #[tauri::command]
 pub async fn list_disks(app: AppHandle) -> Vec<Disk> {
-    list_disks_blocking(Some(app))
+    let result = enumerate_and_cache();
+    emit_device_wedged(&app, &result);
+    result.disks
 }
 
-/// Enumerate, refresh the last-good cache, and — if anything wedged — emit
-/// `disk-cutter://device-wedged` so the frontend can launch the unplug wizard.
-/// `app` is `None` only in tests (no event emitted there).
-fn list_disks_blocking(app: Option<AppHandle>) -> Vec<Disk> {
+/// Enumerate disks and refresh the last-good cache. Deliberately free of any
+/// `AppHandle`/`emit` reference so unit tests can call it without linking the
+/// Tauri GUI runtime: a test that reaches `app.emit` drags the whole tao/wry
+/// window stack into the lib test binary, which carries no application manifest
+/// and then fails to load (comctl32-v6 `TaskDialogIndirect` is unresolvable) on
+/// the Windows CI runner. The event emission lives in the async command paths
+/// below, which tests never reach, so it stays dead-code-eliminated there.
+fn enumerate_and_cache() -> Enumeration {
     let result = enumerate();
     update_last_good(&result.disks);
+    result
+}
 
-    if let Some(app) = app {
-        if !result.wedged.is_empty() || result.total_failure {
-            let _ = app.emit(
-                "disk-cutter://device-wedged",
-                DeviceWedged {
-                    devices: result.wedged,
-                    total_failure: result.total_failure,
-                },
-            );
-        }
+/// Emit `disk-cutter://device-wedged` if enumeration found a stuck device, so
+/// the frontend can launch the unplug-recovery wizard. Only ever called from
+/// async command bodies (never tests) — keep it that way (see
+/// `enumerate_and_cache`).
+fn emit_device_wedged(app: &AppHandle, result: &Enumeration) {
+    if !result.wedged.is_empty() || result.total_failure {
+        let _ = app.emit(
+            "disk-cutter://device-wedged",
+            DeviceWedged {
+                devices: result.wedged.clone(),
+                total_failure: result.total_failure,
+            },
+        );
     }
-    result.disks
 }
 
 fn enumerate() -> Enumeration {
@@ -449,22 +459,14 @@ pub fn probe_disk_nodes() -> Vec<String> {
 /// `list_disks`. Also refreshes the last-good cache as a side effect.
 #[tauri::command]
 pub async fn recheck_disks_healthy(app: AppHandle) -> bool {
-    let result = enumerate();
-    update_last_good(&result.disks);
+    let result = enumerate_and_cache();
+    let healthy = result.wedged.is_empty() && !result.total_failure;
     // Re-emit so the wizard updates its suspect list if a DIFFERENT device
     // is still wedged after the unplug.
-    if !result.wedged.is_empty() || result.total_failure {
-        let _ = app.emit(
-            "disk-cutter://device-wedged",
-            DeviceWedged {
-                devices: result.wedged,
-                total_failure: result.total_failure,
-            },
-        );
-        false
-    } else {
-        true
+    if !healthy {
+        emit_device_wedged(&app, &result);
     }
+    healthy
 }
 
 #[cfg(target_os = "macos")]
@@ -2927,10 +2929,11 @@ mod tests {
 
     #[test]
     fn list_disks_returns_without_panic() {
-        // `list_disks` is async (offloads to a blocking thread); exercise the
-        // blocking enumeration directly so the test needs no runtime. `None`
-        // app handle → no event emitted.
-        let _ = list_disks_blocking(None);
+        // Exercise the pure enumeration core directly. It must NOT reference the
+        // Tauri runtime (no `AppHandle`/`emit`) — otherwise this test pulls the
+        // GUI window stack into the lib test binary, which then fails to load on
+        // Windows CI. See `enumerate_and_cache`.
+        let _ = enumerate_and_cache();
     }
 
     #[test]
