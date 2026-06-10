@@ -1053,6 +1053,8 @@ function AppBody({
                 disks={disks}
                 disksLoading={disksLoading}
                 accent={accent}
+                expanded={!!expanded[row.id]}
+                onToggle={() => setExpanded((e) => ({ ...e, [row.id]: !e[row.id] }))}
                 onSelectSource={onCaptureSelectSource}
                 onChooseOutput={onCaptureChooseOutput}
                 onStart={onCaptureStart}

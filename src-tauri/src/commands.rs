@@ -142,6 +142,75 @@ pub fn inspect_image_bootable(app: AppHandle, job_id: i64, path: String) -> Resu
     Ok(())
 }
 
+/// Async partition probe of a *physical device* (e.g. `/dev/disk4`) —
+/// the disk side of a queue row rather than the image side. Spawns a
+/// worker and emits `disk-cutter://device-partitioned { scope, id,
+/// summary, error }` once done.
+///
+/// `scope` is `"capture"` (the source disk a read row will image) or
+/// `"target"` (the disk a burn row will overwrite); the frontend routes
+/// the result to the matching row by `(scope, id)`. `total_bytes` is the
+/// device size from the disk enumeration — the device node itself
+/// reports a zero length, so the probe needs the real geometry passed in
+/// (see `inspect::inspect_device`).
+///
+/// `summary` is `null` for a disk with no recognised table (raw /
+/// unformatted / single filesystem). `error` is `"needs_fda"` when the
+/// device can't be opened for lack of Full Disk Access, or a message
+/// string for any other open failure — so the UI can prompt for access
+/// instead of silently showing "no table".
+#[tauri::command]
+pub fn inspect_device_partitions(
+    app: AppHandle,
+    scope: String,
+    id: String,
+    device: String,
+    total_bytes: u64,
+) -> Result<(), String> {
+    std::thread::spawn(move || {
+        #[derive(serde::Serialize, Clone)]
+        struct Payload {
+            scope: String,
+            id: String,
+            summary: Option<PartitionSummary>,
+            error: Option<String>,
+        }
+        // Pre-open with std::fs so we can classify a permission failure
+        // as "needs FDA" before handing off to the probe (FileDevice
+        // collapses the io::Error kind, so we'd lose that distinction).
+        let error = match std::fs::File::open(&device) {
+            Ok(_) => None,
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+                Some("needs_fda".to_string())
+            }
+            Err(e) => Some(e.to_string()),
+        };
+        if let Some(error) = error {
+            let _ = app.emit(
+                "disk-cutter://device-partitioned",
+                Payload {
+                    scope,
+                    id,
+                    summary: None,
+                    error: Some(error),
+                },
+            );
+            return;
+        }
+        let summary = crate::inspect::inspect_device(Path::new(&device), total_bytes);
+        let _ = app.emit(
+            "disk-cutter://device-partitioned",
+            Payload {
+                scope,
+                id,
+                summary,
+                error: None,
+            },
+        );
+    });
+    Ok(())
+}
+
 /// Trigger a deep scan for an image attached to a queue row. Spawns a
 /// worker thread that streams through the decoder chain, captures
 /// per-partition filesystem samples, and emits progressive Tauri events

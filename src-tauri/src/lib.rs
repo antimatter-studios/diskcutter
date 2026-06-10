@@ -118,6 +118,7 @@ pub fn run() {
             commands::inspect_partitions,
             commands::inspect_image_partitions,
             commands::inspect_image_bootable,
+            commands::inspect_device_partitions,
             commands::scan_image_for_row,
             commands::capture_snapshot,
             commands::restore_snapshot,

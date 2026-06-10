@@ -6,6 +6,14 @@
   "common": {
     "dash": "—"
   },
+  "device": {
+    "partition": {
+      "reading": "Reading partition table…",
+      "no_table": "No partition table on this disk.",
+      "needs_fda": "Full Disk Access required to read this disk’s partition table.",
+      "error": "Could not read partition table: {{error}}"
+    }
+  },
   "app": {
     "title_ready": "DISK CUTTER — READY",
     "title_writing": "DISK CUTTER — WRITING",
@@ -200,6 +208,8 @@
       "image": "IMAGE",
       "target": "TARGET",
       "partitions": "PARTITION LAYOUT",
+      "target_partitions": "TARGET DISK LAYOUT",
+      "source_partitions": "SOURCE DISK LAYOUT",
       "verification": "VERIFICATION"
     },
     "kv": {

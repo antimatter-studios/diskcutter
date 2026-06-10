@@ -6,6 +6,14 @@
   "common": {
     "dash": "—"
   },
+  "device": {
+    "partition": {
+      "reading": "Leyendo la tabla de particiones…",
+      "no_table": "Este disco no tiene tabla de particiones.",
+      "needs_fda": "Se requiere Acceso total al disco para leer la tabla de particiones de este disco.",
+      "error": "No se pudo leer la tabla de particiones: {{error}}"
+    }
+  },
   "app": {
     "title_ready": "DISK CUTTER — LISTO",
     "title_writing": "DISK CUTTER — ESCRIBIENDO",
@@ -200,6 +208,8 @@
       "image": "IMAGEN",
       "target": "DESTINO",
       "partitions": "DISEÑO DE PARTICIONES",
+      "target_partitions": "DISEÑO DEL DISCO DE DESTINO",
+      "source_partitions": "DISEÑO DEL DISCO DE ORIGEN",
       "verification": "VERIFICACIÓN"
     },
     "kv": {

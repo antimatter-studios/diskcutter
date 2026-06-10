@@ -146,7 +146,41 @@ export const useQueueStore = create((set, get) => ({
     set((s) => {
       const row = s.captureRows[id];
       if (!row) return {};
-      return { captureRows: { ...s.captureRows, [id]: { ...row, source: disk } } };
+      // Clear any prior probe result and mark the device probe in-flight
+      // (devicePartitions === undefined) so the row shows "reading layout"
+      // until the new source's partition table comes back.
+      return {
+        captureRows: {
+          ...s.captureRows,
+          [id]: { ...row, source: disk, devicePartitions: undefined, devicePartitionsError: null },
+        },
+      };
+    });
+    // Probe the source disk's partition layout so the operator can
+    // confirm it's the right disk before imaging it.
+    if (disk?.device) {
+      fire('inspect_device_partitions', {
+        scope: 'capture',
+        id,
+        device: disk.device,
+        totalBytes: disk.bytes || 0,
+      });
+    }
+  },
+
+  // Partition-probe result for a capture row's *source disk*. summary is
+  // null for a disk with no recognised table; error is 'needs_fda' or a
+  // message string when the device couldn't be read.
+  setCaptureDevicePartitions(id, summary, error) {
+    set((s) => {
+      const row = s.captureRows[id];
+      if (!row) return {};
+      return {
+        captureRows: {
+          ...s.captureRows,
+          [id]: { ...row, devicePartitions: summary || null, devicePartitionsError: error || null },
+        },
+      };
     });
   },
 
@@ -386,11 +420,43 @@ export const useQueueStore = create((set, get) => ({
     set((s) => {
       const j = s.jobs[jobId];
       if (!j) return s;
-      return { jobs: { ...s.jobs, [jobId]: { ...j, target: disk } } };
+      // Reset the target-device probe (undefined === in-flight) so the
+      // expanded detail shows "reading layout" until the new target's
+      // partition table arrives.
+      return {
+        jobs: {
+          ...s.jobs,
+          [jobId]: { ...j, target: disk, targetPartitions: undefined, targetPartitionsError: null },
+        },
+      };
     });
     if (disk?.device) {
       fire('set_burn_target', { jobId, targetDevice: disk.device });
+      // Probe the target disk's current partition layout so the operator
+      // can confirm what's about to be overwritten before burning.
+      fire('inspect_device_partitions', {
+        scope: 'target',
+        id: String(jobId),
+        device: disk.device,
+        totalBytes: disk.bytes || 0,
+      });
     }
+  },
+
+  // Partition-probe result for a burn row's *target disk* (the disk
+  // about to be overwritten). Keyed by job id (the event carries it as a
+  // string; object indexing coerces transparently).
+  setTargetPartitions(jobId, summary, error) {
+    set((s) => {
+      const j = s.jobs[jobId];
+      if (!j) return s;
+      return {
+        jobs: {
+          ...s.jobs,
+          [jobId]: { ...j, targetPartitions: summary || null, targetPartitionsError: error || null },
+        },
+      };
+    });
   },
 
   removeJob(jobId) {
@@ -736,6 +802,19 @@ export function attachQueueListeners({ onFdaError, onImageInvalid } = {}) {
     if (!mounted) return;
     const p = e.payload;
     useQueueStore.getState().setPartitions(p.job_id, p.summary);
+  }).then((u) => subs.push(u));
+
+  // Physical-device partition probe (capture source disk / burn target
+  // disk). Routed to the matching row by scope; see
+  // commands::inspect_device_partitions.
+  listen('disk-cutter://device-partitioned', (e) => {
+    if (!mounted) return;
+    const p = e.payload;
+    if (p.scope === 'capture') {
+      useQueueStore.getState().setCaptureDevicePartitions(p.id, p.summary, p.error);
+    } else {
+      useQueueStore.getState().setTargetPartitions(p.id, p.summary, p.error);
+    }
   }).then((u) => subs.push(u));
 
   listen('disk-cutter://image-boot-checked', (e) => {

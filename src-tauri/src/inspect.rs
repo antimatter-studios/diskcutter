@@ -21,7 +21,7 @@
 
 use std::path::Path;
 
-use fs_core::{BlockRead, FileDevice};
+use fs_core::{BlockRead, FileDevice, SliceReader};
 use partitions::{
     probe::{probe, Partition, PartitionKind, TableKind},
     sniff::{classify, sniff, ExtVersion, FsKind},
@@ -122,6 +122,32 @@ pub fn inspect_any(path: &Path) -> Option<PartitionSummary> {
 /// the header.
 pub fn inspect_block_read(dev: &dyn BlockRead) -> Option<PartitionSummary> {
     summarise(dev).ok()
+}
+
+/// Inspect a physical block device (e.g. `/dev/disk4`) with the same
+/// partition probe used for image files — so the UI can show the
+/// partition layout of the actual disk a capture row will image, or
+/// the disk a burn row is about to overwrite.
+///
+/// A device node reports `metadata().len() == 0`, and the probe gates
+/// GPT detection and MBR bounds-validation on `size_bytes()` — a
+/// zero-length device makes it refuse to parse any table. We therefore
+/// wrap the raw `FileDevice` in a `SliceReader` carrying the real
+/// device size (`size_bytes`, taken from the disk enumeration) so the
+/// probe sees the true geometry. Reads are read-only and bounded to
+/// the first ~64 KB of each partition, exactly as for image files, so
+/// inspecting a multi-TB disk is still a sub-second operation.
+///
+/// Returns `None` for an unrecognised / table-less device, an
+/// unreadable device, or when `size_bytes` is zero (no geometry to
+/// bound the probe with).
+pub fn inspect_device(path: &Path, size_bytes: u64) -> Option<PartitionSummary> {
+    if size_bytes == 0 {
+        return None;
+    }
+    let dev = FileDevice::open(path).ok()?;
+    let sized = SliceReader::new(&dev, 0, size_bytes);
+    summarise(&sized).ok()
 }
 
 fn summarise(dev: &dyn BlockRead) -> partitions::Result<PartitionSummary> {
@@ -718,6 +744,39 @@ mod tests {
         assert_eq!(summary.table_kind, "MBR");
         assert_eq!(summary.partitions.len(), 1);
         assert_eq!(summary.partitions[0].kind_label, "Linux filesystem");
+    }
+
+    #[test]
+    fn inspect_device_probes_with_caller_supplied_size() {
+        // A device node reports metadata().len() == 0; inspect_device
+        // takes the size explicitly and wraps the reader in a
+        // SliceReader so the probe sees real geometry. Drive that path
+        // with a synthetic MBR written to a regular file, passing the
+        // file length as the "device size".
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("dev.img");
+        let mut image = vec![0u8; 4 * 1024 * 1024];
+        let entry = 0x1BE;
+        image[entry] = 0x00;
+        image[entry + 4] = 0x83;
+        image[entry + 8..entry + 12].copy_from_slice(&2048u32.to_le_bytes());
+        image[entry + 12..entry + 16].copy_from_slice(&4096u32.to_le_bytes());
+        image[510] = 0x55;
+        image[511] = 0xAA;
+        std::fs::write(&p, &image).unwrap();
+        let summary =
+            inspect_device(&p, image.len() as u64).expect("sized device probe should succeed");
+        assert_eq!(summary.table_kind, "MBR");
+        assert_eq!(summary.partitions.len(), 1);
+        assert_eq!(summary.partitions[0].kind_label, "Linux filesystem");
+    }
+
+    #[test]
+    fn inspect_device_returns_none_for_zero_size() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("dev.img");
+        std::fs::write(&p, vec![0u8; 4096]).unwrap();
+        assert!(inspect_device(&p, 0).is_none());
     }
 
     #[test]

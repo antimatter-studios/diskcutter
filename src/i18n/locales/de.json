@@ -6,6 +6,14 @@
   "common": {
     "dash": "—"
   },
+  "device": {
+    "partition": {
+      "reading": "Partitionstabelle wird gelesen…",
+      "no_table": "Keine Partitionstabelle auf diesem Datenträger.",
+      "needs_fda": "Vollständiger Festplattenzugriff erforderlich, um die Partitionstabelle dieses Datenträgers zu lesen.",
+      "error": "Partitionstabelle konnte nicht gelesen werden: {{error}}"
+    }
+  },
   "app": {
     "title_ready": "DISK CUTTER — BEREIT",
     "title_writing": "DISK CUTTER — SCHREIBT",
@@ -200,6 +208,8 @@
       "image": "ABBILD",
       "target": "ZIEL",
       "partitions": "PARTITIONSLAYOUT",
+      "target_partitions": "ZIELDATENTRÄGER-LAYOUT",
+      "source_partitions": "QUELLDATENTRÄGER-LAYOUT",
       "verification": "PRÜFUNG"
     },
     "kv": {

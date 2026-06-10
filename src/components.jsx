@@ -732,6 +732,19 @@ function JobDetail({ job, accent, onCancel, onRetry, onReset, onRefresh, fdaBloc
           />
         </DetailBlock>
 
+        {job.target && (
+          <DetailBlock
+            label={t('detail.block.target_partitions', { defaultValue: 'TARGET DISK LAYOUT' })}
+            full
+          >
+            <DevicePartitions
+              partitions={job.targetPartitions}
+              error={job.targetPartitionsError}
+              totalBytes={job.target.bytes}
+            />
+          </DetailBlock>
+        )}
+
         <DetailBlock label={t('detail.block.verification')} full>
           <VerificationPanel job={job} accent={accent} />
         </DetailBlock>
@@ -981,6 +994,76 @@ function PartitionTable({ partitions, validation, validationDetail, boot }) {
         </tbody>
       </table>
     </div>
+  );
+}
+
+/* ─────────── Device partition layout ─────────── */
+
+// Renders the partition layout of a *physical disk* (a capture row's
+// source, or a burn row's target) by reusing the image PartitionStrip +
+// PartitionTable. The disk probe has its own state machine distinct
+// from image validation:
+//   partitions === undefined → probe in flight ("reading…")
+//   partitions === null      → probed, no recognised table
+//   partitions === summary   → probed, table present
+//   error === 'needs_fda'    → couldn't open the device for lack of FDA
+//   error === <string>       → any other read failure
+// We feed PartitionStrip/Table a synthetic validation='valid' because
+// there's no image-validation gate for a disk — the gate here is just
+// "have we probed it yet".
+function DevicePartitions({ partitions, error, totalBytes }) {
+  const { t } = useTranslation();
+  if (error === 'needs_fda') {
+    return (
+      <div className="empty-line">
+        {t('device.partition.needs_fda', {
+          defaultValue: 'Full Disk Access required to read this disk’s partition table.',
+        })}
+      </div>
+    );
+  }
+  if (error) {
+    return (
+      <div className="empty-line">
+        {t('device.partition.error', {
+          defaultValue: 'Could not read partition table: {{error}}',
+          error,
+        })}
+      </div>
+    );
+  }
+  if (partitions === undefined) {
+    return (
+      <div className="empty-line">
+        {t('device.partition.reading', { defaultValue: 'Reading partition table…' })}
+      </div>
+    );
+  }
+  const noTable = t('device.partition.no_table', {
+    defaultValue: 'No partition table on this disk.',
+  });
+  const hasTable = !!partitions?.partitions?.length;
+  return (
+    <>
+      {/* The proportional bar only earns its space when there are real
+          partitions; for a table-less disk the table below carries the
+          single "no partition table" line on its own. */}
+      {hasTable && (
+        <PartitionStrip
+          partitions={partitions}
+          totalBytes={totalBytes}
+          validation="valid"
+          validationDetail={noTable}
+          boot={null}
+        />
+      )}
+      <PartitionTable
+        partitions={partitions}
+        validation="valid"
+        validationDetail={noTable}
+        boot={null}
+      />
+    </>
   );
 }
 
@@ -2133,7 +2216,7 @@ function CatalogSheet({ open, onPick, onClose, accent }) {
 // A single "make image from disk" row in the queue.
 // Source disk is on the left (like the image column in a burn row),
 // output file path on the right, progress in the middle.
-function CaptureRow({ row, disks, disksLoading, accent, onSelectSource, onChooseOutput, onStart, onCancel, onRemove }) {
+function CaptureRow({ row, disks, disksLoading, accent, expanded, onToggle, onSelectSource, onChooseOutput, onStart, onCancel, onRemove }) {
   const { t } = useTranslation();
   const isConfiguring = row.state === 'configuring';
   const isReading = row.state === 'reading';
@@ -2143,9 +2226,18 @@ function CaptureRow({ row, disks, disksLoading, accent, onSelectSource, onChoose
   const [sourcePickerOpen, setSourcePickerOpen] = useState(false);
 
   return (
-    <div className="job" style={{ '--accent': accent }}>
+    <div className={"job" + (expanded ? " job--open" : "")} style={{ '--accent': accent }}>
       <div className="job-head">
-        <div className="job-chev" style={{ opacity: 0.3 }}>⬚</div>
+        {/* The chevron becomes a real toggle once a source disk is picked —
+            expanding reveals that disk's partition layout so the operator
+            can confirm it's the right disk to image. */}
+        {row.source ? (
+          <button className="job-chev" onClick={onToggle} aria-label={expanded ? 'Collapse row' : 'Expand row'}>
+            {expanded ? "▼" : "▶"}
+          </button>
+        ) : (
+          <div className="job-chev" style={{ opacity: 0.3 }}>⬚</div>
+        )}
         <div className="job-num mono small" style={{ color: accent, opacity: 0.8 }}>IMG</div>
 
         {/* Source disk */}
@@ -2251,6 +2343,25 @@ function CaptureRow({ row, disks, disksLoading, accent, onSelectSource, onChoose
           )}
         </div>
       </div>
+
+      {/* Expanded drawer: the source disk's current partition layout, so
+          the operator can confirm they're imaging the right disk. */}
+      {expanded && row.source && (
+        <div className="job-detail">
+          <div className="detail-grid">
+            <DetailBlock
+              label={t('detail.block.source_partitions', { defaultValue: 'SOURCE DISK LAYOUT' })}
+              full
+            >
+              <DevicePartitions
+                partitions={row.devicePartitions}
+                error={row.devicePartitionsError}
+                totalBytes={row.source.bytes}
+              />
+            </DetailBlock>
+          </div>
+        </div>
+      )}
 
       {/* Source disk picker sheet */}
       {sourcePickerOpen && (
