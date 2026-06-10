@@ -2181,6 +2181,11 @@ pub fn start_capture(
     }
 
     // In-process path (used when app is already privileged or source is a file).
+    // Clear any stale cancel sentinel from a previous attempt with the same id
+    // (e.g. a Retry after a cancelled capture) so the watcher below doesn't
+    // immediately cancel the fresh run. Mirrors the burn path and the elevated
+    // capture path, which both clear before (re)starting.
+    let _ = std::fs::remove_file(capture_sentinel_path(&capture_id));
     let cancel = Arc::new(AtomicBool::new(false));
     let done = Arc::new(AtomicBool::new(false));
     let capture_id_clone = capture_id.clone();
