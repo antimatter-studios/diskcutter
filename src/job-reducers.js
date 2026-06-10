@@ -3,12 +3,19 @@ import { formatBps, formatDuration } from './format.js';
 export function applyJobUpdate(jobs, u) {
   return jobs.map((j) => {
     if (j.id !== u.job_id) return j;
+    if (u.state === 'materializing') {
+      // Source is a dataless cloud placeholder being faulted in before the
+      // burn. Reuse the same startedAt stamp so the elapsed counter spans
+      // download + write rather than resetting at the writing handoff.
+      const startedAt = (j.state === 'materializing') ? j.startedAt : Date.now();
+      return { ...j, state: 'materializing', progress: u.progress, speed: u.speed, eta: u.eta, startedAt };
+    }
     if (u.state === 'writing') {
       // Stamp startedAt on the transition INTO writing so the row can show a
       // live elapsed counter alongside the ETA. Preserved across subsequent
       // 'writing' progress events and across the writing→verifying handoff so
       // the elapsed reflects the whole job run, not just the current phase.
-      const startedAt = (j.state === 'writing' || j.state === 'verifying') ? j.startedAt : Date.now();
+      const startedAt = (j.state === 'writing' || j.state === 'verifying' || j.state === 'materializing') ? j.startedAt : Date.now();
       return { ...j, state: 'writing', progress: u.progress, speed: u.speed, eta: u.eta, startedAt };
     }
     if (u.state === 'verifying') {

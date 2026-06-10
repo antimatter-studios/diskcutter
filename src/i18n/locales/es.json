@@ -147,6 +147,7 @@
       "awaiting_target": "ESPERANDO DESTINO",
       "validating": "VALIDAR",
       "invalid": "NO GRABABLE",
+      "materialize": "DESCARGANDO DE LA NUBE",
       "write": "ESCRIBIR",
       "verify": "VERIFICAR",
       "done": "HECHO",
@@ -341,6 +342,10 @@
     "EIO": {
       "title": "ERROR DE E/S",
       "detail": "FALLÓ UNA LECTURA O ESCRITURA DURANTE LA OPERACIÓN."
+    },
+    "ECLOUD": {
+      "title": "FALLÓ LA DESCARGA DESDE LA NUBE",
+      "detail": "NO SE PUDO DESCARGAR LA IMAGEN DE ORIGEN DESDE EL ALMACENAMIENTO EN LA NUBE. EN FINDER, HAZ CLIC DERECHO EN EL ARCHIVO Y ELIGE «DESCARGAR AHORA» / «HACER DISPONIBLE SIN CONEXIÓN», O CIERRA Y VUELVE A ABRIR TU APP DE NUBE (GOOGLE DRIVE, ICLOUD…), LUEGO REINTENTA."
     },
     "ECANCELLED": {
       "title": "CANCELADO",
