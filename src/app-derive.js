@@ -3,7 +3,7 @@ import { formatBps, formatBytes, formatSession } from './format.js';
 export function computeScene(jobs, pickerJob, errorJob) {
   if (pickerJob !== null) return 'diskpicker';
   if (jobs.length === 0) return 'empty';
-  if (jobs.some((j) => j.state === 'writing')) return 'writing';
+  if (jobs.some((j) => j.state === 'writing' || j.state === 'materializing')) return 'writing';
   if (jobs.some((j) => j.state === 'verifying')) return 'verifying';
   if (errorJob) return 'error';
   if (jobs.every((j) => j.state === 'success')) return 'success';

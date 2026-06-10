@@ -449,6 +449,7 @@ function JobRow({ job, accent, expanded, onToggle, onSelectTarget, onBurn, onCan
   const danger = state === 'error';
   const writing = state === 'writing';
   const verifying = state === 'verifying';
+  const materializing = state === 'materializing';
   const success = state === 'success';
   const burnable =
     state === 'idle' &&
@@ -535,6 +536,7 @@ function JobRow({ job, accent, expanded, onToggle, onSelectTarget, onBurn, onCan
         <div className="job-progress">
           {state === 'idle' && job.target && <div className="status-tag">{t('job.state.ready')}</div>}
           {state === 'idle' && !job.target && <div className="status-tag faint">{t('job.state.awaiting_target')}</div>}
+          {materializing && <ProgressBar value={job.progress} label={t('job.state.materialize')} speed={job.speed} eta={job.eta} startedAt={job.startedAt} accent="var(--ink)" />}
           {writing && <ProgressBar value={job.progress} label={t('job.state.write')} speed={job.speed} eta={job.eta} startedAt={job.startedAt} accent={accent} />}
           {verifying && <ProgressBar value={job.verifyProgress} label={t('job.state.verify')} speed={job.speed} eta={job.eta} startedAt={job.startedAt} accent="var(--ink)" />}
           {success && <SuccessReadout job={job} />}
@@ -623,6 +625,7 @@ function ScanProgressStrip({ progress, accent }) {
 function StateGlyph({ state, accent }) {
   if (state === 'success') return <div className="glyph glyph--ok">✓</div>;
   if (state === 'error') return <div className="glyph glyph--err" style={{ background: accent }}>✕</div>;
+  if (state === 'materializing') return <div className="glyph glyph--run">↓</div>;
   if (state === 'writing') return <div className="glyph glyph--run">▶</div>;
   if (state === 'verifying') return <div className="glyph glyph--run">⌕</div>;
   return <div className="glyph">·</div>;
@@ -689,7 +692,7 @@ function JobDetail({ job, accent, onCancel, onRetry, onReset, onRefresh, fdaBloc
   // Refresh re-scans the image and re-runs validation; non-destructive, so
   // available in every state — except while the burn is actively reading
   // the file, where another open could race the in-flight stream.
-  const refreshDisabled = job.state === 'writing' || job.state === 'verifying';
+  const refreshDisabled = job.state === 'writing' || job.state === 'verifying' || job.state === 'materializing';
   return (
     <div className="job-detail">
       <div className="detail-grid">

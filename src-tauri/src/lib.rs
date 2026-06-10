@@ -2,6 +2,7 @@ pub mod backup;
 pub mod capture;
 pub mod catalog;
 pub mod cli;
+mod cloud;
 pub mod commands;
 mod db;
 pub mod decoder_chain;

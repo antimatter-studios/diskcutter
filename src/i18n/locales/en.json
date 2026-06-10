@@ -147,6 +147,7 @@
       "awaiting_target": "AWAITING TARGET",
       "validating": "VALIDATING",
       "invalid": "CANNOT BURN",
+      "materialize": "DOWNLOADING FROM CLOUD",
       "write": "WRITE",
       "verify": "VERIFY",
       "done": "DONE",
@@ -341,6 +342,10 @@
     "EIO": {
       "title": "I/O ERROR",
       "detail": "A READ OR WRITE FAILED DURING THE OPERATION."
+    },
+    "ECLOUD": {
+      "title": "CLOUD DOWNLOAD FAILED",
+      "detail": "COULD NOT DOWNLOAD THE SOURCE IMAGE FROM CLOUD STORAGE. IN FINDER, RIGHT-CLICK THE FILE AND CHOOSE \"DOWNLOAD NOW\" / \"MAKE AVAILABLE OFFLINE\", OR QUIT AND RELAUNCH YOUR CLOUD APP (GOOGLE DRIVE, ICLOUD…), THEN RETRY."
     },
     "ECANCELLED": {
       "title": "CANCELLED",

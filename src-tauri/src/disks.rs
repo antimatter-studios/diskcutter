@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
+use crate::cloud;
 use crate::db::{self, Db};
 use crate::pipeline::{self, BurnError, VerifyMismatch};
 use crate::source;
@@ -900,9 +901,6 @@ fn derive_partitions(dict: &plist::Dictionary) -> String {
 #[tauri::command]
 pub fn start_write(
     app: AppHandle,
-    cancel: State<'_, CancelRegistry>,
-    active: State<'_, ActiveBurns>,
-    elevated: State<'_, ElevatedJobs>,
     job_id: i64,
     image_path: String,
     target_device: String,
@@ -934,41 +932,86 @@ pub fn start_write(
             is_privileged()
         ),
     );
+    // Parent-side FDA preflight: stat'ing TCC.db requires Full Disk Access,
+    // so a stat failure is a strong signal the helper would immediately bail
+    // with ENEEDS_FDA. Surface that without paying the osascript+password
+    // round-trip — and before any cloud download, so we fail fast.
+    if needs_elevation && !fda_granted() {
+        let msg = "Full Disk Access not granted to Disk Cutter".to_string();
+        db::record_burn_failed(&app.state::<Db>(), job_id, "ENEEDS_FDA", &msg);
+        let _ = app.emit(
+            "disk-cutter://job-error",
+            JobFailure {
+                job_id,
+                error_code: "ENEEDS_FDA".into(),
+                error_message: msg,
+            },
+        );
+        return Ok(());
+    }
+
+    // Cloud-source gate: a *dataless* File Provider placeholder (iCloud /
+    // Google Drive / Dropbox / …) must be faulted in before the burn reads
+    // it. We do it here, in the parent, with a visible "materializing" phase
+    // and exactly once — so two concurrent burns of the same file can't
+    // wedge the provider with duplicate fault-in (the EDEADLK "Resource
+    // deadlock avoided" trap that surfaces downstream as a generic I/O
+    // error). The continuation hands off to `begin_burn` when the download
+    // completes.
+    if cloud::is_dataless(p) {
+        spawn_materialize_then_burn(
+            app.clone(),
+            job_id,
+            image_path,
+            target_device,
+            needs_elevation,
+        );
+        return Ok(());
+    }
+
+    begin_burn(
+        app.clone(),
+        job_id,
+        image_path,
+        target_device,
+        needs_elevation,
+    )
+}
+
+/// Dispatch a burn that has cleared preflight (probe + FDA + any cloud
+/// materialization). Elevated burns spawn the root helper; in-process burns
+/// run on a worker thread. Registries are fetched off `app` so this can be
+/// called straight from `start_write` or from the post-materialization
+/// continuation thread, neither of which can lend a borrowed `State`.
+fn begin_burn(
+    app: AppHandle,
+    job_id: i64,
+    image_path: String,
+    target_device: String,
+    needs_elevation: bool,
+) -> Result<(), String> {
     if needs_elevation {
-        // Parent-side FDA preflight: stat'ing TCC.db requires Full Disk
-        // Access, so a stat failure is a strong signal the helper would
-        // immediately bail with ENEEDS_FDA. Surface that without paying the
-        // osascript+password round-trip.
-        if !fda_granted() {
-            let msg = "Full Disk Access not granted to Disk Cutter".to_string();
-            db::record_burn_failed(&app.state::<Db>(), job_id, "ENEEDS_FDA", &msg);
-            let _ = app.emit(
-                "disk-cutter://job-error",
-                JobFailure {
-                    job_id,
-                    error_code: "ENEEDS_FDA".into(),
-                    error_message: msg,
-                },
-            );
-            return Ok(());
-        }
-        active.insert(ActiveBurn {
+        app.state::<ActiveBurns>().insert(ActiveBurn {
             job_id,
             target: target_device.clone(),
             kind: BurnKind::Elevated,
         });
-        return spawn_elevated_burn(app, &elevated, job_id, image_path, target_device);
+        let elevated = app.state::<ElevatedJobs>();
+        return spawn_elevated_burn(app.clone(), &elevated, job_id, image_path, target_device);
     }
 
     let flag = Arc::new(AtomicBool::new(false));
-    cancel.0.lock().unwrap().insert(job_id, flag.clone());
-    active.insert(ActiveBurn {
+    app.state::<CancelRegistry>()
+        .0
+        .lock()
+        .unwrap()
+        .insert(job_id, flag.clone());
+    app.state::<ActiveBurns>().insert(ActiveBurn {
         job_id,
         target: target_device.clone(),
         kind: BurnKind::InProcess,
     });
 
-    let app = app.clone();
     let id = job_id;
     let image = image_path;
     let target = target_device;
@@ -1010,6 +1053,112 @@ pub fn start_write(
     });
 
     Ok(())
+}
+
+/// Download a dataless cloud source to the local cache, emitting a
+/// `materializing` progress phase, then hand off to [`begin_burn`]. Runs on
+/// its own thread (the download can take minutes) so `start_write` returns
+/// promptly. Cancellable mid-download via the same sentinel file the Cancel
+/// button writes.
+fn spawn_materialize_then_burn(
+    app: AppHandle,
+    job_id: i64,
+    image_path: String,
+    target_device: String,
+    needs_elevation: bool,
+) {
+    use std::time::{Duration, Instant};
+
+    // Clear any stale cancel sentinel from a prior job with this id so we
+    // don't insta-cancel the download.
+    let _ = std::fs::remove_file(cancel_sentinel_path(&job_id.to_string()));
+    // Track the job while it downloads so the Cancel button and the
+    // window-close "is anything in flight?" check both see it.
+    app.state::<ActiveBurns>().insert(ActiveBurn {
+        job_id,
+        target: target_device.clone(),
+        kind: if needs_elevation {
+            BurnKind::Elevated
+        } else {
+            BurnKind::InProcess
+        },
+    });
+    db::record_burn_started(&app.state::<Db>(), job_id, None, None);
+
+    std::thread::spawn(move || {
+        let path = std::path::PathBuf::from(&image_path);
+        let total = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+        let sentinel = cancel_sentinel_path(&job_id.to_string());
+
+        // Push an immediate 0% update so the row swaps into the download
+        // phase before the first chunk lands.
+        let _ = app.emit(
+            "disk-cutter://job-update",
+            make_job_update(job_id, "materializing", 0, total, 0),
+        );
+
+        let start = Instant::now();
+        let mut last_emit = Instant::now();
+        let app_progress = app.clone();
+        let result = cloud::materialize(
+            &path,
+            |done| {
+                if last_emit.elapsed() >= Duration::from_millis(250) {
+                    let bps = (done as f64 / start.elapsed().as_secs_f64().max(0.001)) as u64;
+                    let _ = app_progress.emit(
+                        "disk-cutter://job-update",
+                        make_job_update(job_id, "materializing", done, total, bps),
+                    );
+                    last_emit = Instant::now();
+                }
+            },
+            || sentinel.exists(),
+        );
+
+        match result {
+            Ok(()) => {
+                // Warm now — hand off to the real burn. `begin_burn`
+                // re-registers the job under the same key.
+                if let Err(e) = begin_burn(
+                    app.clone(),
+                    job_id,
+                    image_path,
+                    target_device,
+                    needs_elevation,
+                ) {
+                    emit_job_failure(&app, job_id, "EHELPER", e);
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {
+                let _ = std::fs::remove_file(&sentinel);
+                emit_job_failure(&app, job_id, "ECANCELLED", "download cancelled".to_string());
+            }
+            Err(e) => {
+                // The wedged-provider EDEADLK lands here; give the operator
+                // an actionable message rather than a bare I/O error.
+                emit_job_failure(
+                    &app,
+                    job_id,
+                    "ECLOUD",
+                    format!("cloud source download failed: {e}"),
+                );
+            }
+        }
+    });
+}
+
+/// Record + emit a terminal job failure and drop it from the active set.
+fn emit_job_failure(app: &AppHandle, job_id: i64, code: &str, message: String) {
+    db::record_burn_failed(&app.state::<Db>(), job_id, code, &message);
+    app.state::<ActiveBurns>().remove(job_id);
+    let _ = app.emit(
+        "disk-cutter://job-error",
+        JobFailure {
+            job_id,
+            error_code: code.to_string(),
+            error_message: message,
+        },
+    );
 }
 
 fn spawn_elevated_burn(
