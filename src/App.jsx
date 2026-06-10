@@ -1281,7 +1281,7 @@ function DeviceWedgedWizard({ state, accent, burningDevices, onDismiss }) {
 
   return (
     <div className="sheet-backdrop" role="alertdialog" aria-modal="true">
-      <div className="sheet" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 480 }}>
+      <div className="sheet" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 560, overflowY: 'auto' }}>
         <div className="sheet-head">
           <div>
             <div className="sheet-eyebrow" style={{ color: accent }}>{t('device_wedged.eyebrow')}</div>
@@ -1334,14 +1334,14 @@ function DeviceWedgedWizard({ state, accent, burningDevices, onDismiss }) {
               <div className="sheet-warning"><span style={{ color: accent }}>⚠</span>{t('device_wedged.step_reboot')}</div>
             )}
 
-            <div style={{ display: 'flex', gap: 10, padding: 18, justifyContent: 'space-between', alignItems: 'center' }}>
-              <button className="btn btn-ghost" onClick={onDismiss} style={{ opacity: 0.7 }}>
-                {t('device_wedged.handle_myself')}
-              </button>
-              <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-                <span className="mono small" style={{ opacity: 0.7 }}>
-                  {checking ? t('device_wedged.checking') : t('device_wedged.waiting')}
-                </span>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: 18 }}>
+              <span className="mono small" style={{ opacity: 0.7 }}>
+                {checking ? t('device_wedged.checking') : t('device_wedged.waiting')}
+              </span>
+              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center' }}>
+                <button className="btn btn-ghost" onClick={onDismiss} style={{ opacity: 0.7 }}>
+                  {t('device_wedged.handle_myself')}
+                </button>
                 <button
                   className="btn"
                   onClick={recheck}
