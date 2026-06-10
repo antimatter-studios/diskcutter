@@ -1281,7 +1281,7 @@ function DeviceWedgedWizard({ state, accent, burningDevices, onDismiss }) {
 
   return (
     <div className="sheet-backdrop" role="alertdialog" aria-modal="true">
-      <div className="sheet" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 560, overflowY: 'auto' }}>
+      <div className="sheet" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 560 }}>
         <div className="sheet-head">
           <div>
             <div className="sheet-eyebrow" style={{ color: accent }}>{t('device_wedged.eyebrow')}</div>
@@ -1291,6 +1291,9 @@ function DeviceWedgedWizard({ state, accent, burningDevices, onDismiss }) {
           </div>
         </div>
 
+        {/* Only the body scrolls; the header (title/eyebrow) stays anchored as
+            an orientation cue when content is tall. */}
+        <div className="sheet-body" style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
         {recovered ? (
           <>
             <div className="sheet-warning" style={{ color: accent }}>
@@ -1354,6 +1357,7 @@ function DeviceWedgedWizard({ state, accent, burningDevices, onDismiss }) {
             </div>
           </>
         )}
+        </div>
       </div>
     </div>
   );
