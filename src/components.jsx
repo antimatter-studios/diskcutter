@@ -1232,6 +1232,8 @@ const PREFS_SECTIONS = [
         options: ['1','2','4','8','16'].map((v) => ({ value: v, label: v })) },
       { key: 'queue.depth', type: 'select',
         options: ['4','8','16','32','64'].map((v) => ({ value: v, label: v })) },
+      { key: 'cloud.materialize_workers', type: 'select',
+        options: ['1','2','4','6','8','10','12','16','24','32'].map((v) => ({ value: v, label: v })) },
       // The stored key is `verify.skip` (legacy) — preserved so older
       // configs keep parsing — but the operator-facing label is the
       // positive form "Verify Image" and the on/off polarity is
@@ -1315,6 +1317,7 @@ const PREFS_DEFAULTS = {
   'chunk.bytes': '1048576',
   'workers.count': '4',
   'queue.depth': '16',
+  'cloud.materialize_workers': '10',
   'verify.skip': 'false',
   'hash.algo': 'xxh3',
   'max.mismatches': '256',

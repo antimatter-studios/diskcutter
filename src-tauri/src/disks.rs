@@ -1097,19 +1097,42 @@ fn spawn_materialize_then_burn(
             make_job_update(job_id, "materializing", 0, total, 0),
         );
 
-        let start = Instant::now();
+        // Worker count is tunable per burn via the `cloud.materialize_workers`
+        // config key, so the parallelism sweet spot can be found per
+        // provider/link without a rebuild. Falls back to the built-in default.
+        let workers = app
+            .try_state::<Db>()
+            .and_then(|db| {
+                let conn = db.0.lock().ok()?;
+                conn.query_row(
+                    "SELECT value FROM config WHERE key = ?1",
+                    ["cloud.materialize_workers"],
+                    |r| r.get::<_, String>(0),
+                )
+                .ok()
+            })
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(cloud::MATERIALIZE_WORKERS);
+
         let mut last_emit = Instant::now();
+        let mut last_done: u64 = 0;
         let app_progress = app.clone();
         let result = cloud::materialize(
             &path,
+            workers,
             |done| {
-                if last_emit.elapsed() >= Duration::from_millis(250) {
-                    let bps = (done as f64 / start.elapsed().as_secs_f64().max(0.001)) as u64;
+                let dt = last_emit.elapsed();
+                if dt >= Duration::from_millis(250) {
+                    // Instantaneous rate over the last interval — a cumulative
+                    // average lies once a fast local-cache prefix gives way to
+                    // the slower network-bound tail.
+                    let bps = ((done.saturating_sub(last_done)) as f64 / dt.as_secs_f64()) as u64;
                     let _ = app_progress.emit(
                         "disk-cutter://job-update",
                         make_job_update(job_id, "materializing", done, total, bps),
                     );
                     last_emit = Instant::now();
+                    last_done = done;
                 }
             },
             || sentinel.exists(),

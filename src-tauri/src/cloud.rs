@@ -19,8 +19,9 @@
 
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 /// macOS `st_flags` bit set on a File Provider placeholder whose content is
 /// not resident locally. Mirrors `<sys/stat.h>`'s `SF_DATALESS`; `chflags`
@@ -47,80 +48,104 @@ pub fn is_dataless(path: &Path) -> bool {
     }
 }
 
-/// Number of concurrent read streams used to fault a cloud file in. A single
-/// sequential read leaves the link idle between requests — the File Provider
-/// faults on demand with no read-ahead, so one request is in flight at a time
-/// and throughput collapses to a fraction of the mount's bandwidth. Eight
-/// concurrent ranges keep enough fetches in flight to saturate a fast mount
-/// (matching Finder's "Download Now") without flooding the provider.
-const MATERIALIZE_WORKERS: u64 = 8;
+/// Number of concurrent read streams used to fault a cloud file in. They pull
+/// blocks off one shared cursor that advances start→end, so the in-flight reads
+/// form a sliding window at the download frontier rather than scattered offsets
+/// across the file. That ordering matters: a File Provider materializes its
+/// backing file roughly linearly, so a read far ahead of the frontier stalls
+/// until the provider's own download reaches it — which is what made the
+/// fixed-region approach hit `ETIMEDOUT`. Ten keeps the pipe full (an ~80 MiB
+/// read-ahead window) without reading ahead of where the provider has data.
+/// Overridable per burn via the `cloud.materialize_workers` config key so the
+/// sweet spot can be tuned per provider/link without a rebuild.
+pub const MATERIALIZE_WORKERS: usize = 10;
+
+/// Bytes each worker claims and faults in per turn.
+const MATERIALIZE_BLOCK: u64 = 8 * 1024 * 1024;
+
+/// Attempts to fault a single block before giving up. File Provider reads
+/// transiently time out under load on a long download (`os error 60`); a single
+/// blip must not abort a multi-GB materialization, so retry the block with
+/// backoff before surfacing the error.
+const MATERIALIZE_BLOCK_ATTEMPTS: u32 = 10;
+
+/// Cap on the per-retry backoff so a genuinely-stuck block doesn't sleep for
+/// a minute on the later attempts (the doubling would otherwise reach ~64s).
+const MATERIALIZE_BACKOFF_CAP: Duration = Duration::from_secs(5);
 
 /// Force a dataless cloud file to fault in by reading every byte (the bytes are
 /// discarded — the goal is purely to make the path resident so the burn's own
-/// read is local). The file is split into [`MATERIALIZE_WORKERS`] contiguous
-/// regions read in parallel, so multiple fetches overlap instead of trickling
-/// one 8 MiB request at a time.
+/// read is local).
+///
+/// Workers pull fixed-size blocks off a shared cursor rather than owning fixed
+/// regions, so once the already-local prefix is consumed every worker converges
+/// on the part that still needs the network — no stragglers carrying the slow
+/// tail alone. Each block read is retried with backoff so a transient provider
+/// timeout doesn't kill the whole download.
 ///
 /// `on_progress(bytes_faulted)` is called from the calling thread as the shared
 /// counter advances, so the caller's closure (which emits Tauri events) never
-/// crosses a thread boundary. The read aborts with
-/// [`std::io::ErrorKind::Interrupted`] as soon as `should_cancel` returns true;
-/// a read error (e.g. the wedged-provider `EDEADLK`) is propagated verbatim.
+/// crosses a thread boundary. Returns [`std::io::ErrorKind::Interrupted`] when
+/// `should_cancel` flips true; a block that fails every attempt propagates its
+/// error verbatim (the wedged-provider `EDEADLK`, or `ETIMEDOUT`).
 pub fn materialize(
     path: &Path,
+    workers: usize,
     mut on_progress: impl FnMut(u64),
     should_cancel: impl Fn() -> bool,
 ) -> std::io::Result<()> {
+    // Clamp to a sane range — 0 would never make progress, and absurd counts
+    // just thrash the provider. The default lives in `MATERIALIZE_WORKERS`.
+    let workers = workers.clamp(1, 64);
+
     let len = std::fs::metadata(path)?.len();
     if len == 0 {
         return Ok(());
     }
     if should_cancel() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::Interrupted,
-            "materialization cancelled",
-        ));
+        return Err(cancelled());
     }
 
+    let cursor = Arc::new(AtomicU64::new(0));
     let done = Arc::new(AtomicU64::new(0));
     let stop = Arc::new(AtomicBool::new(false));
+    let live = Arc::new(AtomicUsize::new(workers));
     let first_err: Arc<Mutex<Option<std::io::Error>>> = Arc::new(Mutex::new(None));
 
-    let region = len.div_ceil(MATERIALIZE_WORKERS);
-    let mut handles = Vec::new();
-    let mut start = 0u64;
-    while start < len {
-        let end = (start + region).min(len);
+    let mut handles = Vec::with_capacity(workers);
+    for _ in 0..workers {
         let path = path.to_path_buf();
+        let cursor = Arc::clone(&cursor);
         let done = Arc::clone(&done);
         let stop = Arc::clone(&stop);
+        let live = Arc::clone(&live);
         let first_err = Arc::clone(&first_err);
         handles.push(std::thread::spawn(move || {
-            if let Err(e) = fault_region(&path, start, end, &done, &stop) {
+            if let Err(e) = fault_worker(&path, len, &cursor, &done, &stop) {
                 stop.store(true, Ordering::Relaxed);
                 let mut slot = first_err.lock().unwrap();
                 if slot.is_none() {
                     *slot = Some(e);
                 }
             }
+            live.fetch_sub(1, Ordering::Relaxed);
         }));
-        start = end;
     }
 
-    // Monitor from the calling thread: drive progress, honour cancel, and bail
-    // on the first worker error. Keeping the loop here means `on_progress` /
-    // `should_cancel` stay on this thread and need no `Send` bound.
+    // Monitor from the calling thread: drive progress and honour cancel.
+    // Keeping the loop here means `on_progress` / `should_cancel` stay on this
+    // thread and need no `Send` bound. Stop when every worker has exited (all
+    // blocks faulted, or an error set `stop`).
     loop {
         if should_cancel() {
             stop.store(true, Ordering::Relaxed);
             break;
         }
-        let d = done.load(Ordering::Relaxed);
-        on_progress(d);
-        if d >= len || stop.load(Ordering::Relaxed) {
+        on_progress(done.load(Ordering::Relaxed));
+        if live.load(Ordering::Relaxed) == 0 {
             break;
         }
-        std::thread::sleep(std::time::Duration::from_millis(50));
+        std::thread::sleep(Duration::from_millis(50));
     }
     for h in handles {
         let _ = h.join();
@@ -130,46 +155,85 @@ pub fn materialize(
         return Err(e);
     }
     if should_cancel() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::Interrupted,
-            "materialization cancelled",
-        ));
+        return Err(cancelled());
     }
     on_progress(len);
     Ok(())
 }
 
-/// Sequentially read the half-open range `[start, end)` of `path`, discarding
-/// bytes and advancing the shared `done` counter. Uses its own file handle so
-/// the cursor is independent of sibling workers (`seek` + `read` is portable;
-/// no `pread`/`FileExt` so it still compiles on Windows). Stops early if `stop`
-/// is set (cancel, or another worker's error).
-fn fault_region(
+fn cancelled() -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::Interrupted, "materialization cancelled")
+}
+
+/// Pull blocks off the shared `cursor` and fault each one in until the file is
+/// fully claimed (or `stop` is set). Its own file handle keeps the cursor
+/// independent of sibling workers (`seek` + `read` is portable — no
+/// `pread`/`FileExt` — so it still compiles on Windows).
+fn fault_worker(
     path: &Path,
-    start: u64,
-    end: u64,
+    len: u64,
+    cursor: &AtomicU64,
     done: &AtomicU64,
     stop: &AtomicBool,
 ) -> std::io::Result<()> {
     let mut file = std::fs::File::open(path)?;
-    file.seek(SeekFrom::Start(start))?;
-    // 8 MiB matches the burn's default chunk: large enough that per-read
-    // overhead is negligible.
-    let mut buf = vec![0u8; 8 * 1024 * 1024];
-    let mut off = start;
-    while off < end {
+    let mut buf = vec![0u8; MATERIALIZE_BLOCK as usize];
+    loop {
         if stop.load(Ordering::Relaxed) {
             return Ok(());
         }
-        let want = ((end - off).min(buf.len() as u64)) as usize;
-        let n = file.read(&mut buf[..want])?;
+        let off = cursor.fetch_add(MATERIALIZE_BLOCK, Ordering::Relaxed);
+        if off >= len {
+            return Ok(());
+        }
+        let want = ((len - off).min(MATERIALIZE_BLOCK)) as usize;
+        let n = fault_block(&mut file, off, &mut buf[..want], stop)?;
+        done.fetch_add(n as u64, Ordering::Relaxed);
+    }
+}
+
+/// Read `[off, off + buf.len())` into `buf`, retrying transient failures with
+/// exponential backoff. Returns the bytes read (`== buf.len()` unless the file
+/// ended early). Gives up — propagating the error — after
+/// [`MATERIALIZE_BLOCK_ATTEMPTS`] failures or once `stop` is set.
+fn fault_block(
+    file: &mut std::fs::File,
+    off: u64,
+    buf: &mut [u8],
+    stop: &AtomicBool,
+) -> std::io::Result<usize> {
+    let mut attempt: u32 = 0;
+    loop {
+        match read_block_at(file, off, buf) {
+            Ok(n) => return Ok(n),
+            Err(e) => {
+                attempt += 1;
+                if attempt >= MATERIALIZE_BLOCK_ATTEMPTS || stop.load(Ordering::Relaxed) {
+                    return Err(e);
+                }
+                // 250ms, 500ms, 1s, 2s, … (capped) — give the provider room to
+                // recover before re-requesting the same range.
+                let backoff = Duration::from_millis(250u64 << (attempt - 1));
+                std::thread::sleep(backoff.min(MATERIALIZE_BACKOFF_CAP));
+            }
+        }
+    }
+}
+
+/// Seek to `off` and fill `buf` (a short read only at true end-of-file),
+/// discarding the bytes. Re-reading an already-faulted range on retry is cheap
+/// — those bytes are now local.
+fn read_block_at(file: &mut std::fs::File, off: u64, buf: &mut [u8]) -> std::io::Result<usize> {
+    file.seek(SeekFrom::Start(off))?;
+    let mut filled = 0;
+    while filled < buf.len() {
+        let n = file.read(&mut buf[filled..])?;
         if n == 0 {
             break;
         }
-        off += n as u64;
-        done.fetch_add(n as u64, Ordering::Relaxed);
+        filled += n;
     }
-    Ok(())
+    Ok(filled)
 }
 
 #[cfg(test)]
@@ -199,6 +263,7 @@ mod tests {
         let mut calls = 0u32;
         materialize(
             f.path(),
+            4,
             |done| {
                 assert!(done >= last, "progress must be monotonic");
                 last = done;
@@ -219,7 +284,7 @@ mod tests {
         let mut f = tempfile::NamedTempFile::new().unwrap();
         f.write_all(&vec![0u8; 1024]).unwrap();
         f.flush().unwrap();
-        let err = materialize(f.path(), |_| {}, || true).unwrap_err();
+        let err = materialize(f.path(), 4, |_| {}, || true).unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::Interrupted);
     }
 }

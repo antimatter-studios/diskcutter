@@ -380,6 +380,7 @@
       "chunk_bytes": "CHUNK SIZE",
       "workers_count": "WORKERS",
       "queue_depth": "QUEUE DEPTH",
+      "cloud_materialize_workers": "CLOUD STREAMS",
       "verify_skip": "VERIFY IMAGE",
       "hash_algo": "HASH ALGO",
       "max_mismatches": "MAX MISMATCHES",

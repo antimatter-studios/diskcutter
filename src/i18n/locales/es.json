@@ -380,6 +380,7 @@
       "chunk_bytes": "TAMAÑO DE BLOQUE",
       "workers_count": "TRABAJADORES",
       "queue_depth": "PROFUND. COLA",
+      "cloud_materialize_workers": "FLUJOS NUBE",
       "verify_skip": "VERIFICAR IMAGEN",
       "hash_algo": "ALGORITMO HASH",
       "max_mismatches": "MÁX. DISCREPANCIAS",

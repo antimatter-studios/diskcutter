@@ -380,6 +380,7 @@
       "chunk_bytes": "BLOCKGRÖSSE",
       "workers_count": "ARBEITER",
       "queue_depth": "WARTESCHLANGENTIEFE",
+      "cloud_materialize_workers": "CLOUD-STREAMS",
       "verify_skip": "ABBILD PRÜFEN",
       "hash_algo": "HASH-ALGO",
       "max_mismatches": "MAX. ABWEICHUNGEN",
