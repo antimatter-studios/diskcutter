@@ -1055,6 +1055,64 @@ fn begin_burn(
     Ok(())
 }
 
+/// Read a single value from the `config` table, or `None` if persistence isn't
+/// initialised yet (see lib.rs "continuing without persistence") or the key is
+/// absent. The lookup both `begin_burn` and the materialize path need, in one
+/// place.
+fn config_value(app: &AppHandle, key: &str) -> Option<String> {
+    app.try_state::<Db>().and_then(|db| {
+        let conn = db.0.lock().ok()?;
+        conn.query_row("SELECT value FROM config WHERE key = ?1", [key], |r| {
+            r.get::<_, String>(0)
+        })
+        .ok()
+    })
+}
+
+/// Minimum gap between `materializing` progress events, so a fast local-cache
+/// prefix doesn't flood the UI with updates.
+const PROGRESS_EMIT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// Throttled progress reporter for the materialize phase. Emits at most once
+/// per [`PROGRESS_EMIT_INTERVAL`] and reports an *instantaneous* rate (bytes
+/// over the last interval) — a cumulative average lies once a fast local-cache
+/// prefix gives way to the slower network-bound tail.
+struct MaterializeProgress {
+    app: AppHandle,
+    job_id: i64,
+    total: u64,
+    last_emit: std::time::Instant,
+    last_done: u64,
+}
+
+impl MaterializeProgress {
+    fn new(app: AppHandle, job_id: i64, total: u64) -> Self {
+        Self {
+            app,
+            job_id,
+            total,
+            last_emit: std::time::Instant::now(),
+            last_done: 0,
+        }
+    }
+
+    /// Emit a progress event if at least [`PROGRESS_EMIT_INTERVAL`] has elapsed
+    /// since the last one; otherwise do nothing.
+    fn report(&mut self, done: u64) {
+        let dt = self.last_emit.elapsed();
+        if dt < PROGRESS_EMIT_INTERVAL {
+            return;
+        }
+        let bps = (done.saturating_sub(self.last_done) as f64 / dt.as_secs_f64()) as u64;
+        let _ = self.app.emit(
+            "disk-cutter://job-update",
+            make_job_update(self.job_id, "materializing", done, self.total, bps),
+        );
+        self.last_emit = std::time::Instant::now();
+        self.last_done = done;
+    }
+}
+
 /// Download a dataless cloud source to the local cache, emitting a
 /// `materializing` progress phase, then hand off to [`begin_burn`]. Runs on
 /// its own thread (the download can take minutes) so `start_write` returns
@@ -1067,8 +1125,6 @@ fn spawn_materialize_then_burn(
     target_device: String,
     needs_elevation: bool,
 ) {
-    use std::time::{Duration, Instant};
-
     // Clear any stale cancel sentinel from a prior job with this id so we
     // don't insta-cancel the download.
     let _ = std::fs::remove_file(cancel_sentinel_path(&job_id.to_string()));
@@ -1100,41 +1156,15 @@ fn spawn_materialize_then_burn(
         // Worker count is tunable per burn via the `cloud.materialize_workers`
         // config key, so the parallelism sweet spot can be found per
         // provider/link without a rebuild. Falls back to the built-in default.
-        let workers = app
-            .try_state::<Db>()
-            .and_then(|db| {
-                let conn = db.0.lock().ok()?;
-                conn.query_row(
-                    "SELECT value FROM config WHERE key = ?1",
-                    ["cloud.materialize_workers"],
-                    |r| r.get::<_, String>(0),
-                )
-                .ok()
-            })
+        let workers = config_value(&app, "cloud.materialize_workers")
             .and_then(|v| v.parse::<usize>().ok())
             .unwrap_or(cloud::MATERIALIZE_WORKERS);
 
-        let mut last_emit = Instant::now();
-        let mut last_done: u64 = 0;
-        let app_progress = app.clone();
+        let mut progress = MaterializeProgress::new(app.clone(), job_id, total);
         let result = cloud::materialize(
             &path,
             workers,
-            |done| {
-                let dt = last_emit.elapsed();
-                if dt >= Duration::from_millis(250) {
-                    // Instantaneous rate over the last interval — a cumulative
-                    // average lies once a fast local-cache prefix gives way to
-                    // the slower network-bound tail.
-                    let bps = ((done.saturating_sub(last_done)) as f64 / dt.as_secs_f64()) as u64;
-                    let _ = app_progress.emit(
-                        "disk-cutter://job-update",
-                        make_job_update(job_id, "materializing", done, total, bps),
-                    );
-                    last_emit = Instant::now();
-                    last_done = done;
-                }
-            },
+            |done| progress.report(done),
             || sentinel.exists(),
         );
 
@@ -1244,15 +1274,7 @@ fn spawn_elevated_burn_inner(
     // not have been initialised (see lib.rs "continuing without persistence");
     // fall through silently in that case and let the helper apply its own
     // defaults.
-    let read_config = |key: &str| -> Option<String> {
-        app.try_state::<Db>().and_then(|db| {
-            let conn = db.0.lock().ok()?;
-            conn.query_row("SELECT value FROM config WHERE key = ?1", [key], |r| {
-                r.get::<_, String>(0)
-            })
-            .ok()
-        })
-    };
+    let read_config = |key: &str| config_value(&app, key);
     let writer_impl = read_config("writer.impl");
     // Validate numerics by round-tripping through parse(); drop anything we
     // can't interpret so the helper applies its built-in default.

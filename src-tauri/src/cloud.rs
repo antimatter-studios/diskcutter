@@ -11,10 +11,13 @@
 //! source was a cloud placeholder.
 //!
 //! We dodge the whole class by materializing the source once, in the parent
-//! (user) process, BEFORE handing the path to the burn helper: a single
-//! sequential read-through triggers an orderly fault-in, so by the time the
-//! helper opens the file the bytes are local and warm. Doing it in the
-//! parent also keeps the download as the invoking user (the File Provider is
+//! (user) process, BEFORE handing the path to the burn helper: a pool of
+//! workers reads every byte (discarding it) to fault the file fully in, so by
+//! the time the helper opens it the bytes are local and warm. The workers pull
+//! fixed-size blocks off a shared cursor that advances start→end and retry
+//! transient provider timeouts, so the download tracks the provider's own
+//! frontier and survives blips (see [`materialize`]). Doing it in the parent
+//! also keeps the download as the invoking user (the File Provider is
 //! per-session) rather than as the elevated root helper.
 
 use std::io::{Read, Seek, SeekFrom};
@@ -69,9 +72,31 @@ const MATERIALIZE_BLOCK: u64 = 8 * 1024 * 1024;
 /// backoff before surfacing the error.
 const MATERIALIZE_BLOCK_ATTEMPTS: u32 = 10;
 
+/// Base delay for the per-block retry backoff; it doubles each attempt up to
+/// [`MATERIALIZE_BACKOFF_CAP`].
+const MATERIALIZE_BACKOFF_BASE: Duration = Duration::from_millis(250);
+
 /// Cap on the per-retry backoff so a genuinely-stuck block doesn't sleep for
 /// a minute on the later attempts (the doubling would otherwise reach ~64s).
 const MATERIALIZE_BACKOFF_CAP: Duration = Duration::from_secs(5);
+
+/// How often the progress monitor polls the shared byte counter while the
+/// worker pool faults the file in.
+const MATERIALIZE_POLL_INTERVAL: Duration = Duration::from_millis(50);
+
+/// State the worker pool and the progress monitor coordinate through.
+struct MaterializeState {
+    /// Next block offset to claim; advances start→end.
+    cursor: AtomicU64,
+    /// Bytes faulted in so far (drives progress).
+    done: AtomicU64,
+    /// Set on cancel or the first worker error so the rest wind down.
+    stop: AtomicBool,
+    /// Workers still running; the monitor stops once this reaches zero.
+    live: AtomicUsize,
+    /// First worker error, surfaced by `materialize` after the pool drains.
+    first_err: Mutex<Option<std::io::Error>>,
+}
 
 /// Force a dataless cloud file to fault in by reading every byte (the bytes are
 /// discarded — the goal is purely to make the path resident so the burn's own
@@ -106,52 +131,21 @@ pub fn materialize(
         return Err(cancelled());
     }
 
-    let cursor = Arc::new(AtomicU64::new(0));
-    let done = Arc::new(AtomicU64::new(0));
-    let stop = Arc::new(AtomicBool::new(false));
-    let live = Arc::new(AtomicUsize::new(workers));
-    let first_err: Arc<Mutex<Option<std::io::Error>>> = Arc::new(Mutex::new(None));
+    let state = Arc::new(MaterializeState {
+        cursor: AtomicU64::new(0),
+        done: AtomicU64::new(0),
+        stop: AtomicBool::new(false),
+        live: AtomicUsize::new(workers),
+        first_err: Mutex::new(None),
+    });
 
-    let mut handles = Vec::with_capacity(workers);
-    for _ in 0..workers {
-        let path = path.to_path_buf();
-        let cursor = Arc::clone(&cursor);
-        let done = Arc::clone(&done);
-        let stop = Arc::clone(&stop);
-        let live = Arc::clone(&live);
-        let first_err = Arc::clone(&first_err);
-        handles.push(std::thread::spawn(move || {
-            if let Err(e) = fault_worker(&path, len, &cursor, &done, &stop) {
-                stop.store(true, Ordering::Relaxed);
-                let mut slot = first_err.lock().unwrap();
-                if slot.is_none() {
-                    *slot = Some(e);
-                }
-            }
-            live.fetch_sub(1, Ordering::Relaxed);
-        }));
+    let handles = spawn_fault_workers(path, len, workers, &state);
+    run_progress_monitor(&state, &mut on_progress, &should_cancel);
+    for handle in handles {
+        let _ = handle.join();
     }
 
-    // Monitor from the calling thread: drive progress and honour cancel.
-    // Keeping the loop here means `on_progress` / `should_cancel` stay on this
-    // thread and need no `Send` bound. Stop when every worker has exited (all
-    // blocks faulted, or an error set `stop`).
-    loop {
-        if should_cancel() {
-            stop.store(true, Ordering::Relaxed);
-            break;
-        }
-        on_progress(done.load(Ordering::Relaxed));
-        if live.load(Ordering::Relaxed) == 0 {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    for h in handles {
-        let _ = h.join();
-    }
-
-    if let Some(e) = first_err.lock().unwrap().take() {
+    if let Some(e) = state.first_err.lock().unwrap().take() {
         return Err(e);
     }
     if should_cancel() {
@@ -159,6 +153,56 @@ pub fn materialize(
     }
     on_progress(len);
     Ok(())
+}
+
+/// Spawn `workers` threads that each pull blocks off the shared cursor and
+/// fault them in via [`fault_worker`]. The first worker to fail records its
+/// error and sets `stop` so the rest wind down; every worker decrements `live`
+/// on exit so the monitor can tell when the pool has drained.
+fn spawn_fault_workers(
+    path: &Path,
+    len: u64,
+    workers: usize,
+    state: &Arc<MaterializeState>,
+) -> Vec<std::thread::JoinHandle<()>> {
+    (0..workers)
+        .map(|_| {
+            let path = path.to_path_buf();
+            let state = Arc::clone(state);
+            std::thread::spawn(move || {
+                if let Err(e) = fault_worker(&path, len, &state.cursor, &state.done, &state.stop) {
+                    state.stop.store(true, Ordering::Relaxed);
+                    let mut slot = state.first_err.lock().unwrap();
+                    if slot.is_none() {
+                        *slot = Some(e);
+                    }
+                }
+                state.live.fetch_sub(1, Ordering::Relaxed);
+            })
+        })
+        .collect()
+}
+
+/// Drive `on_progress` from the calling thread until every worker has exited
+/// (all blocks faulted, or an error set `stop`), propagating a cancel request
+/// to the workers via `stop`. Running the loop here keeps `on_progress` /
+/// `should_cancel` off the worker threads, so they need no `Send` bound.
+fn run_progress_monitor(
+    state: &MaterializeState,
+    on_progress: &mut impl FnMut(u64),
+    should_cancel: &impl Fn() -> bool,
+) {
+    loop {
+        if should_cancel() {
+            state.stop.store(true, Ordering::Relaxed);
+            break;
+        }
+        on_progress(state.done.load(Ordering::Relaxed));
+        if state.live.load(Ordering::Relaxed) == 0 {
+            break;
+        }
+        std::thread::sleep(MATERIALIZE_POLL_INTERVAL);
+    }
 }
 
 fn cancelled() -> std::io::Error {
@@ -211,10 +255,16 @@ fn fault_block(
                 if attempt >= MATERIALIZE_BLOCK_ATTEMPTS || stop.load(Ordering::Relaxed) {
                     return Err(e);
                 }
-                // 250ms, 500ms, 1s, 2s, … (capped) — give the provider room to
-                // recover before re-requesting the same range.
-                let backoff = Duration::from_millis(250u64 << (attempt - 1));
-                std::thread::sleep(backoff.min(MATERIALIZE_BACKOFF_CAP));
+                // Exponential backoff (base × 2^(attempt-1)), capped — give the
+                // provider room to recover before re-requesting the same range.
+                // The `checked_*` calls keep this safe even if the attempt cap
+                // is later raised past the point where the shift would overflow.
+                let factor = 1u32.checked_shl(attempt - 1).unwrap_or(u32::MAX);
+                let backoff = MATERIALIZE_BACKOFF_BASE
+                    .checked_mul(factor)
+                    .unwrap_or(MATERIALIZE_BACKOFF_CAP)
+                    .min(MATERIALIZE_BACKOFF_CAP);
+                std::thread::sleep(backoff);
             }
         }
     }
