@@ -457,17 +457,9 @@ impl DeviceWriter for PipelinedWriter {
         if let Some(e) = self.errors.lock().unwrap().pop() {
             return Err(e);
         }
-        // sync_all on the Arc<File> via underlying fd.
-        let fd = self.file.as_raw_fd();
-        let ret = unsafe { libc::fsync(fd) };
-        if ret != 0 {
-            let e = std::io::Error::last_os_error();
-            return Err(std::io::Error::new(
-                e.kind(),
-                format!("fsync after {} bytes written: {}", self.offset, e),
-            ));
-        }
-        Ok(())
+        // Flush OS + device controller cache to physical media. Plain fsync is
+        // not enough on macOS raw disks — see writers::sync_device_cache.
+        super::sync_device_cache(self.file.as_raw_fd(), self.offset)
     }
 }
 

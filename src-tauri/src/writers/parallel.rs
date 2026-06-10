@@ -378,16 +378,7 @@ impl DeviceWriter for ParallelWriter {
         if let Some(e) = self.errors.lock().unwrap().pop() {
             return Err(e);
         }
-        let fd = self.file.as_raw_fd();
-        let ret = unsafe { libc::fsync(fd) };
-        if ret != 0 {
-            let e = std::io::Error::last_os_error();
-            return Err(std::io::Error::new(
-                e.kind(),
-                format!("fsync after {} bytes written: {}", self.offset, e),
-            ));
-        }
-        Ok(())
+        super::sync_device_cache(self.file.as_raw_fd(), self.offset)
     }
 }
 

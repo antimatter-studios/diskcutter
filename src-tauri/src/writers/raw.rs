@@ -2,7 +2,7 @@
 use std::fs::{File, OpenOptions};
 #[cfg(unix)]
 use std::io::{Read, Result, Write};
-#[cfg(target_os = "macos")]
+#[cfg(unix)]
 use std::os::fd::AsRawFd;
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
@@ -169,12 +169,7 @@ impl Write for RawWriter {
 impl DeviceWriter for RawWriter {
     fn finish(mut self: Box<Self>) -> Result<()> {
         self.file.flush()?;
-        self.file.sync_all().map_err(|e| {
-            std::io::Error::new(
-                e.kind(),
-                format!("sync_all after {} bytes written: {}", self.offset, e),
-            )
-        })
+        super::sync_device_cache(self.file.as_raw_fd(), self.offset)
     }
 }
 
