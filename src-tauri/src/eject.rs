@@ -7,12 +7,16 @@
 //! Backends:
 //! - macOS: `diskutil eject <device>` — the only blessed way to
 //!   release a DA-claimed disk.
-//! - Linux: prefer `udisksctl unmount + power-off` (works inside a
-//!   user session), fall back to `eject` (sysvinit-era; widely
-//!   installed; works on many distros without root).
-//! - Windows: not implemented yet — returns an Err so the frontend
-//!   can show "eject not supported on this OS" instead of pretending
-//!   it worked.
+//! - Linux: best-effort `udisksctl unmount` of each partition (the OS
+//!   auto-mounts them from the freshly written image, and `power-off`
+//!   refuses a busy device), then `udisksctl power-off` to release the
+//!   drive — all inside a user session, no root. Falls back to `eject`
+//!   (sysvinit-era; widely installed) if udisksctl is missing or
+//!   power-off still fails.
+//! - Windows: not implemented yet — returns `Ok(EjectOutcome { success:
+//!   false, .. })`, exactly like every other failure here, so the
+//!   frontend's uniform toast path shows "eject not supported on this
+//!   OS". It does not return `Err`.
 //!
 //! Each backend is best-effort: a failure to eject doesn't roll
 //! back the burn, it just surfaces a non-fatal warning.
@@ -121,12 +125,46 @@ fn eject_macos(device: &str) -> EjectOutcome {
     }
 }
 
+/// Best-effort `udisksctl unmount` of every partition on `device`.
+///
+/// `udisksctl power-off` refuses a device with mounted filesystems, and
+/// after a flash the OS auto-mounts any recognisable partitions from the
+/// new image — so without this the primary path fails "busy" and falls
+/// through to `eject` on nearly every Linux session. Partition nodes for a
+/// whole disk live under `/sys/block/<base>/` as sub-entries whose names
+/// start with `<base>` (e.g. `sdb1`, `mmcblk0p1`). Failures (not mounted,
+/// no automount, no udisksctl) are ignored — this only smooths the
+/// happy path; the caller's `eject` fallback still covers the rest.
+#[cfg(target_os = "linux")]
+fn unmount_partitions_udisks(device: &str) {
+    use std::process::Command;
+    let base = match device.rsplit('/').next() {
+        Some(b) if !b.is_empty() => b,
+        _ => return,
+    };
+    let Ok(entries) = std::fs::read_dir(format!("/sys/block/{base}")) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name != base && name.starts_with(base) {
+            let part = format!("/dev/{name}");
+            let _ = Command::new("udisksctl")
+                .args(["unmount", "-b", part.as_str()])
+                .output();
+        }
+    }
+}
+
 #[cfg(target_os = "linux")]
 fn eject_linux(device: &str) -> EjectOutcome {
     use std::process::Command;
-    // Prefer udisksctl (no root needed in a user session) — it
-    // unmounts every partition then powers off the drive. Falls back
-    // to the classic `eject` binary if udisksctl is missing.
+    // Prefer udisksctl (no root needed in a user session). The OS
+    // auto-mounts partitions from the freshly written image and
+    // `power-off` refuses a busy device, so unmount each partition first
+    // (best-effort), then power the drive off. Falls back to the classic
+    // `eject` binary if udisksctl is missing or power-off still fails.
+    unmount_partitions_udisks(device);
     if let Ok(out) = Command::new("udisksctl")
         .args(["power-off", "-b", device])
         .output()
