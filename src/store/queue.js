@@ -166,6 +166,9 @@ export const useQueueStore = create((set, get) => ({
     // click (e.g. on the Retry button) sees 'reading' here and bails — without
     // this, two captures (or two elevated password prompts) could stack.
     if (row.state === 'reading') return;
+    // Resume (not restart) when retrying a capture that already wrote some
+    // bytes; a fresh start from 'configuring' always begins at 0.
+    const resume = row.state === 'error' && (row.bytesRead || 0) > 0;
     set((s) => ({
       captureRows: {
         ...s.captureRows,
@@ -178,6 +181,7 @@ export const useQueueStore = create((set, get) => ({
         sourceDevice: row.source.device,
         outputPath: row.outputPath,
         totalBytes: row.source.bytes || 0,
+        resume,
       });
     } catch (e) {
       set((s) => ({

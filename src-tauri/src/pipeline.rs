@@ -594,6 +594,12 @@ mod tests {
         }
     }
 
+    impl std::io::Seek for CursorDeviceReader {
+        fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
+            std::io::Seek::seek(&mut self.inner, pos)
+        }
+    }
+
     impl DeviceReader for CursorDeviceReader {}
 
     #[allow(clippy::type_complexity)]
