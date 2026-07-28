@@ -234,6 +234,9 @@
   "verify": {
     "hashes_match": "✓ HASHES STIMMEN",
     "hash_mismatch": "✕ HASH STIMMT NICHT",
+    "repaired": "✓ {{count}} BLÖCKE REPARIERT",
+    "repair_failed": "✕ REPARATUR FEHLGESCHLAGEN — KARTE VERDÄCHTIG",
+    "repaired_blocks": "REPARIERT",
     "source": "SHA-256 QUELLE",
     "readback": "SHA-256 RÜCKLESEN",
     "sectors_checked": "GEPRÜFTE SEKTOREN",
@@ -384,6 +387,7 @@
       "verify_skip": "ABBILD PRÜFEN",
       "hash_algo": "HASH-ALGO",
       "max_mismatches": "MAX. ABWEICHUNGEN",
+      "repair_auto": "BLÖCKE AUTO-REPARIEREN",
       "language": "SPRACHE",
       "theme": "DESIGN",
       "density": "DICHTE",

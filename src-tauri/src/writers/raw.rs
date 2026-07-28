@@ -64,6 +64,12 @@ impl DeviceIo for RawDeviceIo {
         }
         Ok(Box::new(RawReader { file }))
     }
+
+    fn open_write_at(&self, device: &Path) -> Result<Box<dyn DeviceWriter>> {
+        // The raw open is already non-truncating read+write, so positioned
+        // repair writes reuse it verbatim.
+        self.open_write(device)
+    }
 }
 
 #[cfg(unix)]
@@ -175,6 +181,18 @@ impl DeviceWriter for RawWriter {
                 format!("sync_all after {} bytes written: {}", self.offset, e),
             )
         })
+    }
+
+    fn write_at(&mut self, buf: &[u8], offset: u64) -> Result<()> {
+        // pwrite — does not move the file's own cursor, so the sequential
+        // `offset` accounting above stays valid. On macOS rdisk the offset
+        // and length must be block-aligned; the repair path only ever
+        // rewrites whole chunk_size-aligned chunks (the final chunk is a
+        // sector multiple for any real disk image), so alignment holds.
+        use std::os::unix::fs::FileExt;
+        self.file
+            .write_all_at(buf, offset)
+            .map_err(|e| wrap_write_err(e, offset, buf.len()))
     }
 }
 

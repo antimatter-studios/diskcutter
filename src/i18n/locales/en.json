@@ -234,6 +234,9 @@
   "verify": {
     "hashes_match": "✓ HASHES MATCH",
     "hash_mismatch": "✕ HASH MISMATCH",
+    "repaired": "✓ REPAIRED {{count}} BLOCKS",
+    "repair_failed": "✕ REPAIR FAILED — CARD SUSPECT",
+    "repaired_blocks": "REPAIRED",
     "source": "SHA-256 SOURCE",
     "readback": "SHA-256 READBACK",
     "sectors_checked": "SECTORS CHECKED",
@@ -384,6 +387,7 @@
       "verify_skip": "VERIFY IMAGE",
       "hash_algo": "HASH ALGO",
       "max_mismatches": "MAX MISMATCHES",
+      "repair_auto": "AUTO-REPAIR BAD BLOCKS",
       "language": "LANGUAGE",
       "theme": "THEME",
       "density": "DENSITY",

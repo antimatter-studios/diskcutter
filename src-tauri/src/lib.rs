@@ -22,6 +22,7 @@ pub mod pipeline;
 pub mod proc;
 pub mod qemu;
 pub mod readers;
+pub mod repair;
 pub mod snapshot;
 pub mod source;
 pub mod sparse;

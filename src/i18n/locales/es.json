@@ -234,6 +234,9 @@
   "verify": {
     "hashes_match": "✓ HASHES COINCIDEN",
     "hash_mismatch": "✕ HASH NO COINCIDE",
+    "repaired": "✓ {{count}} BLOQUES REPARADOS",
+    "repair_failed": "✕ REPARACIÓN FALLIDA — TARJETA SOSPECHOSA",
+    "repaired_blocks": "REPARADOS",
     "source": "SHA-256 ORIGEN",
     "readback": "SHA-256 RELECTURA",
     "sectors_checked": "SECTORES COMPROBADOS",
@@ -384,6 +387,7 @@
       "verify_skip": "VERIFICAR IMAGEN",
       "hash_algo": "ALGORITMO HASH",
       "max_mismatches": "MÁX. DISCREPANCIAS",
+      "repair_auto": "AUTO-REPARAR BLOQUES",
       "language": "IDIOMA",
       "theme": "TEMA",
       "density": "DENSIDAD",
