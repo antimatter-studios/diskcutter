@@ -48,6 +48,11 @@ export function applyJobComplete(jobs, c) {
         total: sectors,
         mismatches: (c.mismatches || []).map((m) => ({ ...m, note: m.note || '' })),
         throughput: `${formatBps(c.avg_verify_bps)} avg`,
+        // Block-repair outcome. `repaired` > 0 with match === true means the
+        // burn passed only after rewriting bad blocks; `repairFailed` means
+        // repair ran but couldn't make the device match (card suspect).
+        repaired: c.repaired_blocks || 0,
+        repairFailed: !!c.repair_failed,
       },
     };
   });

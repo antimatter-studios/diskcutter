@@ -764,6 +764,7 @@ input,select{font:inherit;color:inherit}
   padding:10px 14px;border:2px solid var(--ink);
 }
 .ver-verdict--ok{background:var(--ink);color:var(--bone)}
+.ver-verdict--repaired{background:var(--warn);color:var(--bone);border-color:var(--warn)}
 .ver-verdict--bad{color:var(--on-accent)}
 
 .ver-stats{

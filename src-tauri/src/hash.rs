@@ -76,6 +76,22 @@ pub fn new(algo: HashAlgo) -> Box<dyn StreamingHasher> {
     }
 }
 
+/// One-shot Xxh3-64 fingerprint of a single chunk. The burn pipeline records
+/// one of these per fixed-size chunk so read-back can pinpoint *which* chunks
+/// differ (the repair work-list) without re-reading the source.
+///
+/// Deliberately always Xxh3, independent of the burn's configured `HashAlgo`:
+/// this is fixed-width integrity localisation for the repair path, not the
+/// user-facing audit digest (which still honours the SHA-256 opt-in). Equal
+/// chunk bytes always yield equal digests, so a per-chunk comparison is exact
+/// up to the ~2^-64 collision probability that the whole-image hash also
+/// accepts.
+pub fn chunk_digest(buf: &[u8]) -> u64 {
+    let mut h = XxHash3_64::new();
+    h.write(buf);
+    h.finish()
+}
+
 // --- SHA-256 -----------------------------------------------------------------
 
 struct Sha256Streaming(Sha256);

@@ -24,6 +24,14 @@ impl DeviceIo for PlainFileDeviceIo {
         let file = File::open(device)?;
         Ok(Box::new(PlainReader { file }))
     }
+
+    fn open_write_at(&self, device: &Path) -> Result<Box<dyn DeviceWriter>> {
+        // Non-truncating: repair overwrites individual chunks of an
+        // already-written file, so the bytes we are NOT repairing must
+        // survive. The file is expected to exist (it was just burned).
+        let file = OpenOptions::new().read(true).write(true).open(device)?;
+        Ok(Box::new(PlainWriter { file }))
+    }
 }
 
 pub struct PlainWriter {
@@ -43,6 +51,12 @@ impl DeviceWriter for PlainWriter {
     fn finish(mut self: Box<Self>) -> Result<()> {
         self.file.flush()?;
         self.file.sync_all()
+    }
+
+    fn write_at(&mut self, buf: &[u8], offset: u64) -> Result<()> {
+        use std::io::{Seek, SeekFrom};
+        self.file.seek(SeekFrom::Start(offset))?;
+        self.file.write_all(buf)
     }
 }
 
@@ -152,6 +166,35 @@ mod tests {
         writer.finish().unwrap();
 
         assert_eq!(std::fs::read(&p).unwrap(), b"foobarbaz");
+    }
+
+    #[test]
+    fn write_at_overwrites_one_region_and_preserves_the_rest() {
+        let dir = tempdir().unwrap();
+        let p = dir.path().join("img.bin");
+        let io = PlainFileDeviceIo;
+
+        // Lay down 12 bytes of known content.
+        let mut w = io.open_write(&p).unwrap();
+        w.write_all(b"AAAABBBBCCCC").unwrap();
+        w.finish().unwrap();
+
+        // Reopen for positioned write (must NOT truncate) and overwrite the
+        // middle 4 bytes only.
+        let mut w2 = io.open_write_at(&p).unwrap();
+        w2.write_at(b"XXXX", 4).unwrap();
+        w2.finish().unwrap();
+
+        assert_eq!(std::fs::read(&p).unwrap(), b"AAAAXXXXCCCC");
+    }
+
+    #[test]
+    fn open_write_at_errors_when_file_absent() {
+        let dir = tempdir().unwrap();
+        let p = dir.path().join("missing.bin");
+        // Repair targets an existing burn; a missing file is an error, not a
+        // silent create+truncate.
+        assert!(PlainFileDeviceIo.open_write_at(&p).is_err());
     }
 
     #[test]

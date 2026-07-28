@@ -165,6 +165,14 @@ pub struct JobComplete {
     pub elapsed_ms: u64,
     pub avg_write_bps: u64,
     pub avg_verify_bps: u64,
+    /// Chunks that failed read-back but were rewritten and now verify clean.
+    /// 0 on a first-pass-clean burn or when auto-repair is off.
+    pub repaired_blocks: u64,
+    /// Auto-repair ran but the device still doesn't match the source — the
+    /// card is likely failing or counterfeit. `verify_match` is the source of
+    /// truth for pass/fail; this distinguishes "never matched" from
+    /// "passed only after repair" in the UI.
+    pub repair_failed: bool,
 }
 
 #[derive(Serialize, Clone)]
@@ -1293,8 +1301,14 @@ fn spawn_elevated_burn_inner(
     // the helper applies its built-in Xxh3 default; the flag is only
     // emitted when the user has explicitly written a value.
     let hash_algo = read_config("hash.algo");
+    // Auto-repair defaults ON; only an explicit "false" disables it. Passed
+    // as an explicit flag so the helper never has to guess the parent's
+    // policy. See `repair::run_repair`.
+    let auto_repair = read_config("repair.auto")
+        .map(|v| v != "false")
+        .unwrap_or(true);
 
-    let helper_cmd = build_helper_command(
+    let mut helper_cmd = build_helper_command(
         &exe.to_string_lossy(),
         &image_path,
         &target,
@@ -1308,6 +1322,11 @@ fn spawn_elevated_burn_inner(
         debug_logging,
         hash_algo.as_deref(),
     );
+    helper_cmd.push_str(if auto_repair {
+        " --repair=true"
+    } else {
+        " --repair=false"
+    });
     let prompt = "Disk Cutter needs administrator access to write the disk image directly to the device you selected.";
     let script = build_osascript_script(&helper_cmd, prompt);
 
@@ -1569,6 +1588,14 @@ fn parse_helper_line(job_id: i64, line: &str) -> Option<HelperEvent> {
                     .get("avg_verify_bps")
                     .and_then(|v| v.as_u64())
                     .unwrap_or(0),
+                repaired_blocks: val
+                    .get("repaired_blocks")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0),
+                repair_failed: val
+                    .get("repair_failed")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false),
             }))
         }
         "error" => Some(HelperEvent::Failure(JobFailure {
@@ -1799,18 +1826,17 @@ fn run_job(
     )
     .map_err(|e| fail_for_burn_error(job_id, &e))?;
 
-    let (mut reader2, _) = source::open_streaming_with_log(image, &job_log)
-        .map_err(|e| fail(job_id, "EIMAGE", &format!("reopen image: {e}")))?;
+    // Fast device-only read-back: hash the device and compare to the
+    // burn-time source hash. On the happy path the source is never re-read
+    // (mirrors the elevated helper's two-tier verify).
+    let verify_app = app.clone();
     let mut device_reader = device_io
         .open_read(target)
         .map_err(|e| fail(job_id, "ETARGET", &format!("reopen target: {e}")))?;
-
-    let verify_app = app.clone();
-    let verify = pipeline::verify(
-        &mut *reader2,
-        total_bytes,
+    let fast = pipeline::verify_hash_only(
         &mut *device_reader,
-        pipeline::DEFAULT_CHUNK,
+        burn.bytes_written,
+        burn.chunk_size,
         cancel,
         |p| {
             let _ = verify_app.emit(
@@ -1826,8 +1852,111 @@ fn run_job(
         },
     )
     .map_err(|e| fail_for_burn_error(job_id, &e))?;
+    drop(device_reader);
 
+    if fast.readback_sha256 == burn.source_sha256 {
+        return Ok(complete_clean(job_id, &burn, &fast));
+    }
+
+    // Read-back mismatch. Attempt in-place block repair unless the user
+    // turned it off; otherwise fall through to the legacy byte-compare so the
+    // failure report still carries per-sector detail.
+    let auto_repair = config_value(app, "repair.auto")
+        .map(|v| v != "false")
+        .unwrap_or(true);
+    if auto_repair {
+        let repair_app = app.clone();
+        let outcome = crate::repair::run_repair(
+            image_path,
+            target_device,
+            &job_log,
+            &burn.chunk_digests,
+            burn.chunk_size,
+            burn.bytes_written,
+            crate::hash::HashAlgo::Xxh3,
+            crate::repair::DEFAULT_MAX_REPAIR_ROUNDS,
+            cancel,
+            |state, p| {
+                let _ = repair_app.emit(
+                    "disk-cutter://job-update",
+                    make_job_update(job_id, state, p.bytes_done, p.bytes_total, p.bytes_per_sec),
+                );
+            },
+        )
+        .map_err(|e| fail_for_burn_error(job_id, &e))?;
+        return Ok(complete_after_repair(job_id, &burn, &fast, outcome));
+    }
+
+    let (mut reader2, _) = source::open_streaming_with_log(image, &job_log)
+        .map_err(|e| fail(job_id, "EIMAGE", &format!("reopen image: {e}")))?;
+    let mut device_reader = device_io
+        .open_read(target)
+        .map_err(|e| fail(job_id, "ETARGET", &format!("reopen target: {e}")))?;
+    let detail_app = app.clone();
+    let verify = pipeline::verify(
+        &mut *reader2,
+        total_bytes,
+        &mut *device_reader,
+        burn.chunk_size,
+        cancel,
+        |p| {
+            let _ = detail_app.emit(
+                "disk-cutter://job-update",
+                make_job_update(
+                    job_id,
+                    "verifying",
+                    p.bytes_done,
+                    p.bytes_total,
+                    p.bytes_per_sec,
+                ),
+            );
+        },
+    )
+    .map_err(|e| fail_for_burn_error(job_id, &e))?;
     Ok(summarize_burn_complete(job_id, burn, verify))
+}
+
+/// Build a clean (first-pass match) completion from the burn + fast-verify.
+fn complete_clean(
+    job_id: i64,
+    burn: &pipeline::BurnResult,
+    fast: &pipeline::HashOnlyResult,
+) -> JobComplete {
+    JobComplete {
+        job_id,
+        bytes_written: burn.bytes_written,
+        source_sha256: burn.source_sha256.clone(),
+        readback_sha256: fast.readback_sha256.clone(),
+        verify_match: true,
+        mismatches: vec![],
+        elapsed_ms: (burn.elapsed.as_millis() + fast.elapsed.as_millis()) as u64,
+        avg_write_bps: burn.avg_bytes_per_sec,
+        avg_verify_bps: fast.avg_bytes_per_sec,
+        repaired_blocks: 0,
+        repair_failed: false,
+    }
+}
+
+/// Build a completion from a repair attempt — converged or not.
+fn complete_after_repair(
+    job_id: i64,
+    burn: &pipeline::BurnResult,
+    fast: &pipeline::HashOnlyResult,
+    outcome: crate::repair::RepairOutcome,
+) -> JobComplete {
+    JobComplete {
+        job_id,
+        bytes_written: burn.bytes_written,
+        source_sha256: burn.source_sha256.clone(),
+        readback_sha256: outcome.readback_sha256,
+        verify_match: outcome.converged,
+        mismatches: outcome.mismatches,
+        elapsed_ms: (burn.elapsed.as_millis() + fast.elapsed.as_millis()) as u64,
+        avg_write_bps: burn.avg_bytes_per_sec,
+        avg_verify_bps: fast.avg_bytes_per_sec,
+        repaired_blocks: outcome.repaired_chunks as u64,
+        repair_failed: !outcome.converged,
+    }
 }
 
 fn fail(job_id: i64, code: &str, msg: &str) -> JobFailure {
@@ -1880,6 +2009,10 @@ fn summarize_burn_complete(
         elapsed_ms,
         avg_write_bps: burn.avg_bytes_per_sec,
         avg_verify_bps: verify.avg_bytes_per_sec,
+        // The byte-compare path doesn't repair; repaired burns build
+        // JobComplete via the repair branch in run_job.
+        repaired_blocks: 0,
+        repair_failed: false,
     }
 }
 
@@ -2674,6 +2807,8 @@ mod tests {
             source_sha256: "abc".into(),
             elapsed: Duration::from_millis(500),
             avg_bytes_per_sec: 100,
+            chunk_size: pipeline::DEFAULT_CHUNK,
+            chunk_digests: vec![],
         };
         let verify = pipeline::VerifyResult {
             source_sha256: "abc".into(),
@@ -2705,6 +2840,8 @@ mod tests {
             source_sha256: "s".into(),
             elapsed: Duration::from_millis(0),
             avg_bytes_per_sec: 0,
+            chunk_size: pipeline::DEFAULT_CHUNK,
+            chunk_digests: vec![],
         };
         let verify = pipeline::VerifyResult {
             source_sha256: "s".into(),

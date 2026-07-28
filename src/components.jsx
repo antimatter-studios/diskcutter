@@ -1003,9 +1003,11 @@ function VerificationPanel({ job, accent }) {
           <div className="ver-hash-k">{t('verify.readback')}</div>
           <div className={"mono hash" + (ver.match ? "" : " hash--bad")}>{ver.readHash}</div>
         </div>
-        <div className={"ver-verdict" + (ver.match ? " ver-verdict--ok" : " ver-verdict--bad")}
+        <div className={"ver-verdict" + (ver.match ? (ver.repaired > 0 ? " ver-verdict--repaired" : " ver-verdict--ok") : " ver-verdict--bad")}
              style={!ver.match ? { background: accent } : {}}>
-          {ver.match ? t('verify.hashes_match') : t('verify.hash_mismatch')}
+          {ver.match
+            ? (ver.repaired > 0 ? t('verify.repaired', { count: ver.repaired }) : t('verify.hashes_match'))
+            : (ver.repairFailed ? t('verify.repair_failed') : t('verify.hash_mismatch'))}
         </div>
       </div>
 
@@ -1013,6 +1015,9 @@ function VerificationPanel({ job, accent }) {
         <Stat k={t('verify.sectors_checked')} v={`${ver.checked.toLocaleString()} / ${ver.total.toLocaleString()}`} />
         <Stat k={t('verify.block_size')} v="512 B" />
         <Stat k={t('verify.mismatches')} v={ver.mismatches.length.toString().padStart(3,'0')} bad={ver.mismatches.length > 0} accent={accent} />
+        {ver.repaired > 0 && (
+          <Stat k={t('verify.repaired_blocks')} v={ver.repaired.toString().padStart(3,'0')} accent={accent} />
+        )}
         <Stat k={t('verify.throughput')} v={ver.throughput} />
       </div>
 
@@ -1246,6 +1251,10 @@ const PREFS_SECTIONS = [
         ] },
       { key: 'max.mismatches', type: 'select',
         options: ['16','64','256','1024'].map((v) => ({ value: v, label: v })) },
+      // Auto-repair: on a read-back mismatch, rewrite the bad blocks from the
+      // source and re-verify (bounded + convergence-guarded) instead of just
+      // failing. ON stores `repair.auto = true`.
+      { key: 'repair.auto', type: 'toggle' },
     ],
   },
   {
@@ -1321,6 +1330,7 @@ const PREFS_DEFAULTS = {
   'verify.skip': 'false',
   'hash.algo': 'xxh3',
   'max.mismatches': '256',
+  'repair.auto': 'true',
   'language': '',
   'theme': 'light',
   'density': 'comfy',

@@ -75,6 +75,13 @@ pub struct BurnResult {
     pub source_sha256: String,
     pub elapsed: Duration,
     pub avg_bytes_per_sec: u64,
+    /// Chunk size the per-chunk digests were computed over. Read-back must
+    /// re-chunk on the same boundary for the digests to line up.
+    pub chunk_size: usize,
+    /// One Xxh3-64 fingerprint per `chunk_size` chunk, in write order. The
+    /// final chunk may be shorter than `chunk_size`. Read-back compares
+    /// against these to localise mismatched chunks for repair.
+    pub chunk_digests: Vec<u64>,
 }
 
 /// Burn an image to a writer using the default Xxh3 source-hashing.
@@ -123,6 +130,14 @@ pub fn burn_with_hash(
     let total = total_bytes;
     let mut writer = writer;
     let mut hasher = hash::new(hash_algo);
+    // One Xxh3-64 fingerprint per chunk, in write order — the repair
+    // work-list source. Pre-size when the total is known to avoid reallocs
+    // on multi-GB burns.
+    let mut chunk_digests: Vec<u64> = Vec::with_capacity(
+        (total_bytes as usize)
+            .checked_div(chunk_size)
+            .map_or(0, |n| n + 1),
+    );
     let mut buf = vec![0u8; chunk_size];
     let mut done: u64 = 0;
     let started = Instant::now();
@@ -166,6 +181,7 @@ pub fn burn_with_hash(
         let write_us = write_started.elapsed().as_micros() as u64;
         let hash_started = Instant::now();
         hasher.update(&buf[..n]);
+        chunk_digests.push(hash::chunk_digest(&buf[..n]));
         let hash_us = hash_started.elapsed().as_micros() as u64;
         done += n as u64;
         window_bytes += n as u64;
@@ -237,6 +253,8 @@ pub fn burn_with_hash(
         source_sha256: hasher.finalize_hex(),
         elapsed,
         avg_bytes_per_sec: avg,
+        chunk_size,
+        chunk_digests,
     })
 }
 
@@ -360,6 +378,177 @@ pub fn verify_hash_only_with_hash(
         elapsed,
         avg_bytes_per_sec: avg,
     })
+}
+
+#[allow(dead_code)]
+pub struct ChunkVerifyResult {
+    pub readback_sha256: String,
+    /// Indices (into the burn-time chunk list) of chunks whose read-back
+    /// fingerprint did not match — the repair work-list. Empty == device
+    /// matches the source.
+    pub dirty: Vec<usize>,
+    pub bytes_checked: u64,
+    pub bytes_total: u64,
+    pub elapsed: Duration,
+    pub avg_bytes_per_sec: u64,
+}
+
+/// Read the device back and localise which chunks differ from the source,
+/// using the per-chunk fingerprints captured during the burn
+/// (`BurnResult::chunk_digests`). Device-only: the source is NOT re-read,
+/// so this is the fast path that also pinpoints the bad chunks for repair.
+///
+/// `expected_digests` has one entry per `chunk_size` chunk in write order
+/// (the final chunk may be shorter). A chunk is dirty when its read-back
+/// digest differs, or when the device returns short of the expected bytes
+/// (truncation / unreadable sectors). The whole-image readback digest is
+/// computed alongside for the audit/report field.
+pub fn verify_chunks(
+    device: &mut dyn DeviceReader,
+    expected_digests: &[u64],
+    chunk_size: usize,
+    expected_bytes: u64,
+    hash_algo: HashAlgo,
+    cancel: &AtomicBool,
+    mut on_progress: impl FnMut(VerifyProgress),
+) -> Result<ChunkVerifyResult, BurnError> {
+    let mut hasher = hash::new(hash_algo);
+    let mut buf = vec![0u8; chunk_size.max(1)];
+    let mut dirty: Vec<usize> = Vec::new();
+    let mut done: u64 = 0;
+    let total_chunks = expected_digests.len();
+    let started = Instant::now();
+    let mut last_emit = Instant::now();
+    let mut window_start = Instant::now();
+    let mut window_bytes: u64 = 0;
+
+    for (i, &expected) in expected_digests.iter().enumerate() {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(BurnError::Cancelled);
+        }
+        let want = (chunk_size as u64).min(expected_bytes.saturating_sub(done)) as usize;
+        let n = read_full(device, &mut buf[..want])?;
+        hasher.update(&buf[..n]);
+        if n < want || hash::chunk_digest(&buf[..n]) != expected {
+            dirty.push(i);
+        }
+        done += n as u64;
+        window_bytes += n as u64;
+
+        if n < want {
+            // Device ended (or stalled) before the expected length: every
+            // remaining chunk is missing, so mark them all dirty and stop.
+            dirty.extend((i + 1)..total_chunks);
+            break;
+        }
+
+        if last_emit.elapsed() >= Duration::from_millis(250) {
+            let win = window_start.elapsed().as_secs_f64().max(0.001);
+            let bps = (window_bytes as f64 / win) as u64;
+            on_progress(VerifyProgress {
+                bytes_done: done,
+                bytes_total: expected_bytes,
+                bytes_per_sec: bps,
+                elapsed: started.elapsed(),
+            });
+            last_emit = Instant::now();
+            window_start = Instant::now();
+            window_bytes = 0;
+        }
+    }
+
+    let elapsed = started.elapsed();
+    let avg = (done as f64 / elapsed.as_secs_f64().max(0.001)) as u64;
+    on_progress(VerifyProgress {
+        bytes_done: done,
+        bytes_total: expected_bytes.max(done),
+        bytes_per_sec: avg,
+        elapsed,
+    });
+    Ok(ChunkVerifyResult {
+        readback_sha256: hasher.finalize_hex(),
+        dirty,
+        bytes_checked: done,
+        bytes_total: expected_bytes.max(done),
+        elapsed,
+        avg_bytes_per_sec: avg,
+    })
+}
+
+/// Rewrite only the `dirty` chunks of an already-burned device with fresh
+/// bytes from `source`. The source is streamed from the start (the only way
+/// to reach a given chunk in a compressed image); non-dirty chunks are read
+/// to advance the decoder but discarded, and dirty chunks are written in
+/// place at their absolute offset via `DeviceWriter::write_at`.
+///
+/// `dirty` is a set of chunk indices (need not be sorted). Returns the number
+/// of bytes actually rewritten. The caller is responsible for `finish()`-ing
+/// the writer afterwards so the rewrites are synced before re-verification.
+pub fn rewrite_chunks(
+    source: &mut dyn Read,
+    writer: &mut dyn DeviceWriter,
+    dirty: &[usize],
+    chunk_size: usize,
+    expected_bytes: u64,
+    cancel: &AtomicBool,
+    mut on_progress: impl FnMut(VerifyProgress),
+) -> Result<u64, BurnError> {
+    use std::collections::HashSet;
+    if dirty.is_empty() || chunk_size == 0 {
+        return Ok(0);
+    }
+    let want_set: HashSet<usize> = dirty.iter().copied().collect();
+    let last = dirty.iter().copied().max().unwrap();
+    let mut buf = vec![0u8; chunk_size];
+    let mut i = 0usize;
+    let mut done: u64 = 0;
+    let mut rewritten: u64 = 0;
+    let started = Instant::now();
+    let mut last_emit = Instant::now();
+    let mut window_start = Instant::now();
+    let mut window_bytes: u64 = 0;
+
+    loop {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(BurnError::Cancelled);
+        }
+        // Nothing past the last dirty chunk needs reading.
+        if i > last {
+            break;
+        }
+        let want = (chunk_size as u64).min(expected_bytes.saturating_sub(done)) as usize;
+        if want == 0 {
+            break;
+        }
+        let n = read_full(source, &mut buf[..want])?;
+        if n == 0 {
+            break;
+        }
+        if want_set.contains(&i) {
+            let offset = (i as u64) * (chunk_size as u64);
+            writer.write_at(&buf[..n], offset)?;
+            rewritten += n as u64;
+            window_bytes += n as u64;
+        }
+        done += n as u64;
+        i += 1;
+
+        if last_emit.elapsed() >= Duration::from_millis(250) {
+            let win = window_start.elapsed().as_secs_f64().max(0.001);
+            let bps = (window_bytes as f64 / win) as u64;
+            on_progress(VerifyProgress {
+                bytes_done: rewritten,
+                bytes_total: (dirty.len() as u64) * (chunk_size as u64),
+                bytes_per_sec: bps,
+                elapsed: started.elapsed(),
+            });
+            last_emit = Instant::now();
+            window_start = Instant::now();
+            window_bytes = 0;
+        }
+    }
+
+    Ok(rewritten)
 }
 
 /// Default-algorithm (Xxh3) variant — see `verify_with_hash` for the
@@ -607,6 +796,38 @@ mod tests {
         (w, sink, finished)
     }
 
+    /// In-memory device that supports positioned `write_at`. Pre-loaded with
+    /// the (possibly corrupted) device contents; repair overwrites regions of
+    /// the shared buffer so the test can read the result back.
+    struct PositionedSink {
+        data: Arc<Mutex<Vec<u8>>>,
+    }
+
+    impl IoWrite for PositionedSink {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.data.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl DeviceWriter for PositionedSink {
+        fn finish(self: Box<Self>) -> std::io::Result<()> {
+            Ok(())
+        }
+        fn write_at(&mut self, buf: &[u8], offset: u64) -> std::io::Result<()> {
+            let mut d = self.data.lock().unwrap();
+            let end = offset as usize + buf.len();
+            if d.len() < end {
+                d.resize(end, 0);
+            }
+            d[offset as usize..end].copy_from_slice(buf);
+            Ok(())
+        }
+    }
+
     #[test]
     fn burn_writes_all_source_bytes() {
         // `burn()` (no explicit algo) defaults to Xxh3 — the
@@ -749,6 +970,152 @@ mod tests {
         let result = burn(&mut reader, total, writer, DEFAULT_CHUNK, &cancel, |_| {}).unwrap();
 
         assert_eq!(result.bytes_written, data.len() as u64);
+        assert_eq!(*sink.lock().unwrap(), data);
+    }
+
+    #[test]
+    fn burn_records_one_digest_per_chunk_matching_the_source_bytes() {
+        // Three chunks: two full, one short tail. Each recorded digest must
+        // equal the one-shot digest of the exact bytes that chunk covers,
+        // and the recorded chunk_size must be the one we burned with.
+        let chunk = 4096usize;
+        let data: Vec<u8> = (0..(chunk * 2 + 1_000)).map(|i| (i % 251) as u8).collect();
+        let mut reader = MockSource::new(data.clone());
+        let total = reader.total;
+        let (writer, _, _) = make_writer();
+        let cancel = AtomicBool::new(false);
+
+        let result = burn(&mut reader, total, writer, chunk, &cancel, |_| {}).unwrap();
+
+        assert_eq!(result.chunk_size, chunk);
+        let expected: Vec<u64> = data.chunks(chunk).map(hash::chunk_digest).collect();
+        assert_eq!(result.chunk_digests, expected);
+        // Three chunks: 4096 + 4096 + 1000.
+        assert_eq!(result.chunk_digests.len(), 3);
+    }
+
+    #[test]
+    fn verify_chunks_clean_device_has_no_dirty() {
+        let chunk = 4096usize;
+        let data: Vec<u8> = (0..(chunk * 3)).map(|i| (i % 251) as u8).collect();
+        let digests: Vec<u64> = data.chunks(chunk).map(hash::chunk_digest).collect();
+        let mut dev = CursorDeviceReader {
+            inner: Cursor::new(data.clone()),
+        };
+        let cancel = AtomicBool::new(false);
+        let r = verify_chunks(
+            &mut dev,
+            &digests,
+            chunk,
+            data.len() as u64,
+            HashAlgo::Xxh3,
+            &cancel,
+            |_| {},
+        )
+        .unwrap();
+        assert!(r.dirty.is_empty());
+        assert_eq!(r.bytes_checked, data.len() as u64);
+    }
+
+    #[test]
+    fn verify_chunks_flags_only_the_corrupted_chunk() {
+        let chunk = 4096usize;
+        let data: Vec<u8> = (0..(chunk * 3 + 100)).map(|i| (i % 251) as u8).collect();
+        let digests: Vec<u64> = data.chunks(chunk).map(hash::chunk_digest).collect();
+        let mut dev_bytes = data.clone();
+        dev_bytes[chunk + 10] ^= 0xFF; // flip a byte inside chunk index 1
+        let mut dev = CursorDeviceReader {
+            inner: Cursor::new(dev_bytes),
+        };
+        let cancel = AtomicBool::new(false);
+        let r = verify_chunks(
+            &mut dev,
+            &digests,
+            chunk,
+            data.len() as u64,
+            HashAlgo::Xxh3,
+            &cancel,
+            |_| {},
+        )
+        .unwrap();
+        assert_eq!(r.dirty, vec![1]);
+    }
+
+    #[test]
+    fn verify_chunks_marks_trailing_chunks_dirty_on_truncation() {
+        let chunk = 4096usize;
+        let data: Vec<u8> = (0..(chunk * 4)).map(|i| (i % 251) as u8).collect();
+        let digests: Vec<u64> = data.chunks(chunk).map(hash::chunk_digest).collect();
+        let dev_bytes = data[..chunk * 2].to_vec(); // device truncated after 2 chunks
+        let mut dev = CursorDeviceReader {
+            inner: Cursor::new(dev_bytes),
+        };
+        let cancel = AtomicBool::new(false);
+        let r = verify_chunks(
+            &mut dev,
+            &digests,
+            chunk,
+            data.len() as u64,
+            HashAlgo::Xxh3,
+            &cancel,
+            |_| {},
+        )
+        .unwrap();
+        assert_eq!(r.dirty, vec![2, 3]);
+    }
+
+    #[test]
+    fn rewrite_chunks_repairs_the_corrupted_chunk_from_source() {
+        let chunk = 4096usize;
+        let data: Vec<u8> = (0..(chunk * 3 + 50)).map(|i| (i % 251) as u8).collect();
+        // Device starts as the correct image with chunk index 1 corrupted.
+        let mut dev_bytes = data.clone();
+        for b in &mut dev_bytes[chunk..chunk * 2] {
+            *b ^= 0xAA;
+        }
+        let sink = Arc::new(Mutex::new(dev_bytes));
+        let mut writer = PositionedSink { data: sink.clone() };
+        let mut source = MockSource::new(data.clone());
+        let cancel = AtomicBool::new(false);
+
+        let rewritten = rewrite_chunks(
+            &mut source,
+            &mut writer,
+            &[1],
+            chunk,
+            data.len() as u64,
+            &cancel,
+            |_| {},
+        )
+        .unwrap();
+
+        assert_eq!(rewritten, chunk as u64);
+        // The device now matches the source exactly — surrounding chunks
+        // (0 and 2) were never touched.
+        assert_eq!(*sink.lock().unwrap(), data);
+    }
+
+    #[test]
+    fn rewrite_chunks_is_a_noop_without_dirty_chunks() {
+        let chunk = 4096usize;
+        let data = vec![7u8; chunk * 2];
+        let sink = Arc::new(Mutex::new(data.clone()));
+        let mut writer = PositionedSink { data: sink.clone() };
+        let mut source = MockSource::new(data.clone());
+        let cancel = AtomicBool::new(false);
+
+        let n = rewrite_chunks(
+            &mut source,
+            &mut writer,
+            &[],
+            chunk,
+            data.len() as u64,
+            &cancel,
+            |_| {},
+        )
+        .unwrap();
+
+        assert_eq!(n, 0);
         assert_eq!(*sink.lock().unwrap(), data);
     }
 

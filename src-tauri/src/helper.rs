@@ -40,6 +40,8 @@ enum HelperMessage {
         elapsed_ms: u64,
         avg_write_bps: u64,
         avg_verify_bps: u64,
+        repaired_blocks: u64,
+        repair_failed: bool,
     },
     Error {
         error_code: String,
@@ -146,6 +148,13 @@ pub fn run_helper(args: &[String]) -> i32 {
         .and_then(|v| v.parse().ok())
         .unwrap_or(16);
     let skip_verify: bool = arg_value(args, "--skip-verify=")
+        .map(|v| v == "true")
+        .unwrap_or(false);
+    // Auto-repair: rewrite chunks that fail read-back and re-verify, instead
+    // of failing the burn. The parent passes an explicit value; absent (CLI
+    // use / older parent) defaults off so a bare `--helper-burn` never
+    // surprises with extra writes.
+    let auto_repair: bool = arg_value(args, "--repair=")
         .map(|v| v == "true")
         .unwrap_or(false);
     let debug_enabled: bool = arg_value(args, "--debug=")
@@ -360,6 +369,8 @@ pub fn run_helper(args: &[String]) -> i32 {
             elapsed_ms,
             avg_write_bps: burn.avg_bytes_per_sec,
             avg_verify_bps: 0,
+            repaired_blocks: 0,
+            repair_failed: false,
         });
         return 0;
     }
@@ -415,13 +426,68 @@ pub fn run_helper(args: &[String]) -> i32 {
             elapsed_ms,
             avg_write_bps: burn.avg_bytes_per_sec,
             avg_verify_bps: fast.avg_bytes_per_sec,
+            repaired_blocks: 0,
+            repair_failed: false,
         });
         return 0;
     }
 
-    // Hash mismatch — fall back to the slow byte-compare path to collect
-    // per-sector forensic detail (LBA/offset/expected/actual).
+    // Read-back mismatch. The fast-verify reader is done; release it before
+    // repair opens its own (exclusive) write handle.
     drop(dev_reader);
+
+    if auto_repair {
+        job_log.info("helper: read-back mismatch, attempting in-place block repair");
+        let outcome = match crate::repair::run_repair(
+            &image,
+            &target,
+            &job_log,
+            &burn.chunk_digests,
+            burn.chunk_size,
+            burn.bytes_written,
+            hash_algo,
+            crate::repair::DEFAULT_MAX_REPAIR_ROUNDS,
+            &cancel,
+            |state, p| {
+                emit(&HelperMessage::Progress {
+                    state: state.to_string(),
+                    bytes_done: p.bytes_done,
+                    bytes_total: p.bytes_total,
+                    bytes_per_sec: p.bytes_per_sec,
+                });
+            },
+        ) {
+            Ok(o) => o,
+            Err(e) => {
+                let code = match e {
+                    BurnError::Cancelled => "ECANCELLED",
+                    _ => "EIO",
+                };
+                emit(&HelperMessage::Error {
+                    error_code: code.into(),
+                    error_message: format!("{e}"),
+                });
+                return 1;
+            }
+        };
+        let elapsed_ms = (burn.elapsed.as_millis() + fast.elapsed.as_millis()) as u64;
+        emit(&HelperMessage::Complete {
+            bytes_written: burn.bytes_written,
+            source_sha256: burn.source_sha256,
+            readback_sha256: outcome.readback_sha256,
+            verify_match: outcome.converged,
+            mismatches: outcome.mismatches,
+            elapsed_ms,
+            avg_write_bps: burn.avg_bytes_per_sec,
+            avg_verify_bps: fast.avg_bytes_per_sec,
+            repaired_blocks: outcome.repaired_chunks as u64,
+            repair_failed: !outcome.converged,
+        });
+        return 0;
+    }
+
+    // Repair disabled — fall back to the byte-compare path to collect
+    // per-sector forensic detail (LBA/offset/expected/actual).
     job_log.info("helper: hash mismatch, reopening image for byte-compare diff");
     let (mut reader2, _) = match source::open_streaming_with_log(Path::new(&image), &job_log) {
         Ok(v) => v,
@@ -485,6 +551,8 @@ pub fn run_helper(args: &[String]) -> i32 {
         elapsed_ms,
         avg_write_bps: burn.avg_bytes_per_sec,
         avg_verify_bps: verify.avg_bytes_per_sec,
+        repaired_blocks: 0,
+        repair_failed: false,
     });
 
     0
@@ -1052,6 +1120,8 @@ mod tests {
             elapsed_ms: 5000,
             avg_write_bps: 200_000,
             avg_verify_bps: 400_000,
+            repaired_blocks: 0,
+            repair_failed: false,
         };
         let v = to_json_value(&m);
         assert_eq!(v["kind"], "complete");
@@ -1078,6 +1148,8 @@ mod tests {
                 "kind",
                 "mismatches",
                 "readback_sha256",
+                "repair_failed",
+                "repaired_blocks",
                 "source_sha256",
                 "verify_match",
             ]
@@ -1102,6 +1174,8 @@ mod tests {
             elapsed_ms: 100,
             avg_write_bps: 1,
             avg_verify_bps: 1,
+            repaired_blocks: 0,
+            repair_failed: false,
         };
         let v = to_json_value(&m);
         assert_eq!(v["verify_match"], false);
@@ -1157,6 +1231,8 @@ mod tests {
                     elapsed_ms: 0,
                     avg_write_bps: 0,
                     avg_verify_bps: 0,
+                    repaired_blocks: 0,
+                    repair_failed: false,
                 },
                 "complete",
             ),
