@@ -148,7 +148,9 @@ Linux + Windows builds. macOS bundles are now Developer ID-signed.
 - **Hash benchmark example** (`cargo run --example hash_bench`)
   comparing sha256 vs xxh64 throughput.
 - **Writer benchmark harness** (`cargo run --example writer_bench`).
-- **Auto-eject after a successful burn.**
+- **Auto-eject preference** — the Prefs toggle only. Enabling it logged
+  "not implemented yet"; the backing `eject_disk` command did not land
+  until 2026.7.28.
 - **Real hazard-rim sidebar logo** replacing the placeholder.
 - **Image readers** for `*.gz`, `*.xz`, `*.qcow2` / `*.qcow`. Gzip
   reports the uncompressed size from the ISIZE trailer; XZ sums the
