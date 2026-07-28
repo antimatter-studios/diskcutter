@@ -6,7 +6,11 @@ follows [Calendar Versioning](https://calver.org/) (`YYYY.M.D`).
 
 ## [Unreleased]
 
-## [2026.6.2]
+## [2026.7.28]
+
+First published release since 2026.5.28. The 2026.6.2 entries were prepared
+but never tagged, so that work ships here and is listed below rather than in
+a release of its own.
 
 ### Added
 
@@ -22,11 +26,51 @@ follows [Calendar Versioning](https://calver.org/) (`YYYY.M.D`).
   marks which devices are idle-and-safe-to-unplug versus mid-burn, auto-detects
   the unplug, confirms recovery, and escalates its advice (try the hub, then
   reboot) if the device stays stuck.
+- **Auto-eject after a burn.** When `auto.eject` is on, a finished target
+  is ejected for you — `diskutil` on macOS, `udisksctl` power-off on Linux
+  (falling back to `eject`), with the outcome surfaced as a toast. Device
+  paths are validated against shell metacharacters before they reach the
+  child process.
+- **Cloud sources are downloaded before burning.** Reading an iCloud /
+  Google Drive / Dropbox / OneDrive placeholder faults its bytes in on
+  first access, and two burns reading the same dataless file concurrently
+  could wedge it behind a generic `READ OR WRITE FAILED`. Dataless files
+  are now detected and materialized in the user process — before the path
+  reaches the elevated helper — behind a new **DOWNLOADING FROM CLOUD**
+  job state, with a dedicated `ECLOUD` error (en/de/es) when it fails.
+- **Tunable cloud download workers.** `cloud.materialize_workers`
+  (Prefs → Performance, default 10) sets how many blocks are pulled in
+  parallel, so the sweet spot for a given provider or link can be found
+  without a rebuild. Download speed is now reported instantaneously
+  rather than as a cumulative average that overstated the network-bound
+  tail.
 - Centered **"Loading disks"** panel in the disk pickers — a stepped spinner
   with a clear label, replacing the small top-left text.
 
 ### Fixed
 
+- **Cloud downloads no longer stall on a slow provider.** Workers pull
+  8&nbsp;MiB blocks off one shared cursor that advances start→end, so
+  reads stay at the download frontier the File Provider is actually
+  filling; scattered fixed-region reads used to stall until the provider
+  caught up and then abort the whole job on `ETIMEDOUT`. Each block is
+  retried up to 10 times with capped exponential backoff, so a transient
+  timeout rides over instead of failing the burn.
+- **The recovery wizard fits its sheet again.** The wedged-device dialog
+  packed its status text and the long unplug-confirmation button into one
+  no-wrap row at 480&nbsp;px, so content spilled past the sheet edges and
+  tall content clipped with no way to scroll. The sheet is wider, the
+  action row wraps, and only the body scrolls — the header stays anchored
+  as an orientation cue.
+- **A second wedged device no longer inherits the first one's state.**
+  Re-emitting for a *different* stuck device kept the previous attempt
+  count, so a freshly wedged card was shown stale escalation advice and
+  a pending auto-dismiss timer could silently close the new alert. Wizard
+  state now keys on the suspect device set.
+- **A surviving grandchild process can no longer hang an external-tool
+  call.** Output collection used an unbounded receive, so a grandchild
+  inheriting the pipe kept it open and the drain never saw EOF. Draining
+  is now bounded by a 2&nbsp;second grace period.
 - **A wedged disk no longer freezes the app.** Disk enumeration shelled out to
   external tools (`diskutil`/`ps`/`osascript`) synchronously on the UI thread,
   so an SD card or reader that made `diskutil` hang would freeze the whole
@@ -353,8 +397,8 @@ mocks.
 - Vitest 2 + happy-dom + React Testing Library for the frontend
   test suite.
 
-[Unreleased]: https://github.com/antimatter-studios/diskcutter/compare/2026.6.2...HEAD
-[2026.6.2]: https://github.com/antimatter-studios/diskcutter/compare/2026.5.28...2026.6.2
+[Unreleased]: https://github.com/antimatter-studios/diskcutter/compare/2026.7.28...HEAD
+[2026.7.28]: https://github.com/antimatter-studios/diskcutter/compare/2026.5.28...2026.7.28
 [2026.5.28]: https://github.com/antimatter-studios/diskcutter/compare/2026.5.18...2026.5.28
 [2026.5.18]: https://github.com/antimatter-studios/diskcutter/releases/tag/2026.5.18
 [2026.5.12]: https://github.com/antimatter-studios/diskcutter/releases/tag/2026.5.12
