@@ -438,6 +438,8 @@
     "checking": "Buscando…",
     "up_to_date": "Estás en la última versión.",
     "select": "[ SELECCIONAR ]",
+    "notes_show": "[ CAMBIOS ▸ ]",
+    "notes_hide": "[ CAMBIOS ▾ ]",
     "cancel": "[ CANCELAR ]",
     "install_confirm": "[ INSTALAR ]",
     "installing": "Instalando — la aplicación se reiniciará.",

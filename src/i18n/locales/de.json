@@ -438,6 +438,8 @@
     "checking": "Suche…",
     "up_to_date": "Du bist auf der aktuellen Version.",
     "select": "[ AUSWÄHLEN ]",
+    "notes_show": "[ ÄNDERUNGEN ▸ ]",
+    "notes_hide": "[ ÄNDERUNGEN ▾ ]",
     "cancel": "[ ABBRECHEN ]",
     "install_confirm": "[ INSTALLIEREN ]",
     "installing": "Installiere — die App wird neu gestartet.",
