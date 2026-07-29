@@ -6,6 +6,16 @@ follows [Calendar Versioning](https://calver.org/) (`YYYY.M.D`).
 
 ## [Unreleased]
 
+## [2026.7.29-1]
+
+### Added
+
+- **Release notes in the updater.** Each version listed in Prefs →
+  UPDATES now has a `NOTES` toggle that shows that version's changelog
+  entry, so you can see what a build changes before installing it. The
+  notes were already travelling in the update manifest and simply were
+  not being displayed.
+
 ### Fixed
 
 - **A same-day hotfix release is possible again.** The release workflow
@@ -446,7 +456,8 @@ mocks.
 - Vitest 2 + happy-dom + React Testing Library for the frontend
   test suite.
 
-[Unreleased]: https://github.com/antimatter-studios/diskcutter/compare/2026.7.29...HEAD
+[Unreleased]: https://github.com/antimatter-studios/diskcutter/compare/2026.7.29-1...HEAD
+[2026.7.29-1]: https://github.com/antimatter-studios/diskcutter/compare/2026.7.29...2026.7.29-1
 [2026.7.29]: https://github.com/antimatter-studios/diskcutter/compare/2026.7.28...2026.7.29
 [2026.7.28]: https://github.com/antimatter-studios/diskcutter/compare/2026.5.28...2026.7.28
 [2026.5.28]: https://github.com/antimatter-studios/diskcutter/compare/2026.5.18...2026.5.28
