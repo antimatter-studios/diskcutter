@@ -14,7 +14,6 @@
 
 #[cfg(target_os = "macos")]
 use std::path::Path;
-use std::process::{Command, Stdio};
 
 use serde::Serialize;
 
@@ -98,30 +97,6 @@ pub fn aggregate(checks: &[Check]) -> CheckStatus {
         }
     }
     overall
-}
-
-/// Best-effort: return the first line of `<bin> --version` if the
-/// binary is on $PATH and exits 0. None otherwise.
-///
-/// **Not an existence test.** `None` means "did not answer `--version` with
-/// exit 0", which is also what a perfectly present verb-based tool returns —
-/// `diskutil --version` exits 1 with `did not recognize verb`. Using this to
-/// decide whether a tool is installed reported a macOS built-in as missing.
-/// For "is it installed", use [`crate::toolpath::resolve`], which looks
-/// instead of executing and searches beyond the minimal PATH a GUI app gets.
-pub fn probe_binary(bin: &str) -> Option<String> {
-    let out = Command::new(bin)
-        .arg("--version")
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .stdin(Stdio::null())
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let s = String::from_utf8_lossy(&out.stdout);
-    s.lines().next().map(|s| s.trim().to_string())
 }
 
 /// Defers to [`crate::qemu::detect`] rather than probing separately, so the
@@ -366,18 +341,6 @@ mod tests {
         assert_eq!(c.name, "Long Name");
         assert_eq!(c.category, "feature");
         assert_eq!(c.note, "explanation");
-    }
-
-    #[test]
-    fn probe_binary_returns_none_for_missing_command() {
-        assert!(probe_binary("disk-cutter-this-binary-cannot-exist-abc123").is_none());
-    }
-
-    #[test]
-    fn probe_binary_returns_first_line_for_real_command() {
-        // `cat --version` works on macOS + most Linuxes; if not present
-        // we accept either Some(_) or None as "didn't crash".
-        let _ = probe_binary("cat");
     }
 
     #[test]
