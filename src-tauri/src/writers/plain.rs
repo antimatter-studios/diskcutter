@@ -1,5 +1,5 @@
 use std::fs::{File, OpenOptions};
-use std::io::{Read, Result, Write};
+use std::io::{Read, Result, Seek, Write};
 use std::path::Path;
 
 use super::{DeviceIo, DeviceReader, DeviceWriter};
@@ -57,6 +57,12 @@ impl Read for PlainReader {
 }
 
 impl DeviceReader for PlainReader {}
+
+impl Seek for PlainReader {
+    fn seek(&mut self, pos: std::io::SeekFrom) -> Result<u64> {
+        self.file.seek(pos)
+    }
+}
 
 #[cfg(test)]
 mod tests {

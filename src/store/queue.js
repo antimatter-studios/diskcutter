@@ -161,6 +161,14 @@ export const useQueueStore = create((set, get) => ({
   async startCapture(id) {
     const row = get().captureRows[id];
     if (!row || !row.source || !row.outputPath) return;
+    // Re-entry guard: a capture already in flight must not be started again.
+    // The state flips to 'reading' synchronously below, so a rapid second
+    // click (e.g. on the Retry button) sees 'reading' here and bails — without
+    // this, two captures (or two elevated password prompts) could stack.
+    if (row.state === 'reading') return;
+    // Resume (not restart) when retrying a capture that already wrote some
+    // bytes; a fresh start from 'configuring' always begins at 0.
+    const resume = row.state === 'error' && (row.bytesRead || 0) > 0;
     set((s) => ({
       captureRows: {
         ...s.captureRows,
@@ -173,6 +181,7 @@ export const useQueueStore = create((set, get) => ({
         sourceDevice: row.source.device,
         outputPath: row.outputPath,
         totalBytes: row.source.bytes || 0,
+        resume,
       });
     } catch (e) {
       set((s) => ({

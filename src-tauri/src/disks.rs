@@ -2161,6 +2161,7 @@ pub fn start_capture(
     source_device: String,
     output_path: String,
     total_bytes: u64,
+    resume: bool,
 ) -> Result<(), String> {
     let needs_elevation = source_device.starts_with("/dev/") && !is_privileged();
 
@@ -2177,10 +2178,22 @@ pub fn start_capture(
             );
             return Ok(());
         }
-        return spawn_elevated_capture(app, capture_id, source_device, output_path, total_bytes);
+        return spawn_elevated_capture(
+            app,
+            capture_id,
+            source_device,
+            output_path,
+            total_bytes,
+            resume,
+        );
     }
 
     // In-process path (used when app is already privileged or source is a file).
+    // Clear any stale cancel sentinel from a previous attempt with the same id
+    // (e.g. a Retry after a cancelled capture) so the watcher below doesn't
+    // immediately cancel the fresh run. Mirrors the burn path and the elevated
+    // capture path, which both clear before (re)starting.
+    let _ = std::fs::remove_file(capture_sentinel_path(&capture_id));
     let cancel = Arc::new(AtomicBool::new(false));
     let done = Arc::new(AtomicBool::new(false));
     let capture_id_clone = capture_id.clone();
@@ -2239,6 +2252,7 @@ pub fn start_capture(
             total_bytes,
             std::path::Path::new(&output_path),
             crate::capture::Compression::None,
+            resume,
             &cancel,
             move |p| {
                 let _ = app2.emit(
@@ -2296,19 +2310,21 @@ fn spawn_elevated_capture(
     source_device: String,
     output_path: String,
     total_bytes: u64,
+    resume: bool,
 ) -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let progress_path = format!("/tmp/disk-cutter-capture-{capture_id}.jsonl");
     let _ = std::fs::remove_file(capture_sentinel_path(&capture_id));
 
     let cmd = format!(
-        "'{}' --helper-capture --source='{}' --output='{}' --capture-id='{}' --progress='{}' --total-bytes={} --compression='none'",
+        "'{}' --helper-capture --source='{}' --output='{}' --capture-id='{}' --progress='{}' --total-bytes={} --compression='none' --resume={}",
         sq(&exe.to_string_lossy()),
         sq(&source_device),
         sq(&output_path),
         sq(&capture_id),
         sq(&progress_path),
         total_bytes,
+        resume,
     );
     let prompt = "Disk Cutter needs administrator access to read the disk image directly from the device you selected.";
     let script = build_osascript_script(&cmd, prompt);

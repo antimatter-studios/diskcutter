@@ -640,6 +640,9 @@ pub fn run_helper_capture(args: &[String]) -> i32 {
     let total_bytes: u64 = arg_value(args, "--total-bytes=")
         .and_then(|v| v.parse().ok())
         .unwrap_or(0);
+    let resume: bool = arg_value(args, "--resume=")
+        .map(|v| v == "true")
+        .unwrap_or(false);
 
     let file = match std::fs::OpenOptions::new()
         .create(true)
@@ -719,6 +722,7 @@ pub fn run_helper_capture(args: &[String]) -> i32 {
         total_bytes,
         Path::new(&output),
         compression,
+        resume,
         &cancel,
         |p| {
             emit(&CaptureMessage::Progress {

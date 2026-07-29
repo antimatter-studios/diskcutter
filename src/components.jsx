@@ -2244,6 +2244,16 @@ function CaptureRow({ row, disks, disksLoading, accent, onSelectSource, onChoose
               [ Stop ]
             </button>
           )}
+          {isError && row.source && row.outputPath && (
+            <button
+              className="btn btn-burn"
+              style={{ background: accent, borderColor: accent }}
+              onClick={() => onStart(row.id)}
+              title="Retry this capture"
+            >
+              [ Retry ]
+            </button>
+          )}
           {(isSuccess || isError || isConfiguring) && (
             <button className="btn btn-ghost" onClick={() => onRemove(row.id)} title="Remove this row">
               ✕
