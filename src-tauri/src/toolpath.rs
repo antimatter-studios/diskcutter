@@ -27,16 +27,23 @@
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::OnceLock;
+
+// Only the unix arm shells out to read the login PATH; on Windows these would
+// be unused imports, and CI runs clippy with -D warnings on every platform.
+#[cfg(unix)]
+use std::process::Command;
+#[cfg(unix)]
 use std::time::Duration;
 
+#[cfg(unix)]
 use crate::proc;
 
 /// A login shell sources the user's rc files, which on a developer machine can
 /// mean version managers, completions, and network-touching prompts. Two
 /// seconds is generous for `printf $PATH` and still well inside the
 /// "diagnostics complete in under a second" budget on the cached path.
+#[cfg(unix)]
 const LOGIN_SHELL_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Install prefixes to search when `PATH` is the minimal one launchd provides.
