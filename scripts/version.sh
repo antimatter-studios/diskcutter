@@ -3,27 +3,53 @@
 # Shared version utilities for dev builds and releases.
 # Source this file; do not execute directly.
 #
-# Version format: YYYY.M.D-N[-branch-slug]
+# Version format: YYYY.M.D-<suffix>
 #   YYYY.M.D      — CalVer date (no leading zeros; Tauri enforces strict semver)
-#   -0            — stable release suffix
-#   -1, -2 …      — dev build suffix (auto-increments per day, global across branches)
-#   -branch-slug  — present when built from a non-main branch; stripped of common
-#                   prefixes (feature/, fix/, chore/, etc.) and normalized to
-#                   lowercase alphanumeric + hyphens, max 24 chars
+#   -0, -1, -2 …  — stable release; the number increments for a second (hotfix)
+#                   release on the same date
+#   -dev.N        — dev build (auto-increments per day, global across branches)
+#   -branch-slug  — appended to a dev version when built from a non-main branch;
+#                   stripped of common prefixes (feature/, fix/, chore/, etc.)
+#                   and normalized to lowercase alphanumeric + hyphens, max 24
+#
+# The `dev.` prefix exists so a version string identifies its channel. Without
+# it, stable `-1` and dev `-1` on the same date are the same string describing
+# two different artifacts.
+#
+# NOTE ON ORDERING: raw semver gets this wrong, deliberately so, and we override
+# it rather than bend the scheme around it. Semver ranks numeric prerelease
+# identifiers BELOW alphanumeric ones, so it considers 2026.7.29-1 (stable) to
+# be older than 2026.7.29-dev.1. Left alone, a machine on a dev build that
+# switched to the stable channel would be told it was already up to date.
+#
+# tauri-plugin-updater exposes `UpdaterBuilder::version_comparator`, which
+# replaces the `remote > current` test outright. src-tauri/src/updater.rs
+# installs one that parses this scheme — date first, then channel (stable beats
+# dev on the same date), then the counter. That is the single source of truth
+# for "is this an update"; semver ordering of these strings is not relied on
+# anywhere. See the tests in that module.
 
 # Emit YYYY.M.D from the current system clock.
 calver_today() {
   node -p "const d=new Date(); \`\${d.getFullYear()}.\${d.getMonth()+1}.\${d.getDate()}\`"
 }
 
-# Emit the stable release version for today: YYYY.M.D-0
+# Emit the first stable release version for today: YYYY.M.D-0
+#
+# Only the fallback for a tagless workflow_dispatch build. A tag push uses the
+# tag verbatim, so a same-day hotfix is tagged YYYY.M.D-1 by hand rather than
+# guessed at here.
 calver_release() {
   echo "$(calver_today)-0"
 }
 
 # Given the path to a dev-updates/latest.json, emit the next dev version
-# for today (YYYY.M.D-N[-branch-slug]), auto-incrementing N globally across
+# for today (YYYY.M.D-dev.N[-branch-slug]), auto-incrementing N globally across
 # all branches so no two branches collide on the same N for a given day.
+#
+# Reads legacy `YYYY.M.D-N` entries as well as `YYYY.M.D-dev.N`, so a manifest
+# written before the channel prefix existed still advances the counter instead
+# of restarting at 1 and colliding with a build that already shipped.
 calver_next_dev() {
   local manifest="${1:-}"
   local base
@@ -56,7 +82,7 @@ calver_next_dev() {
         const nums = (u.dev || [])
           .map(e => e.version)
           .filter(v => v.startsWith(base + '-'))
-          .map(v => { const m = v.slice(base.length + 1).match(/^(\d+)/); return m ? parseInt(m[1]) : 0; })
+          .map(v => { const m = v.slice(base.length + 1).match(/^(?:dev\.)?(\d+)/); return m ? parseInt(m[1]) : 0; })
           .filter(n => n > 0);
         nums.length ? Math.max(...nums) : 0;
       } catch(e) { 0 }
@@ -68,12 +94,13 @@ calver_next_dev() {
     existing="$(node -p "try{JSON.parse(require('fs').readFileSync('$manifest','utf8')).version}catch(e){''}" 2>/dev/null || echo "")"
     if [[ "$existing" == "${base}-"* ]]; then
       local prev="${existing#${base}-}"
+      prev="${prev#dev.}"     # tolerate both dev.N and the legacy bare N
       prev="${prev%%-*}"
       [[ "$prev" =~ ^[0-9]+$ ]] && counter=$(( prev + 1 ))
     fi
   fi
 
-  echo "${base}-${counter}${branch_slug}"
+  echo "${base}-dev.${counter}${branch_slug}"
 }
 
 # Patch tauri.conf.json, package.json, and Cargo.toml to the given version.

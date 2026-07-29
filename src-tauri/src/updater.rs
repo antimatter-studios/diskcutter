@@ -106,11 +106,83 @@ fn is_localhost(url: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Where a version sits in the release scheme: the CalVer date, which channel
+/// it belongs to, and its counter within that date.
+///
+/// Ordering is (date, channel, counter) with stable outranking dev on the same
+/// date, which is what you would expect and what plain semver refuses to do.
+#[derive(PartialEq, Eq, PartialOrd, Ord, Debug)]
+struct Release {
+    date: (u64, u64, u64),
+    /// 0 = dev, 1 = stable. A stable release supersedes every dev build of the
+    /// same date; a dev build never supersedes a stable one.
+    channel: u8,
+    counter: u64,
+}
+
+/// Parse `YYYY.M.D-0` (stable), `YYYY.M.D-dev.N` (dev), or a bare `YYYY.M.D`.
+///
+/// A trailing branch slug on a dev version (`-dev.3-my-branch`) is ignored: two
+/// builds with the same counter from different branches are not meaningfully
+/// ordered against each other, and the dev panel installs by explicit choice
+/// rather than by comparison.
+fn parse_release(v: &semver::Version) -> Release {
+    let date = (v.major, v.minor, v.patch);
+    let pre = v.pre.as_str();
+    if pre.is_empty() {
+        // No suffix at all — treat as the first stable of that date.
+        return Release {
+            date,
+            channel: 1,
+            counter: 0,
+        };
+    }
+    if let Some(rest) = pre.strip_prefix("dev.") {
+        let counter = rest
+            .split(['.', '-'])
+            .next()
+            .and_then(|n| n.parse().ok())
+            .unwrap_or(0);
+        return Release {
+            date,
+            channel: 0,
+            counter,
+        };
+    }
+    // Stable: a bare numeric suffix. Anything unrecognised (an `-rc1`, say)
+    // parses to counter 0, so it never outranks a numbered stable release of
+    // the same date.
+    let counter = pre
+        .split(['.', '-'])
+        .next()
+        .and_then(|n| n.parse().ok())
+        .unwrap_or(0);
+    Release {
+        date,
+        channel: 1,
+        counter,
+    }
+}
+
+/// Replaces tauri's default `remote > current` semver test.
+///
+/// Semver ranks numeric prerelease identifiers below alphanumeric ones, so it
+/// considers `2026.7.29-1` (a stable hotfix) OLDER than `2026.7.29-dev.1`. With
+/// the default comparator, a machine on a dev build that switched to the stable
+/// channel was told it was already up to date while running unreleased code.
+///
+/// This orders by the scheme's actual meaning instead — see scripts/version.sh.
+fn is_newer(current: &semver::Version, remote: &semver::Version) -> bool {
+    parse_release(remote) > parse_release(current)
+}
+
 fn build(
     app: &AppHandle,
     endpoint: Option<String>,
 ) -> Result<tauri_plugin_updater::Updater, String> {
-    let mut b = app.updater_builder();
+    let mut b = app
+        .updater_builder()
+        .version_comparator(|current, release| is_newer(&current, &release.version));
     let local = endpoint.as_deref().map(is_localhost).unwrap_or(false);
     if let Some(url) = endpoint {
         let parsed = Url::parse(&url).map_err(|e| format!("bad endpoint URL: {e}"))?;
@@ -185,4 +257,97 @@ pub async fn updater_fetch_updates(endpoint: String) -> Result<Vec<UpdateEntry>,
         .map_err(|e| format!("updates parse failed: {e}"))?;
 
     Ok(manifest.dev.into_iter().take(10).collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn v(s: &str) -> semver::Version {
+        semver::Version::parse(s).unwrap_or_else(|e| panic!("{s} must be valid semver: {e}"))
+    }
+
+    /// Every version this scheme emits has to survive semver parsing, because
+    /// tauri stores it as a `semver::Version` before we ever see it.
+    #[test]
+    fn every_scheme_version_is_valid_semver() {
+        for s in [
+            "2026.7.29-0",
+            "2026.7.29-1",
+            "2026.7.29-12",
+            "2026.7.29-dev.1",
+            "2026.7.29-dev.42",
+            "2026.7.29-dev.3-my-branch",
+            "2026.7.29",
+        ] {
+            let _ = v(s);
+        }
+    }
+
+    #[test]
+    fn a_same_day_hotfix_is_an_update() {
+        assert!(is_newer(&v("2026.7.29-0"), &v("2026.7.29-1")));
+        assert!(is_newer(&v("2026.7.29-1"), &v("2026.7.29-2")));
+        assert!(!is_newer(&v("2026.7.29-2"), &v("2026.7.29-1")));
+    }
+
+    /// The bug this comparator exists for. Plain semver ranks numeric
+    /// prerelease identifiers below alphanumeric ones, so it puts the stable
+    /// hotfix BELOW the dev build and reports "up to date".
+    #[test]
+    fn stable_supersedes_a_dev_build_of_the_same_date() {
+        assert!(is_newer(&v("2026.7.29-dev.9"), &v("2026.7.29-1")));
+        assert!(!is_newer(&v("2026.7.29-1"), &v("2026.7.29-dev.9")));
+
+        // Confirm raw semver really does disagree — if this ever stops being
+        // true, the comparator is no longer earning its keep.
+        assert!(
+            v("2026.7.29-1") < v("2026.7.29-dev.9"),
+            "semver ordering changed; re-evaluate whether the comparator is needed"
+        );
+    }
+
+    #[test]
+    fn a_later_date_always_wins() {
+        assert!(is_newer(&v("2026.7.29-9"), &v("2026.7.30-0")));
+        assert!(is_newer(&v("2026.7.29-dev.9"), &v("2026.7.30-dev.1")));
+        assert!(is_newer(&v("2026.12.31-0"), &v("2027.1.1-0")));
+        assert!(!is_newer(&v("2026.7.30-0"), &v("2026.7.29-9")));
+    }
+
+    #[test]
+    fn dev_builds_advance_among_themselves() {
+        assert!(is_newer(&v("2026.7.29-dev.1"), &v("2026.7.29-dev.2")));
+        assert!(!is_newer(&v("2026.7.29-dev.2"), &v("2026.7.29-dev.1")));
+    }
+
+    #[test]
+    fn a_branch_slug_does_not_change_the_ordering() {
+        assert!(is_newer(
+            &v("2026.7.29-dev.1-some-branch"),
+            &v("2026.7.29-dev.2")
+        ));
+        assert!(is_newer(
+            &v("2026.7.29-dev.3-some-branch"),
+            &v("2026.7.29-0")
+        ));
+    }
+
+    #[test]
+    fn the_same_version_is_never_an_update() {
+        for s in ["2026.7.29-0", "2026.7.29-dev.4", "2026.7.29"] {
+            assert!(!is_newer(&v(s), &v(s)), "{s} should not update to itself");
+        }
+    }
+
+    /// Legacy dev builds predate the `dev.` prefix and read as stable under
+    /// this parser. That is deliberate: the alternative is guessing, and
+    /// treating an unknown numeric suffix as stable keeps a real stable
+    /// release from being withheld.
+    #[test]
+    fn a_bare_date_counts_as_the_first_stable_of_that_date() {
+        assert!(is_newer(&v("2026.7.29-dev.5"), &v("2026.7.29")));
+        assert!(!is_newer(&v("2026.7.29"), &v("2026.7.29-0")));
+        assert!(is_newer(&v("2026.7.29"), &v("2026.7.29-1")));
+    }
 }
