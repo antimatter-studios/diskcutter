@@ -29,9 +29,12 @@ use serde::Serialize;
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 pub struct QemuAvailability {
     /// True when at least one of the qemu-system-* binaries we know
-    /// about is present and runnable on $PATH.
+    /// about is present and runnable.
     pub available: bool,
-    /// The first binary name found, e.g. "qemu-system-x86_64".
+    /// Absolute path to the binary found, e.g.
+    /// "/opt/homebrew/bin/qemu-system-x86_64". Absolute rather than a bare
+    /// name so the spawn cannot resolve to something other than what was
+    /// detected — a GUI app's PATH is not the user's PATH.
     pub binary: String,
     /// First-line of `qemu-system-* --version` output, for display.
     pub version: String,
@@ -62,15 +65,26 @@ const QEMU_BINARIES: &[&str] = &[
     "qemu-system-i386",
 ];
 
-/// Detect the first available QEMU binary on `$PATH`. Returns
-/// `available = false` when none are installed; the frontend uses
-/// this to grey out the "boot test" button.
+/// Detect the first available QEMU binary. Returns `available = false` when
+/// none are installed; the frontend uses this to grey out the "boot test"
+/// button.
+///
+/// Resolution goes through [`crate::toolpath`] rather than bare-name lookup:
+/// a Finder-launched `.app` inherits launchd's minimal PATH, which excludes
+/// `/opt/homebrew/bin`, so `brew install qemu` used to leave the feature
+/// permanently greyed out. `binary` is the resolved absolute path, and
+/// [`run_boot_test`] spawns exactly that — detecting one thing and spawning
+/// another is how this stayed broken.
 pub fn detect() -> QemuAvailability {
     for bin in QEMU_BINARIES {
-        if let Some(version) = probe_binary(bin) {
+        let Some(path) = crate::toolpath::resolve(bin) else {
+            continue;
+        };
+        let path = path.to_string_lossy().to_string();
+        if let Some(version) = probe_binary(&path) {
             return QemuAvailability {
                 available: true,
-                binary: bin.to_string(),
+                binary: path,
                 version,
             };
         }

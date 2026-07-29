@@ -6,6 +6,28 @@ follows [Calendar Versioning](https://calver.org/) (`YYYY.M.D`).
 
 ## [Unreleased]
 
+## [2026.7.29]
+
+### Fixed
+
+- **The QEMU boot test works again when QEMU came from Homebrew.** A
+  Finder-launched app does not inherit your shell's `PATH` — macOS hands
+  it a minimal `/usr/bin:/bin:/usr/sbin:/sbin`, which excludes
+  `/opt/homebrew/bin`. Disk Cutter looked up `qemu-system-*` by bare name
+  against that stripped-down list, so the very QEMU its own error message
+  told you to `brew install` was invisible, and the boot test stayed
+  greyed out no matter what you installed. Tools are now located by
+  searching your login shell's `PATH`, then the process `PATH`, then the
+  usual install prefixes, and are launched by absolute path so detection
+  and execution can't disagree.
+- **Diagnostics no longer report `diskutil` as missing.** The check ran
+  `diskutil --version` and treated a non-zero exit as "not installed",
+  but `diskutil` is verb-based and rejects `--version` outright — so a
+  macOS built-in was reported missing, with a message blaming your `PATH`
+  for it. Auto-eject was never actually affected; only the diagnostic was
+  wrong. Tool detection no longer executes anything to decide whether a
+  tool exists.
+
 ## [2026.7.28]
 
 First published release since 2026.5.28. The 2026.6.2 entries were prepared
@@ -399,7 +421,8 @@ mocks.
 - Vitest 2 + happy-dom + React Testing Library for the frontend
   test suite.
 
-[Unreleased]: https://github.com/antimatter-studios/diskcutter/compare/2026.7.28...HEAD
+[Unreleased]: https://github.com/antimatter-studios/diskcutter/compare/2026.7.29...HEAD
+[2026.7.29]: https://github.com/antimatter-studios/diskcutter/compare/2026.7.28...2026.7.29
 [2026.7.28]: https://github.com/antimatter-studios/diskcutter/compare/2026.5.28...2026.7.28
 [2026.5.28]: https://github.com/antimatter-studios/diskcutter/compare/2026.5.18...2026.5.28
 [2026.5.18]: https://github.com/antimatter-studios/diskcutter/releases/tag/2026.5.18

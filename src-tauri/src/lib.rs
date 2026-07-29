@@ -25,6 +25,7 @@ pub mod readers;
 pub mod snapshot;
 pub mod source;
 pub mod sparse;
+pub mod toolpath;
 pub mod updater;
 pub mod url_fetch;
 pub mod validate;

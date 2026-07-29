@@ -102,6 +102,13 @@ pub fn aggregate(checks: &[Check]) -> CheckStatus {
 
 /// Best-effort: return the first line of `<bin> --version` if the
 /// binary is on $PATH and exits 0. None otherwise.
+///
+/// **Not an existence test.** `None` means "did not answer `--version` with
+/// exit 0", which is also what a perfectly present verb-based tool returns —
+/// `diskutil --version` exits 1 with `did not recognize verb`. Using this to
+/// decide whether a tool is installed reported a macOS built-in as missing.
+/// For "is it installed", use [`crate::toolpath::resolve`], which looks
+/// instead of executing and searches beyond the minimal PATH a GUI app gets.
 pub fn probe_binary(bin: &str) -> Option<String> {
     let out = Command::new(bin)
         .arg("--version")
@@ -117,55 +124,60 @@ pub fn probe_binary(bin: &str) -> Option<String> {
     s.lines().next().map(|s| s.trim().to_string())
 }
 
+/// Defers to [`crate::qemu::detect`] rather than probing separately, so the
+/// diagnostic and the feature can never disagree about whether QEMU is
+/// usable — they previously had independent copies of the lookup.
 fn check_qemu() -> Check {
-    if let Some(v) = probe_binary("qemu-system-x86_64") {
+    let found = crate::qemu::detect();
+    if found.available {
         return Check::pass(
             "qemu",
             "QEMU bootability test",
             "feature",
-            &format!("found qemu-system-x86_64: {v}"),
-        );
-    }
-    if let Some(v) = probe_binary("qemu-system-aarch64") {
-        return Check::pass(
-            "qemu",
-            "QEMU bootability test",
-            "feature",
-            &format!("found qemu-system-aarch64: {v}"),
+            &format!("found {}: {}", found.binary, found.version),
         );
     }
     Check::warn(
         "qemu",
         "QEMU bootability test",
         "feature",
-        "qemu-system-* not on PATH — install qemu (brew install qemu / apt install qemu-system) to enable post-burn boot tests",
+        "qemu-system-* not found — install qemu (brew install qemu / apt install qemu-system) to enable post-burn boot tests",
     )
 }
 
 #[cfg(target_os = "macos")]
 fn check_eject_backend() -> Check {
-    if probe_binary("diskutil").is_some() {
-        Check::pass("eject", "Eject backend", "core", "diskutil present")
-    } else {
-        Check::fail(
+    // Existence only. diskutil is verb-based and answers `--version` with
+    // `did not recognize verb` and exit 1, so probing by running it reported
+    // a built-in as missing and then blamed the user's PATH for it.
+    match crate::toolpath::resolve("diskutil") {
+        Some(p) => Check::pass(
+            "eject",
+            "Eject backend",
+            "core",
+            &format!("diskutil present: {}", p.display()),
+        ),
+        None => Check::fail(
             "eject",
             "Eject backend",
             "core",
             "diskutil not found — should be a macOS built-in; PATH may be misconfigured",
-        )
+        ),
     }
 }
 
 #[cfg(target_os = "linux")]
 fn check_eject_backend() -> Check {
-    if probe_binary("udisksctl").is_some() {
+    // Existence only — see the macOS arm for why running the tool is the
+    // wrong existence test.
+    if crate::toolpath::exists("udisksctl") {
         Check::pass(
             "eject",
             "Eject backend",
             "core",
             "udisksctl present (preferred Linux ejector)",
         )
-    } else if probe_binary("eject").is_some() {
+    } else if crate::toolpath::exists("eject") {
         Check::warn(
             "eject",
             "Eject backend",
