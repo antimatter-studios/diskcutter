@@ -73,10 +73,17 @@ jobs:
           # On workflow_dispatch (no tag) fall back to today's date.
           if [[ "${GITHUB_REF:-}" == refs/tags/* ]]; then
             TAG="${GITHUB_REF_NAME}"
-            # Strip optional leading 'v' and ensure -0 release suffix.
-            BASE="${TAG#v}"
-            BASE="${BASE%%-*}"   # drop any existing suffix
-            VER="${BASE}-0"
+            # The tag is the version. Only the optional leading 'v' is removed.
+            #
+            # This used to do `BASE="${BASE%%-*}"; VER="${BASE}-0"`, which threw
+            # away whatever suffix was tagged: 2026.7.29-1 built as 2026.7.29-0,
+            # so a same-day hotfix silently rebuilt the version it was fixing and
+            # the updater offered nothing. An -rc1 tag — advertised as supported
+            # in the trigger comment above — shipped numbered as the stable
+            # release.
+            VER="${TAG#v}"
+            # A bare date tag means the first stable release of that date.
+            [[ "$VER" == *-* ]] || VER="${VER}-0"
           else
             VER="$(calver_release)"
           fi

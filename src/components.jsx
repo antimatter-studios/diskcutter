@@ -1400,6 +1400,12 @@ function ReleaseNotes({ markdown }) {
   );
 }
 
+/// UNUSED — no call sites. Left in place rather than deleted, but do not wire
+/// it up: it splits on the first `-` and runs the remainder through Number(),
+/// so a dev version yields Number("dev.1") === NaN and every comparison against
+/// it is false. "Is this an update" is decided by the version_comparator in
+/// src-tauri/src/updater.rs, which is the only implementation that understands
+/// the channel scheme, and it is covered by tests there.
 function calverGt(a, b) {
   const parse = v => { const [date, n = '0'] = v.split('-'); const [y, m, d] = date.split('.').map(Number); return [y, m, d, Number(n)]; };
   const pa = parse(a), pb = parse(b);

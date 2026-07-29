@@ -6,6 +6,31 @@ follows [Calendar Versioning](https://calver.org/) (`YYYY.M.D`).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A same-day hotfix release is possible again.** The release workflow
+  discarded whatever suffix a tag carried and forced `-0`, so tagging
+  `2026.7.29-1` rebuilt it as `2026.7.29-0` — the same version it was
+  fixing — and the updater saw nothing new to offer. A tag is now used
+  as the version verbatim; only a bare date tag has `-0` appended. This
+  also fixes `-rc1` tags, which the workflow advertised as supported and
+  then shipped numbered as the stable release.
+- **Switching from the dev channel back to stable no longer claims you
+  are up to date.** Update checks compared versions with plain semver,
+  which ranks numeric pre-release identifiers below alphanumeric ones —
+  so it considered a stable `2026.7.29-1` *older* than a dev build
+  `2026.7.29-dev.1`, and a machine on a dev build was told it was
+  current while running unreleased code. Comparison now understands the
+  release scheme: newer date wins, then a stable release beats a dev
+  build of the same date, then the higher build number.
+
+### Changed
+
+- Dev builds are now versioned `YYYY.M.D-dev.N` instead of `YYYY.M.D-N`,
+  so a version string says which channel it came from. Previously a
+  stable hotfix and a dev build on the same date could produce the same
+  version string for two different builds.
+
 ## [2026.7.29]
 
 ### Fixed
