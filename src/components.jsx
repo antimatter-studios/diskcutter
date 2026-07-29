@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
+import ReactMarkdown from 'react-markdown';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -1368,6 +1369,37 @@ function PrefsView({ values, onChange }) {
   );
 }
 
+/// Release notes ride along in the update manifest — `body` on the stable
+/// channel (tauri's own updater payload) and `notes` on the dev channel
+/// (`updates.json`). Same content from the same CHANGELOG section; only the
+/// field name differs by which command fetched it.
+function releaseNotesOf(update) {
+  const notes = update?.body ?? update?.notes;
+  return typeof notes === 'string' && notes.trim() ? notes : null;
+}
+
+/// This markdown arrives over the network and is rendered inside the app's own
+/// webview, so two things are deliberately clamped:
+///
+///   * No `rehype-raw`. react-markdown escapes embedded HTML by default and it
+///     stays that way — a manifest must not be able to inject markup.
+///   * Links and images are rendered inert. A real anchor would let a manifest
+///     navigate the webview away from the application, and an <img> would leak
+///     a request to whatever host it names. The link text is kept so the notes
+///     still read correctly.
+const RELEASE_NOTES_COMPONENTS = {
+  a: ({ children }) => <span className="update-notes-link">{children}</span>,
+  img: () => null,
+};
+
+function ReleaseNotes({ markdown }) {
+  return (
+    <div className="update-notes">
+      <ReactMarkdown components={RELEASE_NOTES_COMPONENTS}>{markdown}</ReactMarkdown>
+    </div>
+  );
+}
+
 function calverGt(a, b) {
   const parse = v => { const [date, n = '0'] = v.split('-'); const [y, m, d] = date.split('.').map(Number); return [y, m, d, Number(n)]; };
   const pa = parse(a), pb = parse(b);
@@ -1383,6 +1415,10 @@ function UpdatesPanel({ channel, devEndpoint }) {
   const [selected, setSelected] = React.useState(null);
   const [installing, setInstalling] = React.useState(false);
   const [error, setError] = React.useState(null);
+  // Version string of the row whose notes are open, or null. One at a time:
+  // the dev channel lists up to 10 builds and expanding several turns the
+  // panel into a wall of text.
+  const [expanded, setExpanded] = React.useState(null);
 
   const [versionLoaded, setVersionLoaded] = React.useState(false);
 
@@ -1396,6 +1432,7 @@ function UpdatesPanel({ channel, devEndpoint }) {
     setSelected(null);
     setError(null);
     setInstalling(false);
+    setExpanded(null);
   }, [channel, devEndpoint]);
 
   const endpointOverride = channel === 'dev' ? (devEndpoint || null) : null;
@@ -1404,6 +1441,7 @@ function UpdatesPanel({ channel, devEndpoint }) {
     setStatus('checking');
     setError(null);
     setSelected(null);
+    setExpanded(null);
     try {
       if (channel === 'dev' && endpointOverride) {
         const entries = await invoke('updater_fetch_updates', { endpoint: endpointOverride });
@@ -1485,19 +1523,35 @@ function UpdatesPanel({ channel, devEndpoint }) {
           )}
           {updates.map((u) => {
             const isCurrent = u.version === version;
+            const notes = releaseNotesOf(u);
+            const isOpen = expanded === u.version;
             return (
-              <div key={u.version} className="prefs-updates-row">
-                <span className="mono" style={isCurrent ? { opacity: 0.45 } : {}}>
-                  {u.version}{isCurrent ? ' ← installed, you are here' : ''}
-                </span>
-                <button
-                  className="btn btn-ghost"
-                  onClick={() => setSelected(u)}
-                  disabled={installing || selected?.version === u.version || isCurrent}
-                >
-                  {t('updates.select')}
-                </button>
-              </div>
+              <React.Fragment key={u.version}>
+                <div className="prefs-updates-row">
+                  <span className="mono" style={isCurrent ? { opacity: 0.45 } : {}}>
+                    {u.version}{isCurrent ? ' ← installed, you are here' : ''}
+                  </span>
+                  {/* Only offered when the manifest actually carried notes —
+                      an expander that opens onto nothing is worse than none. */}
+                  {notes && (
+                    <button
+                      className="btn btn-ghost"
+                      aria-expanded={isOpen}
+                      onClick={() => setExpanded(isOpen ? null : u.version)}
+                    >
+                      {isOpen ? t('updates.notes_hide') : t('updates.notes_show')}
+                    </button>
+                  )}
+                  <button
+                    className="btn btn-ghost"
+                    onClick={() => setSelected(u)}
+                    disabled={installing || selected?.version === u.version || isCurrent}
+                  >
+                    {t('updates.select')}
+                  </button>
+                </div>
+                {notes && isOpen && <ReleaseNotes markdown={notes} />}
+              </React.Fragment>
             );
           })}
         </div>
@@ -2269,4 +2323,5 @@ export {
   JobRow, EntryRow, DiskPickerSheet, LogsView,
   PrefsView, PREFS_DEFAULTS,
   CatalogSheet, CaptureRow,
+  ReleaseNotes, releaseNotesOf,
 };

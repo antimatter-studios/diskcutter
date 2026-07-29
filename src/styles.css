@@ -1073,6 +1073,37 @@ input,select{font:inherit;color:inherit}
 .prefs-updates-row:last-child{border-bottom:0}
 :root[data-theme="dark"] .prefs-updates-row{border-bottom-color:rgba(237,232,216,.12)}
 
+/* Release notes expanded under a version row. Capped and scrollable: a
+   changelog section runs to a few hundred lines and would otherwise push the
+   install button off-screen inside the Prefs sheet. */
+.update-notes{
+  padding:10px 16px 14px;border-bottom:1px solid rgba(12,12,11,.12);
+  background:rgba(12,12,11,.03);
+  max-height:260px;overflow-y:auto;
+  font-size:11.5px;line-height:1.55;letter-spacing:.02em;
+}
+:root[data-theme="dark"] .update-notes{
+  border-bottom-color:rgba(237,232,216,.12);background:rgba(237,232,216,.04);
+}
+.update-notes:last-child{border-bottom:0}
+.update-notes h1,.update-notes h2,.update-notes h3,.update-notes h4{
+  margin:10px 0 4px;font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--mute);
+}
+.update-notes h1:first-child,.update-notes h2:first-child,
+.update-notes h3:first-child,.update-notes h4:first-child{margin-top:0}
+.update-notes p{margin:0 0 6px}
+.update-notes ul,.update-notes ol{margin:0 0 6px;padding-left:18px}
+.update-notes li{margin:0 0 4px}
+.update-notes code{
+  font-family:inherit;padding:0 3px;
+  background:rgba(12,12,11,.08);border-radius:2px;
+}
+:root[data-theme="dark"] .update-notes code{background:rgba(237,232,216,.1)}
+.update-notes pre{overflow-x:auto;margin:0 0 6px}
+/* Links are rendered as inert spans (see RELEASE_NOTES_COMPONENTS) — styled so
+   they still read as references without implying they are clickable. */
+.update-notes-link{text-decoration:underline dotted;text-underline-offset:2px}
+
 /* ─────────── Doctor (diagnostics) panel ─────────── */
 
 .doctor-block{display:flex;flex-direction:column;gap:10px}

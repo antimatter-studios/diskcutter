@@ -438,6 +438,8 @@
     "checking": "Checking…",
     "up_to_date": "You're on the latest version.",
     "select": "[ SELECT ]",
+    "notes_show": "[ NOTES ▸ ]",
+    "notes_hide": "[ NOTES ▾ ]",
     "cancel": "[ CANCEL ]",
     "install_confirm": "[ INSTALL ]",
     "installing": "Installing — the app will relaunch.",
