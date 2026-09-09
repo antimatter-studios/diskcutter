@@ -24,7 +24,7 @@ frontend Vitest suite at the repo root.
 ├── tests/               — frontend Vitest suite
 ├── docs/                — architecture, performance, CHANGELOG, ROADMAP
 ├── scripts/             — dev tooling (i18n parity, install hooks)
-└── .githooks/           — pre-commit (cargo fmt, clippy, i18n parity)
+└── .githooks/           — hook SOURCE; install-hooks.sh copies it to .git/hooks
 ```
 
 ## Local dev setup
@@ -35,10 +35,11 @@ One-time per clone:
 npm install                         # also runs scripts/install-hooks.sh via "prepare"
 ```
 
-If you ever need to re-register the hook manually:
+Re-run that after editing anything in `.githooks/` — the installed copy lives
+in `.git/hooks` and does not follow the working tree:
 
 ```sh
-bash scripts/install-hooks.sh       # registers .githooks/pre-commit
+bash scripts/install-hooks.sh       # copies .githooks/* into .git/hooks
 ```
 
 Day-to-day:

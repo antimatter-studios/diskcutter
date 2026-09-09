@@ -6,6 +6,19 @@ follows [Calendar Versioning](https://calver.org/) (`YYYY.M.D`).
 
 ## [Unreleased]
 
+### Security
+
+- **Git hooks are installed into `.git/hooks` instead of `core.hooksPath`.**
+  `scripts/install-hooks.sh` used to point `core.hooksPath` at the tracked
+  `.githooks/` directory. Git resolves a hook path at the moment it runs the
+  hook, which for a checkout is *after* the working tree has been rewritten — so
+  checking out an untrusted branch replaced the hook that ran on the next commit,
+  and it ran with the reviewer's credentials. The installer now copies the hooks
+  outside the working tree, where no ref can reach them, and clears
+  `core.hooksPath` (which would otherwise override `.git/hooks` and leave the
+  install inert). Hooks no longer follow a branch switch: re-run
+  `./scripts/install-hooks.sh` after editing anything in `.githooks/`.
+
 ## [2026.7.29-1]
 
 ### Added

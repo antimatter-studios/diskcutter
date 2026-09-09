@@ -305,14 +305,20 @@ cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 ```
 
-Both cargo steps run against `src-tauri/`. The hook is opt-in per
-clone:
+Both cargo steps run against `src-tauri/`. The hook is opt-in per clone:
 
 ```sh
-git config core.hooksPath .githooks
-# or
 ./scripts/install-hooks.sh
 ```
+
+That copies `.githooks/` into `.git/hooks`. It does **not** set
+`core.hooksPath`, and clears it if an older install left it pointing at
+`.githooks`. Git resolves a hook path at the moment it runs the hook, which for
+a checkout is *after* the working tree has been rewritten — so a hooks directory
+inside the tree lets any branch you check out replace the hook that runs on your
+next commit, with your credentials. `.git/hooks` is per-clone and no ref can
+reach it. The cost is that hooks no longer follow a branch switch: re-run the
+installer after editing `.githooks/`.
 
 The hook is load-bearing — it's the guardrail against pushing broken
 code or merge commits (the project mandates linear history). Don't
