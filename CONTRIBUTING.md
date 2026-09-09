@@ -35,11 +35,13 @@ One-time per clone:
 npm install                         # also runs scripts/install-hooks.sh via "prepare"
 ```
 
-Re-run that after editing anything in `.githooks/` — the installed copy lives
-in `.git/hooks` and does not follow the working tree:
+The installed copy lives in `.git/hooks` and is read from the remote-tracking
+default branch, not from your checkout — so it does not change when you switch
+branches. Re-run after a hook change lands on `main`:
 
 ```sh
-bash scripts/install-hooks.sh       # copies .githooks/* into .git/hooks
+bash scripts/install-hooks.sh                          # from origin/HEAD
+INSTALL_HOOKS_FROM_WORKTREE=1 bash scripts/install-hooks.sh   # while editing the hooks
 ```
 
 Day-to-day:

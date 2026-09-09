@@ -16,8 +16,15 @@ follows [Calendar Versioning](https://calver.org/) (`YYYY.M.D`).
   and it ran with the reviewer's credentials. The installer now copies the hooks
   outside the working tree, where no ref can reach them, and clears
   `core.hooksPath` (which would otherwise override `.git/hooks` and leave the
-  install inert). Hooks no longer follow a branch switch: re-run
-  `./scripts/install-hooks.sh` after editing anything in `.githooks/`.
+  install inert). It reads the hooks from the remote-tracking default branch
+  rather than from the checkout — `npm install` runs it via `prepare`, so
+  installing from the working tree would have made a contribution branch's hook
+  *persistent* instead. It also prunes hooks it previously installed that are
+  gone from the hook set, replaces a destination symlink rather than writing
+  through it, and leaves a `core.hooksPath` it did not set alone. Hooks no
+  longer follow a branch switch: re-run `./scripts/install-hooks.sh` after a
+  hook change lands on `main`, or pass `INSTALL_HOOKS_FROM_WORKTREE=1` while
+  editing the hooks themselves.
 
 ## [2026.7.29-1]
 
