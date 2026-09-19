@@ -146,9 +146,10 @@ diskcutter burn <img> <disk>   # burn (requires elevation)
 ```
 
 Pre-commit hook (`cargo fmt --check`, `clippy -D warnings`, and i18n
-key-parity check) lives at `.githooks/pre-commit`; enable with
-`git config core.hooksPath .githooks` or run
-`./scripts/install-hooks.sh`.
+key-parity check) lives at `.githooks/pre-commit`; install it with
+`./scripts/install-hooks.sh`, which copies it into `.git/hooks` from the
+remote-tracking default branch. Re-run that after a hook change lands on
+`main` and you fetch.
 
 ## Architecture
 
