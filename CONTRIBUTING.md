@@ -23,8 +23,7 @@ frontend Vitest suite at the repo root.
 │   └── migrations/      — SQL migrations applied on startup
 ├── tests/               — frontend Vitest suite
 ├── docs/                — architecture, performance, CHANGELOG, ROADMAP
-├── scripts/             — dev tooling (i18n parity, install hooks)
-└── .githooks/           — hook SOURCE; install-hooks.sh copies it to .git/hooks
+└── scripts/             — dev tooling (i18n parity)
 ```
 
 ## Local dev setup
@@ -32,17 +31,15 @@ frontend Vitest suite at the repo root.
 One-time per clone:
 
 ```sh
-npm install                         # also runs scripts/install-hooks.sh via "prepare"
+npm install
+~/.claude/skills/github-guard/install.sh .   # the git guards, into .git/hooks
 ```
 
-The installed copy lives in `.git/hooks` and is read from the remote-tracking
-default branch, not from your checkout — so it does not change when you switch
-branches. Re-run after a hook change lands on `main`:
-
-```sh
-bash scripts/install-hooks.sh                          # from origin/HEAD
-INSTALL_HOOKS_FROM_WORKTREE=1 bash scripts/install-hooks.sh   # while editing the hooks
-```
+The guards are github-guard's: rustfmt and clippy (`-D warnings`) before a
+commit, no merge commits, and the changelog check on a version tag. They live
+in `.git/hooks`, per clone, where no commit can rewrite them; nothing hook-like
+is committed to this repository. CI runs the full bar on every pull request,
+including the i18n key-parity check and both test suites.
 
 Day-to-day:
 

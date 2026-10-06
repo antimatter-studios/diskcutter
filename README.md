@@ -145,11 +145,11 @@ diskcutter list                # enumerate disks
 diskcutter burn <img> <disk>   # burn (requires elevation)
 ```
 
-Pre-commit hook (`cargo fmt --check`, `clippy -D warnings`, and i18n
-key-parity check) lives at `.githooks/pre-commit`; install it with
-`./scripts/install-hooks.sh`, which copies it into `.git/hooks` from the
-remote-tracking default branch. Re-run that after a hook change lands on
-`main` and you fetch.
+The git guards (`cargo fmt --check`, `clippy -D warnings`, no merge commits)
+are github-guard's, installed per clone into `.git/hooks` with
+`~/.claude/skills/github-guard/install.sh .`; nothing hook-like is committed
+here. CI runs those checks plus the i18n key-parity check and both test
+suites on every pull request.
 
 ## Architecture
 
