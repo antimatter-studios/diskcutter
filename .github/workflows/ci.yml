@@ -1,10 +1,10 @@
 # Disk Cutter CI gate.
 #
-# This workflow is the agreed CI bar for PRs and pushes to main. It mirrors
-# .githooks/pre-commit (cargo fmt, cargo clippy -D warnings, i18n parity)
-# and additionally runs the full test suites and the frontend production
-# build. A green CI run here means the same checks that pass locally on a
-# pre-commit also pass on a clean Linux/macOS/Windows runner.
+# This workflow is the agreed CI bar for PRs and pushes to main: cargo fmt,
+# cargo clippy -D warnings and the i18n key-parity check, plus the full test
+# suites and the frontend production build. The local guards (github-guard,
+# installed into .git/hooks per clone) run the fmt and clippy part before a
+# commit; this runs all of it on clean Linux/macOS/Windows runners.
 #
 # We deliberately do not exercise the macOS DiskArbitration FFI, the
 # Linux udev path, or Windows PowerShell disk enumeration against real

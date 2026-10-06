@@ -284,55 +284,20 @@ fires. From then on every `languageChanged` event writes both
 locations.
 
 Current catalogs: `en.json`, `de.json`, `es.json` — 339 keys each,
-parity enforced by the pre-commit hook.
+parity enforced in CI (`node scripts/check-i18n.mjs`).
 
-## Pre-commit hook
+## Git guards
 
-[.githooks/pre-commit](../.githooks/pre-commit) runs four checks:
+The guards that run before a commit and a push are github-guard's, installed per
+clone into `.git/hooks` with `~/.claude/skills/github-guard/install.sh .`:
+rustfmt and clippy (`-D warnings`) over `src-tauri/`, no merge commits, and the
+changelog check on a version tag. Nothing hook-like is committed to this
+repository: a hooks directory inside the working tree runs whatever the last
+merged or checked-out commit put there, with the developer's credentials, while
+`.git/hooks` is per clone and no ref can reach it.
 
-```sh
-# 1. linear-history guard — no merge commits
-git rev-parse -q --verify MERGE_HEAD            # reject in-progress merge
-git log --merges HEAD --format=%H               # reject historical merges
-
-# 2. i18n key parity across all locales
-node scripts/check-i18n.mjs
-
-# 3. rustfmt
-cargo fmt --check
-
-# 4. clippy
-cargo clippy --all-targets -- -D warnings
-```
-
-Both cargo steps run against `src-tauri/`. The hook is opt-in per clone:
-
-```sh
-./scripts/install-hooks.sh
-```
-
-That copies the hooks into `.git/hooks`. It does **not** set `core.hooksPath`,
-and clears it if an older install left it pointing at `.githooks`. Git resolves
-a hook path at the moment it runs the hook, which for a checkout is *after* the
-working tree has been rewritten — so a hooks directory inside the tree lets any
-branch you check out replace the hook that runs on your next commit, with your
-credentials. `.git/hooks` is per-clone and no ref can reach it.
-
-The source is the **remote-tracking default branch**, not the working tree.
-Copying out of the checkout would only move the hole: install while a
-contribution branch is checked out — and `npm install` does that for you via
-`prepare` — and that branch's hook becomes *persistent*, surviving the switch
-back. Reading from `origin/HEAD` means only reviewed content is ever installed.
-Editing the hooks themselves is the one case that needs the checkout:
-`INSTALL_HOOKS_FROM_WORKTREE=1 ./scripts/install-hooks.sh`, and only on a branch
-you trust.
-
-The cost is that hooks no longer follow a branch switch, and a hook change
-reaches you once it lands on `main` and you fetch. Re-run the installer then.
-
-The hook is load-bearing — it's the guardrail against pushing broken
-code or merge commits (the project mandates linear history). Don't
-weaken it; if it flags something, fix the underlying issue.
+CI is the full bar: rustfmt, clippy, `cargo test`, the frontend tests and
+build, and the i18n key-parity check (`node scripts/check-i18n.mjs`).
 
 ## Where things live
 
