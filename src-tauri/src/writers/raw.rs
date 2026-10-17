@@ -1,7 +1,7 @@
 #[cfg(unix)]
 use std::fs::{File, OpenOptions};
 #[cfg(unix)]
-use std::io::{Read, Result, Write};
+use std::io::{Read, Result, Seek, Write};
 #[cfg(target_os = "macos")]
 use std::os::fd::AsRawFd;
 #[cfg(unix)]
@@ -207,6 +207,12 @@ impl Read for RawReader {
 
 #[cfg(unix)]
 impl DeviceReader for RawReader {}
+
+impl Seek for RawReader {
+    fn seek(&mut self, pos: std::io::SeekFrom) -> Result<u64> {
+        self.file.seek(pos)
+    }
+}
 
 #[cfg(all(unix, test))]
 mod tests {

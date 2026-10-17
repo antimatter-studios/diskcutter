@@ -29,7 +29,7 @@
 #![cfg(unix)]
 
 use std::fs::{File, OpenOptions};
-use std::io::{Read, Result, Write};
+use std::io::{Read, Result, Seek, Write};
 use std::os::unix::fs::{FileExt, OpenOptionsExt};
 use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
@@ -402,6 +402,12 @@ impl Read for SimpleReader {
 }
 
 impl DeviceReader for SimpleReader {}
+
+impl Seek for SimpleReader {
+    fn seek(&mut self, pos: std::io::SeekFrom) -> Result<u64> {
+        self.file.seek(pos)
+    }
+}
 
 #[cfg(test)]
 mod tests {

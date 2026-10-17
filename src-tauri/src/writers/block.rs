@@ -5,7 +5,7 @@
 #[cfg(unix)]
 use std::fs::{File, OpenOptions};
 #[cfg(unix)]
-use std::io::{Read, Result, Write};
+use std::io::{Read, Result, Seek, Write};
 #[cfg(target_os = "macos")]
 use std::os::unix::fs::OpenOptionsExt;
 #[cfg(unix)]
@@ -118,6 +118,12 @@ impl Read for BlockReader {
 
 #[cfg(unix)]
 impl DeviceReader for BlockReader {}
+
+impl Seek for BlockReader {
+    fn seek(&mut self, pos: std::io::SeekFrom) -> Result<u64> {
+        self.file.seek(pos)
+    }
+}
 
 #[cfg(all(unix, test))]
 mod tests {
